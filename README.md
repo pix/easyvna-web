@@ -191,6 +191,18 @@ antenna fits on two pages. See the A4 sample:
 
 <p align="center"><img src="doc/screenshots/report-print.png" alt="First page of the printed report" width="520"></p>
 
+### 8. PRINT an antenna sheet
+
+**PRINT** makes a one-page datasheet for the antenna you just measured.
+Give it a name; type, band, connector, length, ground plane, cable, maker,
+owner, notes and a photo are optional. They are remembered for that name.
+The sheet has the verdict, the key figures (resonance, SWR at the band
+centre and edges, worst in-band SWR, bandwidth, return and mismatch loss,
+impedance, Q) and the SWR, Smith, return-loss and impedance graphs, with
+REF and HOLD when they are on. It fits on one A4 or Letter page.
+**Print sheet** prints it; **Save sheet (HTML)** keeps a copy. Ctrl+P on
+the main page also prints every graph at once.
+
 ### On a phone
 
 <p align="center">
@@ -214,7 +226,8 @@ antenna fits on two pages. See the A4 sample:
 | **AVG** | averaging over ×1 / 2 / 4 / 8 / 16 sweeps |
 | **COMPARE** | S21 against antenna A, live Δ dB in band, leaderboard |
 | **Warnings** | no antenna or open cable, reflection above 1 (bad calibration), lossy / fake antenna |
-| **Report** | printable A4 / Letter report with vector plots and tables, saved in the data folder |
+| **Report** | printable A4 / Letter report with vector plots (SWR, return loss, impedance, Smith) and tables, saved in the data folder |
+| **Antenna sheet** | PRINT: a one-page datasheet of the antenna (photo, key figures, all four graphs, notes, trim log); its details are remembered per antenna name |
 | **Export** | Touchstone `.s1p` / `.s2p`, CSV, named snapshots |
 | **Plots** | SWR, return loss, Smith chart, R/X, S21, with a cursor readout |
 | **Anywhere** | phone layout, light and dark mode, works offline |

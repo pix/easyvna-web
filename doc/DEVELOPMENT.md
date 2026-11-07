@@ -12,6 +12,9 @@ GOOS=windows GOARCH=amd64 go vet ./...     # also checked in CI
 scripts/dist.sh v0.1.0                     # release archives + SHA256SUMS into dist/
 scripts/screenshots.sh mock                # README screenshots + doc/sample-report.pdf
 scripts/screenshots.sh hardware [PORT]     # same against a real NanoVNA, server in -readonly
+scripts/build-html.sh [VERSION]            # browser version: dist/easyvna-web.html (one file)
+scripts/e2e-html.sh [SHOT_DIR]             # its end-to-end test in headless Chromium
+GOOS=js GOARCH=wasm go vet ./...           # the WebAssembly target (also checked in CI)
 ```
 
 `scripts/screenshots.sh` needs node with Playwright (`PLAYWRIGHT_DIR` can
@@ -25,6 +28,80 @@ sysfs on Linux, the registry on Windows (USB VID:PID, cross-checked with
 `/dev/cu.usbmodem*` on macOS. CI runs vet and tests on Linux, plus tests and
 a mock smoke test on Windows. Pushing a `v*` tag builds the release
 archives (Windows zips and a macOS tarball).
+
+## Browser version (WebAssembly, one HTML file)
+
+The page at <https://pix.github.io/easyvna-web/> is the same Go program
+compiled with `GOOS=js GOARCH=wasm` and packed into one self-contained
+HTML file. It loads nothing from the network: no CDN, fonts or separate
+`.wasm`. It works from https and from `file://` in Chrome and Edge,
+including Web Serial (checked: `file://` is a secure context there).
+
+```
+cmd/easyvna-wasm/      the program: server.New(...) with a memory store and a Web Serial
+                       or simulator opener; exports goServe / goStream / goMockShell
+web/browser/host.js    boots it and gives it what the OS gives the native program
+web/browser/host.css   loader and host bar
+internal/bridge/       in-process HTTP: one request into the http.Handler (Do), and the
+                       SSE endpoint split into events (Stream)
+internal/webserial/    nanovnah.Transport over bytes pushed by the page (Conn: VTIME-like
+                       read timeout, end of stream), plus the syscall/js binding
+internal/jsutil/       await a promise, copy bytes, return a promise (js/wasm only)
+internal/htmlpack/     builds the page (cmd/build-html), verifies it can rebuild itself
+```
+
+How the pieces fit:
+
+* **API.** `host.js` replaces `fetch` for URLs under `api/` and
+  `EventSource('api/events')`. They go into the Go `http.Handler` running in
+  the page (`goServe`, `goStream`), so `app.js` is unchanged apart from two
+  hooks (`HOST.beforeConnect`, `HOST.openReport`) that are inert in the
+  native program. Links into the API (exports, saved reports) are
+  intercepted: downloads become Blob downloads, and reports and sheets open
+  as `blob:` pages.
+* **Storage.** `server.Store` sits on a `Backend`. Natively it is the data
+  directory; in the browser it is a `MemBackend` loaded from IndexedDB at
+  start-up and mirrored back on every change. The databases are
+  `easyvna-web` and `easyvna-web-demo` (simulator). `/api/backup`
+  (browser only, `Options.Backup`) exports and imports every file as one
+  JSON document; the host bar's *Export data* / *Import data* use it.
+* **USB.** *Connect* calls `navigator.serial.requestPort` (filter
+  `0483:5740`) inside the click. The Go side asks `EasyVNAHost.serial.open`
+  for the port: the chosen one, else a previously granted one, which is
+  how it reconnects after a reload or a replug. Then it opens it at
+  115200 baud and pushes everything read into a `webserial.Conn` that the
+  normal `nanovnah` driver uses. Unplugging ends the stream and the
+  server drops the device. Opening errors suggest another program has the
+  port.
+* **Simulator.** `?demo` uses `mock.Bench`, as `-mock` does. Other query
+  options: `?readonly`, `?antenna=869`, `?firmware=stock`.
+* **The file.** `htmlpack` writes a fixed skeleton plus `<script>`/`<style>`
+  blocks: the UI body, `app.js`, `style.css`, `host.*`, `wasm_exec.js` from
+  the Go toolchain, and the module as gzip + base64 (decoded with
+  `DecompressionStream`). The HTML parser keeps the text of such blocks
+  byte for byte, and the skeleton is stored as JSON in one of them, so the
+  page can rebuild its own exact file. That is the hosted page's
+  *Download for offline use*, hidden on `file://`. Sources are normalised
+  to LF first; `.gitattributes` keeps LF in checkouts.
+* **Size.** The module is about 13.7 MB, 3.4 MB gzipped (most of it is
+  `net/http`); the page is about 4.8 MB. `wasm-opt -Oz` saves under 1 %
+  after gzip, so it is not used.
+
+`scripts/e2e-html.sh` covers it over `file://` and a local Pages-like
+server:
+* the simulator flows, Ctrl+P and the antenna sheet (one page on A4 and
+  Letter), the report, Export/Import data and reload persistence;
+* Web Serial through a fake `navigator.serial` whose port is backed by the
+  Go simulator (`goMockShell`): request, open, driver, unplug, replug,
+  reconnect after reload;
+* the no-Web-Serial notice, and the offline copy (byte-identical, runs from
+  disk).
+
+It fails on any console error, and on any request other than the page itself.
+
+Publishing: `.github/workflows/pages.yml` builds and deploys on every push
+to `main` (Settings → Pages → Source: *GitHub Actions*). The release
+workflow also attaches `easyvna-web.html` to each release.
 
 ## HTTP API
 
@@ -50,6 +127,9 @@ archives (Windows zips and a macOS tarball).
 | `GET/POST /api/snapshots`, `GET/DELETE /api/snapshots/{name}` | snapshots |
 | `GET /api/cal`, `POST /api/cal/step/{reset,open,short,load,isoln,thru,done,on,off}`, `POST /api/cal/save {"slot"}`, `POST /api/cal/recall {"slot"}` | calibration |
 | `PUT /api/profiles/{id}/slot {"slot"}`, `POST /api/settings {"autoRecall"}` | settings |
+| `POST /api/sheet {"antenna":{name,type,band,connector,lengthMm,ground,cable,maker,owner,notes,photo}}` | one-page antenna sheet from the last sweep (saved with the reports); the antenna record is remembered |
+| `GET /api/antennas`, `GET /api/antennas/{name}` | remembered antenna records (`antennas/<name>.json`) |
+| `GET /api/backup`, `POST /api/backup` | browser version only: every stored file as one JSON document |
 
 Example: `curl -s -XPOST localhost:8080/api/sweep | jq .summary.bands`
 
@@ -67,7 +147,10 @@ internal/vna/mock/           byte-level shell simulator + multi-mode antenna mod
 internal/serialport/         serial ports: termios (Linux/macOS), Win32 comm API (Windows);
                              detection via sysfs / registry / cu.usbmodem; busy-port check
 internal/server/             HTTP API, SSE hub, sweep loop, profiles, averaging, TUNE,
-                             REF, trim, compare, report (SVG), store
+                             REF, trim, compare, report and antenna sheet (SVG), store
+                             (Backend: directory or memory), backup
+cmd/easyvna-wasm/, web/browser/, internal/{bridge,webserial,jsutil,htmlpack}/
+                             browser version (see above)
 ```
 
 ## Shell protocol notes (NanoVNA-D `main.c`)
