@@ -11,9 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
-	"sort"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 
@@ -64,53 +62,20 @@ func main() {
 	var mockCut func(float64)
 	antennaName := ""
 	if *useMock {
-		_, ok := mock.Scenarios[*mockAnt]
-		if !ok {
+		if _, ok := mock.Scenarios[*mockAnt]; !ok {
 			fatal(logger, "unknown -mock-antenna %q (have %s)", *mockAnt, strings.Join(scenarioNames(), ", "))
 		}
 		if *mockFW != "custom" && *mockFW != "stock" {
 			fatal(logger, "-mock-firmware must be custom or stock")
 		}
+		bench, err := mock.NewBench(*mockAnt, *maxPoints, *mockFW == "custom")
+		if err != nil {
+			fatal(logger, "%v", err)
+		}
 		antennaName = *mockAnt
-		var mu sync.Mutex
-		current, curName := (*mock.Sim)(nil), *mockAnt
-		cutTotal := 0.0
-		setMock = func(name string) error {
-			mkNew, ok := mock.Scenarios[name]
-			if !ok {
-				return fmt.Errorf("unknown mock antenna %q", name)
-			}
-			mu.Lock()
-			defer mu.Unlock()
-			curName, cutTotal = name, 0
-			if current != nil {
-				current.SetAntenna(mkNew())
-			}
-			return nil
-		}
-		// Simulated element: f0 = k/(L+δ) with L = 82 mm and δ = 6 mm end
-		// effect, so the plain ratio formula is a bit off and the trim
-		// calculator has something to learn.
-		const mockLen, mockDelta = 82.0, 6.0
-		mockCut = func(mm float64) {
-			mu.Lock()
-			defer mu.Unlock()
-			cutTotal += mm
-			a := mock.Scenarios[curName]()
-			if len(a.Modes) > 0 {
-				k := a.Modes[0].F0 * (mockLen + mockDelta)
-				a.Modes[0].F0 = k / (mockLen - cutTotal + mockDelta)
-			}
-			if current != nil {
-				current.SetAntenna(a)
-			}
-		}
+		setMock, mockCut = bench.SetAntenna, bench.Cut
 		open = func(ctx context.Context) (vna.Device, error) {
-			mu.Lock()
-			sim := mock.New(mock.Options{Antenna: mock.Scenarios[curName](), MaxPoints: *maxPoints, Profiles: *mockFW == "custom"})
-			current = sim
-			mu.Unlock()
-			return openDriver(ctx, sim, nanovnah.Options{PortName: "mock", Mock: true, MaxPoints: *maxPoints,
+			return openDriver(ctx, bench.NewSim(), nanovnah.Options{PortName: "mock", Mock: true, MaxPoints: *maxPoints,
 				CalSettle: 200 * time.Millisecond, ReadOnly: *readOnly}, *trace, logger)
 		}
 	} else {
@@ -195,11 +160,4 @@ func detect() (string, error) {
 	return pickPort(runtime.GOOS, serialport.List())
 }
 
-func scenarioNames() []string {
-	var n []string
-	for k := range mock.Scenarios {
-		n = append(n, k)
-	}
-	sort.Strings(n)
-	return n
-}
+func scenarioNames() []string { return mock.ScenarioNames() }
