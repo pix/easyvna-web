@@ -76,7 +76,9 @@ Overwrites ask first and say what they replace, and cheap actions offer
    * **HOLD**: a *stable positions* envelope for bend and hand-effect tests.
      * A sweep whose RMS |ΔΓ| to the previous one exceeds the motion
        threshold is shown as "moving…" and rejected. Sensitivity low, normal
-       or high is 0.03, 0.015 or 0.008.
+       or high is 0.010, 0.006 or 0.004. A static antenna on the real H4
+       measures about 0.0016 between sweeps; a 1-point (450 kHz at 869)
+       resonance shift is about 0.004.
      * When N consecutive sweeps agree (default 3, adjustable 2–5), their
        complex average, lightly smoothed, is captured as one position, and a
        toast says "position 4 captured".

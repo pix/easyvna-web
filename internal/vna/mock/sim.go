@@ -25,7 +25,7 @@ type Options struct {
 	// PointTime is the simulated measurement time per point (default 0.4 ms).
 	PointTime time.Duration
 	Antenna   Antenna
-	Noise     float64 // std-dev of additive noise on S11 re/im (default 0.002)
+	Noise     float64 // std-dev of additive noise on S11 re/im (default 0.0008 ≈ 0.0016 RMS |ΔΓ| sweep to sweep, like a real H4)
 	Seed      uint64
 	// NoEcho disables character echo (some tests use it).
 	NoEcho bool
@@ -117,7 +117,7 @@ func New(opt Options) *Sim {
 		opt.Antenna = DefaultAntenna()
 	}
 	if opt.Noise == 0 {
-		opt.Noise = 0.002
+		opt.Noise = 0.0008
 	}
 	if opt.Seed == 0 {
 		opt.Seed = uint64(time.Now().UnixNano())

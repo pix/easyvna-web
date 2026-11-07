@@ -11,7 +11,8 @@ import (
 func holdSweep(rng *rand.Rand, f0 float64) ([]float64, []complex128) {
 	freq, s11 := seriesRLC(48, f0, 14, 779e6, 959e6, 181)
 	for i := range s11 {
-		s11[i] += complex(rng.NormFloat64()*0.002, rng.NormFloat64()*0.002)
+		// 0.0008 per component ≈ 0.0016 RMS |ΔΓ| between sweeps, as measured on the H4.
+		s11[i] += complex(rng.NormFloat64()*0.0008, rng.NormFloat64()*0.0008)
 	}
 	return freq, s11
 }
@@ -122,5 +123,25 @@ func TestHoldGridChangeResetsAndRemove(t *testing.T) {
 	freq, s11 := seriesRLC(48, 433e6, 14, 389e6, 479e6, 101)
 	if u := h.Add(freq, s11, time.Now()); u.Status != HoldWaiting {
 		t.Errorf("grid change did not reset: %+v", u)
+	}
+}
+
+// TestHoldThresholdsMatchRealNoise checks the presets against the H4
+// figures: static noise (~0.0016 RMS) is "still" even at high sensitivity,
+// while a 5-point resonance shift (5 × 450 kHz) is "moving" at normal.
+func TestHoldThresholdsMatchRealNoise(t *testing.T) {
+	rng := rand.New(rand.NewPCG(9, 9))
+	_, a := holdSweep(rng, 868e6)
+	_, b := holdSweep(rng, 868e6)
+	noise := rmsDiff(a, b)
+	if noise < 0.001 || noise > 0.0025 || noise >= HoldSensitivity["high"] {
+		t.Errorf("static noise %.4f (want ≈0.0016, below high=%.3f)", noise, HoldSensitivity["high"])
+	}
+	_, c := holdSweep(rng, 868e6+5*450e3)
+	if d := rmsDiff(a, c); d <= HoldSensitivity["normal"] {
+		t.Errorf("5-point shift gives %.4f, not above normal=%.3f", d, HoldSensitivity["normal"])
+	}
+	if !(HoldSensitivity["high"] < HoldSensitivity["normal"] && HoldSensitivity["normal"] < HoldSensitivity["low"]) {
+		t.Error("presets not ordered")
 	}
 }

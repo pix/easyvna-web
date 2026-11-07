@@ -21,12 +21,14 @@ import (
 type HoldConfig struct {
 	N int // consecutive agreeing sweeps needed to capture a position (2..10)
 	// Threshold is the RMS |ΔΓ| between sweeps above which the antenna is
-	// considered to be moving. Typical NanoVNA noise is ~0.003.
+	// considered to be moving. Measured on a real H4 at 869 MHz with a static
+	// antenna: ~0.0016 RMS between consecutive sweeps; a 1-point (450 kHz)
+	// resonance shift gives ~0.004, a 5-point shift ~0.015.
 	Threshold float64
 }
 
 // Sensitivity presets for Threshold.
-var HoldSensitivity = map[string]float64{"low": 0.03, "normal": 0.015, "high": 0.008}
+var HoldSensitivity = map[string]float64{"low": 0.010, "normal": 0.006, "high": 0.004}
 
 // DefaultHoldConfig is N=3, normal sensitivity.
 func DefaultHoldConfig() HoldConfig { return HoldConfig{N: 3, Threshold: HoldSensitivity["normal"]} }
