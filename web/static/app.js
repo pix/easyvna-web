@@ -768,6 +768,7 @@ function drawSmith() {
   const cv = $('smith'), { ctx, w, h } = setup(cv);
   const C = { grid: css('--grid'), axis: css('--axis'), base: css('--baseline'), ink2: css('--ink2'), muted: css('--muted') };
   const R = Math.min(w, h) / 2 - 22, cx = w / 2, cy = h / 2, px = (re, im) => [cx + re * R, cy - im * R];
+  if (R < 20) return; // canvas not laid out (hidden behind an overlay or a collapsed tab)
   ctx.font = '10.5px system-ui, sans-serif';
   ctx.save(); ctx.beginPath(); ctx.arc(cx, cy, R, 0, 2 * Math.PI); ctx.clip();
   ctx.strokeStyle = C.grid; ctx.lineWidth = 1;
@@ -840,6 +841,24 @@ function drawAll() {
   });
 }
 window.addEventListener('resize', drawAll);
+// Printing: canvases are bitmaps drawn in the current theme, so switch to
+// light colours and redraw synchronously before the print snapshot.
+let printTheme = null;
+function drawNow() {
+  drawSWR();
+  if (S.tab === 'smith') drawSmith(); else if (S.tab === 'rl') drawRL(); else if (S.tab === 'z') drawZ(); else if (S.tab === 's21') drawS21();
+  renderReadout();
+}
+window.addEventListener('beforeprint', () => {
+  printTheme = document.documentElement.dataset.theme || '';
+  document.documentElement.dataset.theme = 'light';
+  try { drawNow(); } catch { /* ignore */ }
+});
+window.addEventListener('afterprint', () => {
+  if (printTheme === null) return;
+  if (printTheme) document.documentElement.dataset.theme = printTheme; else delete document.documentElement.dataset.theme;
+  printTheme = null; drawAll();
+});
 
 // ---------- interaction ----------
 function attachHover(cv) {

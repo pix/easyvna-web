@@ -424,14 +424,22 @@ type ReportInfo struct {
 	Size int64     `json:"size"`
 }
 
-// SaveReport writes a report and returns its file name.
-func (st *Store) SaveReport(name string, html []byte) (string, error) {
+// ReportFileName builds "<name>-YYYYMMDD-HHMMSS.html" for a report.
+func ReportFileName(name string, t time.Time) (string, error) {
 	f, err := SnapshotFile(name)
 	if err != nil {
 		return "", err
 	}
-	file := strings.TrimSuffix(f, ".json") + "-" + time.Now().Format("20060102-150405") + ".html"
-	return file, writeAtomic(filepath.Join(st.dir, "reports", file), html)
+	return strings.TrimSuffix(f, ".json") + "-" + t.Format("20060102-150405") + ".html", nil
+}
+
+// SaveReportFile writes a report under the given (validated) file name.
+func (st *Store) SaveReportFile(file string, html []byte) error {
+	p, err := st.ReportPath(file)
+	if err != nil {
+		return err
+	}
+	return writeAtomic(p, html)
 }
 
 // ReportPath validates a report file name and returns its path.

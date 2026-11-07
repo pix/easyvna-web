@@ -15,208 +15,170 @@ import (
 	"github.com/pix/easyvna-web/internal/rf"
 )
 
-// ---------- SVG helpers (printable, no JavaScript) ----------
-
-type svgSeries struct {
-	Y     []float64
-	Color string
-	Dash  bool
-}
-
-type svgPlot struct {
-	W, H       float64
-	Freq       []float64
-	Series     []svgSeries
-	YMin, YMax float64
-	YTicks     []float64
-	YFmt       func(float64) string
-	Bands      []rf.Band
-	HLines     []float64
-	Marks      []float64 // vertical marker lines (Hz)
-	Title      string
-}
-
-func niceTicks(lo, hi float64, n int) []float64 {
-	span := hi - lo
-	if span <= 0 || n < 1 {
-		return []float64{lo}
-	}
-	raw := span / float64(n)
-	mag := math.Pow(10, math.Floor(math.Log10(raw)))
-	step := 10 * mag
-	for _, m := range []float64{1, 2, 2.5, 5, 10} {
-		if m*mag >= raw {
-			step = m * mag
-			break
-		}
-	}
-	var out []float64
-	for v := math.Ceil(lo/step) * step; v <= hi+step*1e-9; v += step {
-		out = append(out, math.Round(v/step)*step)
-	}
-	return out
-}
-
-func (p svgPlot) render() template.HTML {
-	const l, r, t, b = 44.0, 10.0, 22.0, 26.0
-	x0, x1, y0, y1 := l, p.W-r, t, p.H-b
-	var sb strings.Builder
-	fmt.Fprintf(&sb, `<svg viewBox="0 0 %.0f %.0f" class="plot" role="img" aria-label="%s">`, p.W, p.H, template.HTMLEscapeString(p.Title))
-	fmt.Fprintf(&sb, `<text x="%.0f" y="14" class="ttl">%s</text>`, x0, template.HTMLEscapeString(p.Title))
-	if len(p.Freq) < 2 {
-		sb.WriteString(`</svg>`)
-		return template.HTML(sb.String())
-	}
-	fmin, fmax := p.Freq[0], p.Freq[len(p.Freq)-1]
-	fx := func(f float64) float64 { return x0 + (f-fmin)/(fmax-fmin)*(x1-x0) }
-	fy := func(v float64) float64 {
-		v = math.Max(p.YMin, math.Min(p.YMax, v))
-		return y1 - (v-p.YMin)/(p.YMax-p.YMin)*(y1-y0)
-	}
-	for _, bd := range p.Bands {
-		if bd.Hi < fmin || bd.Lo > fmax {
-			continue
-		}
-		a, z := fx(math.Max(bd.Lo, fmin)), fx(math.Min(bd.Hi, fmax))
-		fmt.Fprintf(&sb, `<rect x="%.1f" y="%.1f" width="%.1f" height="%.1f" class="band"/>`, a, y0, math.Max(1.5, z-a), y1-y0)
-	}
-	for _, tk := range p.YTicks {
-		y := fy(tk)
-		fmt.Fprintf(&sb, `<line x1="%.1f" x2="%.1f" y1="%.1f" y2="%.1f" class="grid"/><text x="%.1f" y="%.1f" class="yl">%s</text>`,
-			x0, x1, y, y, x0-4, y+3, p.YFmt(tk))
-	}
-	for _, tk := range niceTicks(fmin/1e6, fmax/1e6, int((x1-x0)/70)) {
-		x := fx(tk * 1e6)
-		fmt.Fprintf(&sb, `<line x1="%.1f" x2="%.1f" y1="%.1f" y2="%.1f" class="grid"/><text x="%.1f" y="%.1f" class="xl">%g</text>`,
-			x, x, y0, y1, x, y1+14, tk)
-	}
-	fmt.Fprintf(&sb, `<text x="%.1f" y="%.1f" class="xl" text-anchor="end">MHz</text>`, x1, p.H-2)
-	for _, h := range p.HLines {
-		y := fy(h)
-		fmt.Fprintf(&sb, `<line x1="%.1f" x2="%.1f" y1="%.1f" y2="%.1f" class="thr"/>`, x0, x1, y, y)
-	}
-	for _, m := range p.Marks {
-		if m >= fmin && m <= fmax {
-			fmt.Fprintf(&sb, `<line x1="%.1f" x2="%.1f" y1="%.1f" y2="%.1f" class="mark"/>`, fx(m), fx(m), y0, y1)
-		}
-	}
-	for _, s := range p.Series {
-		var pts strings.Builder
-		for i, f := range p.Freq {
-			if i < len(s.Y) {
-				fmt.Fprintf(&pts, "%.1f,%.1f ", fx(f), fy(s.Y[i]))
-			}
-		}
-		dash := ""
-		if s.Dash {
-			dash = ` stroke-dasharray="5 4"`
-		}
-		fmt.Fprintf(&sb, `<polyline points="%s" fill="none" stroke="%s" stroke-width="1.8"%s/>`, pts.String(), s.Color, dash)
-	}
-	fmt.Fprintf(&sb, `<rect x="%.1f" y="%.1f" width="%.1f" height="%.1f" class="frame"/></svg>`, x0, y0, x1-x0, y1-y0)
-	return template.HTML(sb.String())
-}
-
-func smithSVG(res *Result, size float64) template.HTML {
-	c, R := size/2, size/2-14
-	var sb strings.Builder
-	fmt.Fprintf(&sb, `<svg viewBox="0 0 %.0f %.0f" class="smith" role="img" aria-label="Smith chart">`, size, size)
-	fmt.Fprintf(&sb, `<defs><clipPath id="uc"><circle cx="%.1f" cy="%.1f" r="%.1f"/></clipPath></defs><g clip-path="url(#uc)">`, c, c, R)
-	for _, r := range []float64{0.2, 0.5, 1, 2, 5} {
-		fmt.Fprintf(&sb, `<circle cx="%.1f" cy="%.1f" r="%.1f" class="grid" fill="none"/>`, c+R*r/(1+r), c, R/(1+r))
-	}
-	for _, x := range []float64{0.2, 0.5, 1, 2, 5} {
-		for _, sg := range []float64{1, -1} {
-			fmt.Fprintf(&sb, `<circle cx="%.1f" cy="%.1f" r="%.1f" class="grid" fill="none"/>`, c+R, c-sg*R/x, R/x)
-		}
-	}
-	fmt.Fprintf(&sb, `<line x1="%.1f" x2="%.1f" y1="%.1f" y2="%.1f" class="grid"/>`, c-R, c+R, c, c)
-	fmt.Fprintf(&sb, `<circle cx="%.1f" cy="%.1f" r="%.1f" class="thr" fill="none"/></g>`, c, c, R/3)
-	fmt.Fprintf(&sb, `<circle cx="%.1f" cy="%.1f" r="%.1f" class="frame" fill="none"/>`, c, c, R)
-	var pts strings.Builder
-	for _, g := range res.S11 {
-		fmt.Fprintf(&pts, "%.1f,%.1f ", c+g[0]*R, c-g[1]*R)
-	}
-	fmt.Fprintf(&sb, `<polyline points="%s" fill="none" stroke="#2a78d6" stroke-width="1.6"/>`, pts.String())
-	if len(res.Config.Bands) > 0 {
-		b := res.Config.Bands[0]
-		var bp strings.Builder
-		for i, f := range res.Freq {
-			if f >= b.Lo && f <= b.Hi {
-				fmt.Fprintf(&bp, "%.1f,%.1f ", c+res.S11[i][0]*R, c-res.S11[i][1]*R)
-			}
-		}
-		if bp.Len() > 0 {
-			fmt.Fprintf(&sb, `<polyline points="%s" fill="none" stroke="#2a78d6" stroke-width="4" stroke-linecap="round"/>`, bp.String())
-		}
-	}
-	fmt.Fprintf(&sb, `<text x="%.1f" y="%.1f" class="xl">50</text></svg>`, c, c+12)
-	return template.HTML(sb.String())
-}
-
-func sparkSVG(entries []TrimEntry, target float64) template.HTML {
-	if len(entries) == 0 {
-		return ""
-	}
-	const w, h = 260.0, 70.0
-	lo, hi := target, target
-	for _, e := range entries {
-		lo, hi = math.Min(lo, e.FreqHz), math.Max(hi, e.FreqHz)
-	}
-	pad := math.Max((hi-lo)*0.15, 1e6)
-	lo, hi = lo-pad, hi+pad
-	fx := func(i int) float64 {
-		if len(entries) == 1 {
-			return w / 2
-		}
-		return 8 + float64(i)/float64(len(entries)-1)*(w-16)
-	}
-	fy := func(f float64) float64 { return h - 6 - (f-lo)/(hi-lo)*(h-12) }
-	var sb strings.Builder
-	fmt.Fprintf(&sb, `<svg viewBox="0 0 %.0f %.0f" class="spark"><line x1="0" x2="%.0f" y1="%.1f" y2="%.1f" class="thr"/>`, w, h, w, fy(target), fy(target))
-	var pts strings.Builder
-	for i, e := range entries {
-		fmt.Fprintf(&pts, "%.1f,%.1f ", fx(i), fy(e.FreqHz))
-	}
-	fmt.Fprintf(&sb, `<polyline points="%s" fill="none" stroke="#2a78d6" stroke-width="2"/>`, pts.String())
-	for i, e := range entries {
-		fmt.Fprintf(&sb, `<circle cx="%.1f" cy="%.1f" r="3" fill="#2a78d6"/>`, fx(i), fy(e.FreqHz))
-	}
-	sb.WriteString(`</svg>`)
-	return template.HTML(sb.String())
-}
-
 // ---------- report model ----------
 
-type reportBandRow struct {
-	Profile string
-	Band    rf.BandSummary
-	Ref     float64
+type reportKV struct{ K, V string }
+
+type reportVerdict struct {
+	Profile   string
+	Band      string // "869 MHz band"
+	Range     string // "863.00–870.00 MHz"
+	Class     string // good / ok / bad / na
+	Label     string // PASS / OK / FAIL / N/A / CHECK
+	WorstSWR  string
+	WorstAt   string
+	Resonance string
+	Offset    string
+	RL        string
+	ML        string
+	BW2       string
+	Q         string
+	Note      string
 }
 
 type reportSection struct {
-	Profile string
 	Label   string
 	Res     *Result
 	SWR     template.HTML
 	RL      template.HTML
 	Smith   template.HTML
-	Bands   []rf.BandSummary
+	Key     []reportKV
+	KeyRows [][]reportKV // Key in pairs, for a compact two-column table
+	CalNote string
+	CalOK   bool
+}
+
+type reportHold struct {
+	Label     string
+	Positions int
+	Spread    string
+	Range     string
+	WorstBand string
+	Rows      []HoldPosView
 }
 
 type reportData struct {
-	Name, Notes  string
-	Generated    time.Time
-	Device       string
-	Cal          string
-	ReadOnly     bool
-	Rows         []reportBandRow
-	Sections     []reportSection
-	Trim         *TrimSession
-	TrimSpark    template.HTML
-	Compare      *CompareSession
-	Warnings     []rf.Warning
-	HasAnySweeps bool
+	ReportID  string
+	Name      string
+	Notes     string
+	Generated time.Time
+	Device    string
+	Firmware  string
+	Simulated bool
+	Profiles  string
+	CalState  string
+	CalOK     bool
+	Verdicts  []reportVerdict
+	Sections  []reportSection
+	Trim      *TrimSession
+	TrimSpark template.HTML
+	Hold      *reportHold
+	Compare   *CompareSession
+	Warnings  []rf.Warning
+}
+
+var verdictLabel = map[string]string{"good": "PASS", "ok": "OK", "bad": "FAIL"}
+
+func mhzF(f float64) string { return fmt.Sprintf("%.2f", f/1e6) }
+
+func swrF(v float64) string {
+	if v >= 99 {
+		return ">99"
+	}
+	return fmt.Sprintf("%.2f", v)
+}
+
+// signed1 formats v with one decimal and a sign, without "-0.0".
+func signed1(v float64) string {
+	r := math.Round(v*10) / 10
+	if r == 0 {
+		return "0.0"
+	}
+	return fmt.Sprintf("%+.1f", r)
+}
+
+var reportFuncs = template.FuncMap{
+	"mhz":  mhzF,
+	"mhz3": func(f float64) string { return fmt.Sprintf("%.3f", f/1e6) },
+	"f1":   func(v float64) string { return fmt.Sprintf("%.1f", v) },
+	"f2":   func(v float64) string { return fmt.Sprintf("%.2f", v) },
+	"sgn1": signed1,
+	"swr":  swrF,
+	"neg":  func(v float64) float64 { return -v },
+	"time": func(t time.Time) string { return t.Format("2006-01-02 15:04") },
+	"hms":  func(t time.Time) string { return t.Format("15:04:05") },
+	"inc":  func(i int) int { return i + 1 },
+	"dmhz": func(f, t float64) string { return signed1((f - t) / 1e6) },
+	"z": func(r, x float64) string {
+		sign := "+"
+		if x < 0 {
+			sign = "−"
+		}
+		return fmt.Sprintf("%.1f %s j%.1f Ω", r, sign, math.Abs(x))
+	},
+	"bw": func(b rf.Bandwidth) string {
+		if !b.Found {
+			return "–"
+		}
+		s := fmt.Sprintf("%.1f MHz", b.Width/1e6)
+		if b.LoOpen || b.HiOpen {
+			s = "≥ " + s
+		}
+		return s
+	},
+	"q": func(q float64) string {
+		if q <= 0 {
+			return "–"
+		}
+		return fmt.Sprintf("%.0f", q)
+	},
+}
+
+var reportTmpl = template.Must(template.New("report").Funcs(reportFuncs).Parse(reportHTML))
+
+func (s *Server) calNoteLocked(r *Result) (string, bool) {
+	a := s.cal.Active
+	switch {
+	case !r.CalApplied:
+		return "not calibrated", false
+	case a == nil:
+		return "calibrated (range unknown)", false
+	case a.Start == r.Config.Start && a.Stop == r.Config.Stop:
+		return "calibrated for this range (" + a.Source + ")", true
+	case a.Start <= r.Config.Start && a.Stop >= r.Config.Stop:
+		return "calibration covers this range (" + mhzRange(a.Start, a.Stop) + ", interpolated)", true
+	}
+	return "calibration made for " + mhzRange(a.Start, a.Stop) + ", not this range", false
+}
+
+func bandVerdict(prof string, b rf.BandSummary, warned bool) reportVerdict {
+	v := reportVerdict{Profile: prof, Range: mhzRange(b.Band.Lo, b.Band.Hi), Class: verdictClass(b.Verdict)}
+	v.Band = b.Band.Name + " MHz band"
+	if b.Band.Hi-b.Band.Lo < 1e6 {
+		v.Band = b.Band.Name + " MHz sub-band"
+	}
+	v.Label = verdictLabel[b.Verdict]
+	if v.Label == "" {
+		v.Label = "N/A"
+	}
+	if warned {
+		v.Label, v.Class, v.Note = "CHECK", "na", "measurement warning: see above"
+	}
+	v.WorstSWR, v.WorstAt = swrF(b.WorstSWR), mhzF(b.WorstSWRFreq)+" MHz"
+	v.RL, v.ML = fmt.Sprintf("%.1f dB", b.WorstRL), fmt.Sprintf("%.2f dB", b.WorstML)
+	v.Resonance, v.Offset = "–", "–"
+	if b.DipFreq != nil {
+		v.Resonance = mhzF(*b.DipFreq) + " MHz"
+		ref := b.Band.Reference()
+		v.Offset = signed1(*b.DipOffset/1e6) + " MHz vs " + fmt.Sprintf("%.3g", ref/1e6)
+		if b.DipEdgeOff != nil && *b.DipEdgeOff == 0 {
+			v.Offset += " (in band)"
+		}
+	}
+	if !b.Covered && v.Note == "" {
+		v.Note = "sweep does not cover the whole band"
+	}
+	return v
 }
 
 func verdictClass(v string) string {
@@ -227,130 +189,121 @@ func verdictClass(v string) string {
 	return "na"
 }
 
-var reportFuncs = template.FuncMap{
-	"mhz":  func(f float64) string { return fmt.Sprintf("%.2f", f/1e6) },
-	"mhz3": func(f float64) string { return fmt.Sprintf("%.3f", f/1e6) },
-	"f1":   func(v float64) string { return fmt.Sprintf("%.1f", v) },
-	"f2":   func(v float64) string { return fmt.Sprintf("%.2f", v) },
-	"sgn1": signed1,
-	"swr": func(v float64) string {
-		if v >= 99 {
-			return ">99"
-		}
-		return fmt.Sprintf("%.2f", v)
-	},
-	"vclass": verdictClass,
-	"upper":  strings.ToUpper,
-	"deref": func(p *float64) float64 {
-		if p == nil {
-			return 0
-		}
-		return *p
-	},
-	"time": func(t time.Time) string { return t.Format("2006-01-02 15:04") },
-	"neg":  func(v float64) float64 { return -v },
-	"offmhz": func(p *float64) string {
-		if p == nil {
-			return "–"
-		}
-		return signed1(*p / 1e6)
-	},
-	"inc": func(i int) int { return i + 1 },
-	"z": func(r, x float64) string {
-		sign := "+"
-		if x < 0 {
-			sign = "−"
-		}
-		return fmt.Sprintf("%.1f %s j%.1f Ω", r, sign, math.Abs(x))
-	},
-}
-
-var reportTmpl = template.Must(template.New("report").Funcs(reportFuncs).Parse(reportHTML))
-
 // buildReport assembles the report for the chosen profiles.
-func (s *Server) buildReport(name, notes string, profiles []string, trimName string) ([]byte, error) {
+func (s *Server) buildReport(id, name, notes string, profiles []string, trimName string) ([]byte, error) {
 	s.mu.Lock()
-	d := reportData{Name: name, Notes: notes, Generated: time.Now(), ReadOnly: s.opt.ReadOnly}
+	d := reportData{ReportID: id, Name: name, Notes: notes, Generated: time.Now()}
 	if s.info != nil {
-		d.Device = fmt.Sprintf("%s, firmware %s", s.info.Model, s.info.Version)
+		d.Device = s.info.Model
+		d.Firmware = s.info.Version
 		if s.info.Fork != "" {
-			d.Device += ", fork " + s.info.Fork
+			d.Firmware += " · " + s.info.Fork
 		}
-		if s.info.Mock {
-			d.Device += " (SIMULATED)"
-		}
+		d.Simulated = s.info.Mock
 	}
-	d.Cal = s.cal.Status.Raw
-	var picked []*Result
-	order := map[string]int{}
+	switch st := s.cal.Status; {
+	case !st.Known:
+		d.CalState = "unknown"
+	case st.Applied && s.cal.Active != nil:
+		d.CalState, d.CalOK = "applied · "+s.cal.Active.Source+", "+mhzRange(s.cal.Active.Start, s.cal.Active.Stop), true
+	case st.Applied:
+		d.CalState, d.CalOK = "applied (range unknown)", true
+	default:
+		d.CalState = "not applied"
+	}
+	order, labels := map[string]int{}, map[string]string{}
 	for i, p := range s.profiles {
 		order[p.ID] = i
+		if p.Identify {
+			labels[p.ID] = p.Label + " sweep · " + p.Sub
+		} else {
+			labels[p.ID] = p.Label + " MHz profile · " + p.Sub
+		}
 	}
-	for _, id := range profiles {
-		if r := s.lastByProfile[id]; r != nil {
+	var picked []*Result
+	for _, pid := range profiles {
+		if r := s.lastByProfile[pid]; r != nil {
 			picked = append(picked, r)
 		}
 	}
 	sort.SliceStable(picked, func(i, j int) bool { return order[picked[i].Config.Profile] < order[picked[j].Config.Profile] })
-	labels := map[string]string{}
-	for _, p := range s.profiles {
-		if p.Identify {
-			labels[p.ID] = p.Label + " sweep (" + p.Sub + ")"
-		} else {
-			labels[p.ID] = p.Label + " MHz profile (" + p.Sub + ")"
+	var profNames []string
+	for _, r := range picked {
+		label := labels[r.Config.Profile]
+		if label == "" {
+			label = "Custom sweep · " + mhzRange(r.Config.Start, r.Config.Stop)
 		}
+		profNames = append(profNames, strings.SplitN(label, " · ", 2)[0])
+		warned := len(r.Summary.Warnings) > 0
+		sec := reportSection{Label: label, Res: r}
+		sec.CalNote, sec.CalOK = s.calNoteLocked(r)
+		if !r.Config.Identify {
+			for i, b := range r.Summary.Bands {
+				v := bandVerdict(r.Config.Profile, b, warned)
+				if i == 0 {
+					v.BW2, v.Q = "–", "–"
+					if r.Summary.BW2.Found {
+						v.BW2 = reportFuncs["bw"].(func(rf.Bandwidth) string)(r.Summary.BW2)
+					}
+					if r.Summary.Q > 0 {
+						v.Q = fmt.Sprintf("%.0f", r.Summary.Q)
+					}
+				}
+				d.Verdicts = append(d.Verdicts, v)
+			}
+		}
+		for _, w := range r.Summary.Warnings {
+			w.Title = strings.SplitN(label, " · ", 2)[0] + ": " + w.Title
+			d.Warnings = append(d.Warnings, w)
+		}
+		sec.SWR, sec.RL = reportPlots(r)
+		sec.Smith = smithSVG(r, 52)
+		sm := r.Summary
+		sec.Key = []reportKV{
+			{"Best SWR", swrF(sm.MinSWR) + " @ " + mhzF(sm.MinSWRFreq) + " MHz"},
+			{"Return loss there", fmt.Sprintf("%.1f dB", sm.BestRL)},
+			{"Mismatch loss there", fmt.Sprintf("%.2f dB", sm.MLAtMin)},
+			{"Impedance there", reportFuncs["z"].(func(float64, float64) string)(sm.ZAtMinR, sm.ZAtMinX)},
+			{"SWR < 2 bandwidth", reportFuncs["bw"].(func(rf.Bandwidth) string)(sm.BW2)},
+			{"Q (estimated)", reportFuncs["q"].(func(float64) string)(sm.Q)},
+			{"Sweep", fmt.Sprintf("%s, %d points%s", mhzRange(r.Config.Start, r.Config.Stop), len(r.Freq), avgNote(r.AvgN))},
+			{"Calibration", sec.CalNote},
+		}
+		for i := 0; i < len(sec.Key); i += 2 {
+			sec.KeyRows = append(sec.KeyRows, sec.Key[i:min(i+2, len(sec.Key))])
+		}
+		d.Sections = append(d.Sections, sec)
 	}
+	d.Profiles = strings.Join(profNames, ", ")
 	if s.compare != nil && len(s.compare.Leaderboard) > 1 {
 		c := *s.compare
 		d.Compare = &c
 	}
+	if hs := s.hold; hs.h != nil && len(hs.h.Positions) > 0 {
+		sum := hs.h.Summary()
+		h := &reportHold{Label: labels[hs.profile], Positions: sum.Positions,
+			Spread: fmt.Sprintf("%.1f MHz", sum.ResSpread/1e6), Range: mhzF(sum.ResMin) + "–" + mhzF(sum.ResMax) + " MHz", WorstBand: "–"}
+		if h.Label == "" {
+			h.Label = hs.label
+		}
+		if sum.WorstBand > 0 {
+			h.WorstBand = fmt.Sprintf("%s (position #%d)", swrF(sum.WorstBand), sum.WorstBandID)
+		}
+		for _, p := range hs.h.Positions {
+			h.Rows = append(h.Rows, HoldPosView{ID: p.ID, Time: p.Time, ResFreq: p.ResFreq, MinSWR: p.MinSWR, BandWorst: p.BandWrst})
+		}
+		d.Hold = h
+	}
 	s.mu.Unlock()
 
-	for _, r := range picked {
-		sec := reportSection{Profile: r.Config.Profile, Label: labels[r.Config.Profile], Res: r, Bands: r.Summary.Bands}
-		if sec.Label == "" {
-			sec.Label = r.Config.Profile + " (" + mhzRange(r.Config.Start, r.Config.Stop) + ")"
-		}
-		maxSWR := 5.0
-		if r.Config.Identify {
-			maxSWR = 10
-		}
-		var marks []float64
-		for _, dp := range r.Summary.Dips {
-			marks = append(marks, dp.Freq)
-		}
-		sec.SWR = svgPlot{W: 520, H: 230, Freq: r.Freq, Series: []svgSeries{{Y: r.Derived.SWR, Color: "#2a78d6"}},
-			YMin: 1, YMax: maxSWR, YTicks: niceTicks(1, maxSWR, 5), YFmt: func(v float64) string { return fmt.Sprintf("%g", v) },
-			Bands: r.Config.Bands, HLines: []float64{1.5, 2}, Marks: marks, Title: "SWR"}.render()
-		lo := -30.0
-		for _, v := range r.Derived.S11dB {
-			lo = math.Min(lo, v)
-		}
-		lo = math.Max(-60, math.Floor(lo/10)*10)
-		sec.RL = svgPlot{W: 520, H: 200, Freq: r.Freq, Series: []svgSeries{{Y: r.Derived.S11dB, Color: "#2a78d6"}},
-			YMin: lo, YMax: 0, YTicks: niceTicks(lo, 0, 5), YFmt: func(v float64) string { return fmt.Sprintf("%g", v) },
-			Bands: r.Config.Bands, HLines: []float64{-9.54, -13.98}, Title: "Return loss (S11 dB)"}.render()
-		sec.Smith = smithSVG(r, 230)
-		d.Sections = append(d.Sections, sec)
-		if !r.Config.Identify {
-			for _, b := range r.Summary.Bands {
-				d.Rows = append(d.Rows, reportBandRow{Profile: r.Config.Profile, Band: b, Ref: b.Band.Reference()})
-			}
-		}
-		for _, w := range r.Summary.Warnings {
-			w.Title = sec.Label + ": " + w.Title
-			d.Warnings = append(d.Warnings, w)
-		}
-	}
-	d.HasAnySweeps = len(d.Sections) > 0
 	if trimName != "" {
-		if t, err := s.store.LoadTrim(trimName); err == nil {
+		if t, err := s.store.LoadTrim(trimName); err == nil && len(t.Entries) > 0 {
 			t.predict()
 			d.Trim = t
 			d.TrimSpark = sparkSVG(t.Entries, t.Target)
 		}
 	}
-	if !d.HasAnySweeps && d.Trim == nil && d.Compare == nil {
+	if len(d.Sections) == 0 && d.Trim == nil && d.Compare == nil && d.Hold == nil {
 		return nil, errors.New("nothing to report yet: sweep at least one profile")
 	}
 	var buf bytes.Buffer
@@ -358,6 +311,40 @@ func (s *Server) buildReport(name, notes string, profiles []string, trimName str
 		return nil, err
 	}
 	return buf.Bytes(), nil
+}
+
+func avgNote(n int) string {
+	if n > 1 {
+		return fmt.Sprintf(", average of %d", n)
+	}
+	return ""
+}
+
+// reportPlots renders the SWR (full width) and return-loss plots.
+func reportPlots(r *Result) (template.HTML, template.HTML) {
+	maxSWR := 5.0
+	if r.Config.Identify {
+		maxSWR = 10
+	}
+	var marks []svgMark
+	for _, dp := range r.Summary.Dips {
+		marks = append(marks, svgMark{F: dp.Freq, Label: fmt.Sprintf("%.1f", dp.Freq/1e6)})
+	}
+	thr := []svgHLine{{Y: 2, Label: "SWR 2", Dash: "9 5"}, {Y: 1.5, Label: "SWR 1.5", Dash: "2 4"}}
+	swr := svgPlot{Wmm: 182, Hmm: 60, Freq: r.Freq, Series: []svgSeries{{Y: r.Derived.SWR, Color: svgTrace}},
+		YMin: 1, YMax: maxSWR, YTicks: niceTicks(1, maxSWR, 4), YFmt: func(v float64) string { return fmt.Sprintf("%g", v) },
+		YUnit: "SWR", Bands: r.Config.Bands, HLines: thr, Marks: marks, Title: "SWR", Class: "swr"}.render()
+	lo := -30.0
+	for _, v := range r.Derived.S11dB {
+		lo = math.Min(lo, v)
+	}
+	lo = math.Max(-50, math.Floor(lo/10)*10)
+	rl := svgPlot{Wmm: 124, Hmm: 52, Freq: r.Freq, Series: []svgSeries{{Y: r.Derived.S11dB, Color: svgTrace}},
+		YMin: lo, YMax: 0, YTicks: niceTicks(lo, 0, 4), YFmt: func(v float64) string { return fmt.Sprintf("%g", v) },
+		YUnit: "dB", Bands: r.Config.Bands,
+		HLines: []svgHLine{{Y: -9.54, Label: "SWR 2", Dash: "9 5"}, {Y: -13.98, Label: "SWR 1.5", Dash: "2 4"}},
+		Title:  "Return loss (S11)", Class: "rl"}.render()
+	return swr, rl
 }
 
 // ReportChoice lists what a report can include (for the REPORT dialog).
@@ -397,7 +384,8 @@ func (s *Server) hReport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	name := strings.TrimSpace(req.Name)
-	if _, err := SnapshotFile(name); err != nil {
+	file, err := ReportFileName(name, time.Now())
+	if err != nil {
 		writeErr(w, 400, errors.New("give the antenna a name (1-80 characters)"))
 		return
 	}
@@ -408,13 +396,12 @@ func (s *Server) hReport(w http.ResponseWriter, r *http.Request) {
 		}
 		s.mu.Unlock()
 	}
-	html, err := s.buildReport(name, req.Notes, req.Profiles, req.Trim)
+	html, err := s.buildReport(strings.TrimSuffix(file, ".html"), name, req.Notes, req.Profiles, req.Trim)
 	if err != nil {
 		writeErr(w, 409, err)
 		return
 	}
-	file, err := s.store.SaveReport(name, html)
-	if err != nil {
+	if err := s.store.SaveReportFile(file, html); err != nil {
 		writeErr(w, 500, err)
 		return
 	}
@@ -444,82 +431,4 @@ func (s *Server) hReportGet(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Disposition", fmt.Sprintf(`%s; filename="%s"`, disp, r.PathValue("file")))
 	_, _ = w.Write(b)
-}
-
-const reportHTML = `<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{{.Name}}: antenna report</title>
-<style>
-:root{--ink:#0b0b0b;--ink2:#52514e;--muted:#6f6d68;--grid:#e1e0d9;--border:#d6d5cf;--good:#0ca30c;--warn:#fab219;--bad:#d03b3b}
-*{box-sizing:border-box}body{margin:0;background:#fff;color:var(--ink);font:13px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
-main{max-width:920px;margin:0 auto;padding:24px 20px}
-h1{font-size:24px;margin:0 0 2px}h2{font-size:16px;margin:22px 0 8px;border-bottom:1px solid var(--border);padding-bottom:4px}h3{font-size:14px;margin:12px 0 6px}
-.meta{color:var(--ink2)}.muted{color:var(--muted)}
-table{border-collapse:collapse;width:100%;font-variant-numeric:tabular-nums}th,td{text-align:left;padding:5px 7px;border-bottom:1px solid var(--border);vertical-align:top}th{font-size:11.5px;color:var(--muted)}
-.badge{display:inline-block;font-weight:700;font-size:11px;letter-spacing:.05em;padding:1px 8px;border-radius:999px;color:#fff;-webkit-print-color-adjust:exact;print-color-adjust:exact}
-.badge.good{background:var(--good)}.badge.ok{background:var(--warn);color:#0b0b0b}.badge.bad{background:var(--bad)}.badge.na{background:#c3c2b7;color:#0b0b0b}
-.plots{display:grid;grid-template-columns:1fr 240px;gap:10px;align-items:start}.plots .col{display:flex;flex-direction:column;gap:8px}
-svg{width:100%;height:auto}svg .grid{stroke:var(--grid);stroke-width:1}svg .thr{stroke:#898781;stroke-dasharray:4 4;fill:none}svg .mark{stroke:#898781;stroke-width:1}
-svg .frame{fill:none;stroke:#c3c2b7}svg .band{fill:rgba(42,120,214,.13);-webkit-print-color-adjust:exact;print-color-adjust:exact}
-svg text{font:10px system-ui,sans-serif;fill:#6f6d68}svg .yl{text-anchor:end}svg .xl{text-anchor:middle}svg .ttl{font-weight:600;fill:#0b0b0b;font-size:11px}
-.spark{width:260px;height:70px}.warn{border:1px solid var(--bad);border-radius:6px;padding:6px 10px;margin:6px 0}
-section{break-inside:avoid;page-break-inside:avoid}
-.noprint{margin:0 0 14px}.noprint a,.noprint button{font:inherit;padding:6px 12px;border:1px solid var(--border);border-radius:6px;background:#fff;color:inherit;text-decoration:none;cursor:pointer}
-@media print{.noprint{display:none}main{padding:0}@page{size:A4;margin:14mm}}
-@media (max-width:640px){.plots{grid-template-columns:1fr}}
-</style></head><body><main>
-<div class="noprint"><button onclick="print()">Print / save as PDF</button> <a href="?download=1">Download HTML</a></div>
-<h1>{{.Name}}</h1>
-<div class="meta">Antenna report, {{time .Generated}}{{if .Device}} · {{.Device}}{{end}}</div>
-{{if .Cal}}<div class="muted">Firmware calibration flags: {{.Cal}}</div>{{end}}
-{{if .Notes}}<p>{{.Notes}}</p>{{end}}
-{{range .Warnings}}<div class="warn"><b>{{.Title}}</b>: {{.Text}}</div>{{end}}
-
-{{if .Rows}}<section><h2>Verdict per band</h2>
-<table><thead><tr><th>Band</th><th>Verdict</th><th>Worst SWR</th><th>Best SWR</th><th>Worst RL</th><th>Mismatch loss (worst)</th><th>Resonance</th><th>Offset</th></tr></thead><tbody>
-{{range .Rows}}<tr><td><b>{{.Band.Band.Name}}</b> <span class="muted">{{mhz .Band.Band.Lo}}–{{mhz .Band.Band.Hi}} MHz</span></td>
-<td><span class="badge {{vclass .Band.Verdict}}">{{upper .Band.Verdict}}</span></td>
-<td>{{swr .Band.WorstSWR}} @ {{mhz .Band.WorstSWRFreq}}</td><td>{{swr .Band.BestSWR}}</td><td>{{f1 .Band.WorstRL}} dB</td><td>{{f2 .Band.WorstML}} dB</td>
-<td>{{if .Band.DipFreq}}{{mhz (deref .Band.DipFreq)}} MHz{{else}}–{{end}}</td>
-<td>{{if .Band.DipOffset}}{{offmhz .Band.DipOffset}} MHz from {{mhz .Ref}}{{else}}–{{end}}</td></tr>{{end}}
-</tbody></table></section>{{end}}
-
-{{range .Sections}}<section><h2>{{.Label}} <span class="muted" style="font-weight:400">· swept {{time .Res.Time}}{{if gt .Res.AvgN 1}} · average of {{.Res.AvgN}}{{end}}</span></h2>
-<div class="plots"><div class="col">{{.SWR}}{{.RL}}</div><div class="col">{{.Smith}}
-<table><tbody>
-<tr><td>Best SWR</td><td><b>{{swr .Res.Summary.MinSWR}}</b> @ {{mhz .Res.Summary.MinSWRFreq}} MHz</td></tr>
-<tr><td>Return loss</td><td>{{f1 .Res.Summary.BestRL}} dB</td></tr>
-<tr><td>Mismatch loss</td><td>{{f2 .Res.Summary.MLAtMin}} dB</td></tr>
-<tr><td>Z at best</td><td>{{z .Res.Summary.ZAtMinR .Res.Summary.ZAtMinX}}</td></tr>
-<tr><td>BW SWR&lt;2</td><td>{{if .Res.Summary.BW2.Found}}{{mhz .Res.Summary.BW2.Width}} MHz{{if or .Res.Summary.BW2.LoOpen .Res.Summary.BW2.HiOpen}} (at least){{end}}{{else}}–{{end}}</td></tr>
-<tr><td>Q (est.)</td><td>{{if .Res.Summary.Q}}{{f1 .Res.Summary.Q}}{{else}}–{{end}}</td></tr>
-</tbody></table></div></div>
-{{if .Res.Summary.Dips}}<h3>Resonances</h3><table><thead><tr><th>#</th><th>MHz</th><th>SWR</th><th>RL</th><th>ML</th><th>Z</th><th>BW&lt;2</th><th>Q</th><th>Note</th></tr></thead><tbody>
-{{range $i, $d := .Res.Summary.Dips}}<tr><td>{{inc $i}}</td><td><b>{{mhz $d.Freq}}</b></td><td>{{swr $d.SWR}}</td><td>{{f1 $d.RL}} dB</td><td>{{f2 $d.ML}} dB</td><td>{{z $d.R $d.X}}</td>
-<td>{{if $d.BW2.Found}}{{mhz $d.BW2.Width}} MHz{{else}}–{{end}}</td><td>{{if $d.Q}}{{f1 $d.Q}}{{else}}–{{end}}</td><td>{{$d.Advice}}</td></tr>{{end}}
-</tbody></table>{{end}}
-</section>{{end}}
-
-{{with .Trim}}<section><h2>Trim log: {{.Name}}</h2>
-<p class="meta">Target {{mhz3 .Target}} MHz{{with .Prediction}} · next: {{if gt .CutMm 0.0}}cut <b>{{f1 .CutMm}} mm</b>{{else}}lengthen <b>{{f1 (neg .CutMm)}} mm</b>{{end}} → {{f1 .NewLengthMm}} mm ({{.Method}}, {{f2 .MHzPerMm}} MHz/mm){{end}}</p>
-{{$.TrimSpark}}
-<table><thead><tr><th>#</th><th>Time</th><th>Length</th><th>Cut</th><th>Resonance</th><th>SWR at res.</th><th>SWR at target</th></tr></thead><tbody>
-{{range $i, $e := .Entries}}<tr><td>{{inc $i}}</td><td>{{time $e.Time}}</td><td>{{f1 $e.LengthMm}} mm</td><td>{{if $e.CutMm}}{{f1 $e.CutMm}} mm{{else}}–{{end}}</td><td>{{mhz3 $e.FreqHz}} MHz</td><td>{{swr $e.SWRAtRes}}</td><td>{{swr $e.SWRAtTarget}}</td></tr>{{end}}
-</tbody></table></section>{{end}}
-
-{{with .Compare}}<section><h2>S21 compare (relative to {{.AName}})</h2>
-<p class="meta">Fixed reference antenna on port 1, antenna under test on port 2, {{.Band.Name}} band {{mhz .Band.Lo}}–{{mhz .Band.Hi}} MHz, profile {{.Profile}}. Relative numbers only (no THRU calibration needed); same placement and cable for every antenna.</p>
-<table><thead><tr><th>#</th><th>Antenna</th><th>Δ in band (avg)</th><th>Worst</th><th>Best</th><th>Measured</th></tr></thead><tbody>
-{{range $i, $e := .Leaderboard}}<tr><td>{{inc $i}}</td><td><b>{{$e.Name}}</b></td><td>{{sgn1 $e.MeanDB}} dB</td><td>{{sgn1 $e.WorstDB}} dB</td><td>{{sgn1 $e.BestDB}} dB</td><td>{{time $e.Time}}</td></tr>{{end}}
-</tbody></table></section>{{end}}
-<p class="muted">Generated by EasyVNA Web. SWR grades: GOOD &lt; 1.5, OK &lt; 2, BAD otherwise (worst point in band, band edges interpolated). Q is estimated from the SWR&lt;2 bandwidth assuming a match at resonance.</p>
-</main></body></html>`
-
-// signed1 formats v with one decimal and a sign, without "-0.0".
-func signed1(v float64) string {
-	r := math.Round(v*10) / 10
-	if r == 0 {
-		return "0.0"
-	}
-	return fmt.Sprintf("%+.1f", r)
 }

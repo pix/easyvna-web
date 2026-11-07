@@ -17,17 +17,17 @@ func TestDefaultDataDir(t *testing.T) {
 	if d := defaultDataDir("windows", env(map[string]string{"LOCALAPPDATA": `C:\Users\u\AppData\Local`}), home, none); d != filepath.Join(`C:\Users\u\AppData\Local`, "easyvna-web") {
 		t.Errorf("windows: %q", d)
 	}
-	if d := defaultDataDir("darwin", env(nil), home, none); d != "/home/u/Library/Application Support/easyvna-web" {
+	if d := defaultDataDir("darwin", env(nil), home, none); d != filepath.Join("/home/u", "Library", "Application Support", "easyvna-web") {
 		t.Errorf("darwin: %q", d)
 	}
-	if d := defaultDataDir("linux", env(nil), home, none); d != "/home/u/.local/share/easyvna-web" {
+	if d := defaultDataDir("linux", env(nil), home, none); d != filepath.Join("/home/u", ".local", "share", "easyvna-web") {
 		t.Errorf("linux: %q", d)
 	}
-	if d := defaultDataDir("linux", env(map[string]string{"XDG_DATA_HOME": "/x"}), home, none); d != "/x/easyvna-web" {
+	if d := defaultDataDir("linux", env(map[string]string{"XDG_DATA_HOME": "/x"}), home, none); d != filepath.Join("/x", "easyvna-web") {
 		t.Errorf("xdg: %q", d)
 	}
 	legacy := func(p string) bool { return strings.HasSuffix(p, "vnaview") }
-	if d := defaultDataDir("linux", env(nil), home, legacy); d != "/home/u/.local/share/vnaview" {
+	if d := defaultDataDir("linux", env(nil), home, legacy); d != filepath.Join("/home/u", ".local", "share", "vnaview") {
 		t.Errorf("legacy dir not reused: %q", d)
 	}
 	nohome := func() (string, error) { return "", errors.New("no home") }

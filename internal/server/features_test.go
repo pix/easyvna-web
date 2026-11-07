@@ -455,3 +455,39 @@ func TestSigned1(t *testing.T) {
 		}
 	}
 }
+
+func TestPrintReportSections(t *testing.T) {
+	g := newRig(t, "869", false, false)
+	call(t, g.ts, "POST", "/api/profile", `{"id":"869"}`, nil)
+	call(t, g.ts, "POST", "/api/hold", `{"on":true}`, nil)
+	for i := 0; i < 3; i++ {
+		call(t, g.ts, "POST", "/api/sweep", "", nil)
+	}
+	var out map[string]string
+	if c := call(t, g.ts, "POST", "/api/report", `{"name":"print test","notes":"line one"}`, &out); c != 200 {
+		t.Fatalf("report: %d", c)
+	}
+	resp, err := http.Get(g.ts.URL + "/" + out["url"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	html := string(b)
+	id := strings.TrimSuffix(out["file"], ".html")
+	for _, want := range []string{
+		"EasyVNA antenna report", "@page", `counter(page) " of " counter(pages)`, "report " + id,
+		"Verdict per band", "HOLD: stable positions", "Resonance spread", "SIMULATED DATA",
+		"Return loss (S11)", "Smith chart", "line one", "by PiX",
+	} {
+		if !strings.Contains(html, want) {
+			t.Errorf("print report lacks %q", want)
+		}
+	}
+	if !strings.Contains(html, ">PASS<") && !strings.Contains(html, ">OK<") && !strings.Contains(html, ">FAIL<") {
+		t.Error("no PASS/OK/FAIL label")
+	}
+	if strings.Contains(html, "-0.0") {
+		t.Error("negative zero in report")
+	}
+}

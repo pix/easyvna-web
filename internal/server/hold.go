@@ -18,6 +18,8 @@ type holdState struct {
 	version     int               // bumps whenever the positions change
 	undo        []rf.HoldPosition // positions before the last clear/remove
 	undoOK      bool
+	profile     string // profile of the sweeps feeding the holder
+	label       string // human label of that profile/range
 }
 
 const maxHoldPositions = 40
@@ -76,6 +78,7 @@ func (s *Server) feedHoldLocked(res *Result) {
 		hs.h = rf.NewHolder(hs.cfg, band, ref)
 	}
 	hs.h.Band, hs.h.RefFreq, hs.h.Cfg = band, ref, hs.cfg
+	hs.profile, hs.label = cfg.Profile, mhzRange(cfg.Start, cfg.Stop)
 	before := len(hs.h.Positions)
 	var u rf.HoldUpdate
 	if before >= maxHoldPositions {

@@ -410,3 +410,22 @@ body.locked { overflow: hidden; }
 /* footer / credits */
 .foot { text-align: center; font-size: 12px; color: var(--muted); padding: 8px 0 4px; }
 .foot a { color: inherit; }
+
+/* ---- printing the main page (Ctrl+P): clean, light, no controls ----
+   For a full antenna document use REPORT, which is designed for print. */
+@media print {
+  @page { size: A4 portrait; margin: 12mm; }
+  :root, :root[data-theme="dark"] {
+    color-scheme: light; --page: #fff; --surface: #fff; --raised: #fff; --ink: #111; --ink2: #333; --muted: #555;
+    --border: #ccc; --grid: #e0e0e0;
+  }
+  body { background: #fff; font-size: 10pt; }
+  main { max-width: none; padding: 0; gap: 4mm; }
+  .top { position: static; padding: 0 0 2mm; border-bottom: 0.4mm solid #111; }
+  .top button, .profiles, .calstrip, .actions, .hint, .seg, #btnBest, .tabs, details, .overlay, .toast,
+  .banner, .holdpanel .hctl, .pchip .px, #legend + .spacer { display: none !important; }
+  .panel, .vcard, .wbanner, .refrow, .holdpanel { box-shadow: none; break-inside: avoid; page-break-inside: avoid; }
+  canvas.plot, canvas.plot.main, canvas.plot.smith { height: auto !important; max-width: 100%; }
+  .tabbody canvas[hidden] { display: none !important; }
+  .foot { display: block; margin-top: 4mm; }
+}
