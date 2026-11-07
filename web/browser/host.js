@@ -242,15 +242,25 @@
     return r;
   }
   // Reports are complete HTML pages: show them from a blob: URL. Their
-  // "Download HTML" link (?download=1 on the server) becomes a link to
-  // the blob itself.
+  // "Download HTML" link (?download=1 on the server) asks this page to save
+  // the report (a blob: page opened from file:// may not load blob: URLs
+  // itself); without an opener it links to its own blob.
+  const reportWins = new Map(); // report window -> { html, file }
+  window.addEventListener('message', (e) => {
+    const r = e.data && e.data.easyvnaSaveReport ? reportWins.get(e.source) : null;
+    if (r) saveBlob(new Blob([r.html], { type: 'text/html' }), r.file);
+  });
   function showReport(w, html, file) {
-    const fix = '<script>(function(){var a=document.querySelector(\'a[href="?download=1"]\');' +
-      'if(a){a.href=location.href;a.download=' + JSON.stringify(file) + ';}})();<\/script>';
-    html = /<\/body>/i.test(html) ? html.replace(/<\/body>/i, fix + '</body>') : html + fix;
-    const blob = new Blob([html], { type: 'text/html' });
-    if (!w) { saveBlob(blob, file); return; } // pop-up blocked: download it instead
-    w.location.href = URL.createObjectURL(blob); // kept alive: the page links to itself
+    const blob0 = new Blob([html], { type: 'text/html' });
+    if (!w) { saveBlob(blob0, file); return; } // pop-up blocked: download it instead
+    const fix = '<script>(function(){var a=document.querySelector(\'a[href="?download=1"]\');if(!a)return;' +
+      'a.href=location.href;a.download=' + JSON.stringify(file) + ';' +
+      'if(window.opener)a.addEventListener("click",function(e){e.preventDefault();window.opener.postMessage({easyvnaSaveReport:true},"*");});' +
+      '})();<\/script>';
+    const page = /<\/body>/i.test(html) ? html.replace(/<\/body>/i, fix + '</body>') : html + fix;
+    reportWins.set(w, { html, file });
+    for (const k of reportWins.keys()) if (k.closed) reportWins.delete(k);
+    w.location.href = URL.createObjectURL(new Blob([page], { type: 'text/html' })); // kept: the page links to itself
   }
   async function openReport(w, url, file) {
     try {
