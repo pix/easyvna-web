@@ -3,6 +3,7 @@ package serialport
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -57,5 +58,30 @@ func TestListEmpty(t *testing.T) {
 	t.Cleanup(func() { SysfsRoot = "/sys" })
 	if l := List(); len(l) != 0 {
 		t.Fatalf("%+v", l)
+	}
+}
+
+func TestHolders(t *testing.T) {
+	root := t.TempDir()
+	dev := filepath.Join(root, "ttyACM1")
+	os.WriteFile(dev, nil, 0o644)
+	link := filepath.Join(root, "by-id-NanoVNA")
+	os.Symlink(dev, link)
+	mk := func(pid, comm, target string) {
+		os.MkdirAll(filepath.Join(root, "proc", pid, "fd"), 0o755)
+		os.WriteFile(filepath.Join(root, "proc", pid, "comm"), []byte(comm+"\n"), 0o644)
+		os.Symlink(target, filepath.Join(root, "proc", pid, "fd", "3"))
+	}
+	mk("4242", "minicom", dev)
+	mk("4343", "bash", "/dev/pts/1")
+	ProcRoot = filepath.Join(root, "proc")
+	t.Cleanup(func() { ProcRoot = "/proc" })
+	h := Holders(link)
+	if len(h) != 1 || h[0].PID != 4242 || h[0].Comm != "minicom" {
+		t.Fatalf("%+v", h)
+	}
+	err := &BusyError{Path: link, Holders: h}
+	if !strings.Contains(err.Error(), "minicom (pid 4242)") {
+		t.Error(err)
 	}
 }

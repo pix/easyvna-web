@@ -21,11 +21,12 @@ Then open http://127.0.0.1:8080.
 | flag | default | meaning |
 |---|---|---|
 | `-listen` | `127.0.0.1:8080` | HTTP address |
-| `-port` | auto | serial device; auto-detect looks for USB `0483:5740` on `/dev/ttyACM*` |
+| `-port` | auto | serial device, e.g. `/dev/serial/by-id/usb-nanovna.com_NanoVNA-H4_400-if00`; auto-detect looks for USB `0483:5740` on `/dev/ttyACM*` (sysfs only, other ports are never opened) |
+| `-readonly` | off | never change stored device state: cal, save, recall and on-device profile switching are refused (in the server and the driver); sweeps still work |
 | `-mock` | off | simulate a NanoVNA-H4 (the real shell protocol is spoken by the simulator) |
-| `-mock-antenna` | `dual` | `dual` (433 whip, slightly long, with a 2nd mode near 850 MHz), `869` (whip slightly long), `915` (tuned) |
+| `-mock-antenna` | `dual` | `dual` (433 whip, slightly long, with a 2nd mode near 850 MHz), `869` (whip slightly long), `869tuned`, `915` (tuned), `dummy` (lossy resistor posing as an antenna), `open` (no antenna). Switch live under *Device* in the UI |
 | `-mock-firmware` | `custom` | `custom` simulates the PiX fork (`profile` command, `Fork: PiX` line), `stock` plain NanoVNA-D |
-| `-data` | `$XDG_DATA_HOME/vnaview` or `~/.local/share/vnaview` | snapshots and settings |
+| `-data` | `$XDG_DATA_HOME/vnaview` or `~/.local/share/vnaview` | settings, REF traces, trim logs, compare session, reports, snapshots |
 | `-maxpoints` | auto | points per device scan (auto: 401 on H4, 101 on H, learnt from the firmware's error otherwise) |
 | `-cal-settle` | `1.5s` | time the device sweeps with a standard attached before `cal <std>` (older firmware copies the last live sweep) |
 | `-trace` | off | log every shell exchange |
@@ -35,58 +36,112 @@ access to the tty (group `uucp` on Arch, `dialout` on Debian/Ubuntu).
 
 ## Using it
 
-1. **Pick a profile** (one tap sweeps once):
-   * **Wide** (300 to 1000 MHz) identifies the antenna. It lists every resonance
-     dip with frequency, SWR, return loss, R+jX and SWR<2 bandwidth, says which
-     LoRa band it is in or how far off it is, and flags dips at about n times a
-     lower one as higher-order modes.
-   * **433** (388.92 to 478.92), **869** (779 to 959) and **915** (825 to 1005)
-     contain the band with enough span to see a detuned dip. The band is
-     shaded, and 869 also reports the 869.4 to 869.65 MHz sub-band.
-   * Resonance offsets are measured from 433.92, 869 and 915 MHz, the same
-     reference the firmware uses.
-   * Profile ranges, points and slots match the PiX firmware v2 table:
+The page reads top to bottom. Profile → calibration (only shown when
+needed) → big action tiles → verdict → SWR plot. Every tile shows its state.
+Overwrites ask first and say what they replace, and cheap actions offer
+**Undo** in the toast.
 
-     | profile | range (MHz) | points | slot |
-     |---|---|---|---|
-     | wide | 300–1000 | 401 | 3 |
-     | 433 | 388.92–478.92 | 401 | 4 |
-     | 869 | 779–959 | 401 | 5 |
-     | 915 | 825–1005 | 401 | 6 |
-     | custom | as saved | as saved | 2 |
+1. **Profiles** (one tap sweeps once): **Wide** 300–1000 MHz and **Survey**
+   50–1500 MHz identify an antenna. They list every dip with SWR, mismatch
+   loss, RL, R+jX, SWR<2 bandwidth and Q, plus the nearest LoRa band and a
+   trim hint. Higher-order modes are flagged. **433 / 869 / 915** grade the
+   band.
 
-     Slots 0 and 1 are left for the user, because stock firmware loads slot 0
-     at power-on. vnaview uses the same slots on stock firmware, so a
-     calibration saved from either side is found by the other.
-2. **Read the verdict.** Each band gets GOOD (worst in-band SWR < 1.5), OK (< 2)
-   or BAD (otherwise). The verdict shows worst and best SWR with the frequency of
-   each, worst-case return loss, and % of the band below SWR 2. It also shows the
-   resonance frequency, with its offset from the band edge and from the centre.
-   Band edges are interpolated, so a coarse sweep cannot hide a bad edge.
-   Trimming hints ("too long: shorten by about 1.7 %") assume a length-tuned
-   monopole, dipole or whip, where a resonance below the band means the
-   radiator is too long.
-3. **Plots.** The main SWR plot has the band shaded, SWR 1.5 and 2 lines, labels
-   on resonances and a cursor readout (hover or tap; the arrow keys move it).
-   The Smith chart, return loss and R/X plots are in tabs.
-4. **Calibrate per profile.** Each sweep range needs its own calibration. Fit
-   the standards at the end of the pigtail, then tap **OPEN, SHORT, LOAD,
-   DONE, SAVE**. OPEN starts a new calibration (`cal reset`). The save slot
-   defaults to the profile's slot (see the table; custom ranges use slot 2)
-   and can be changed. The strip shows the firmware's `cal` flags. It also shows which
-   range the active calibration was made for, and warns when it does not
-   match the current sweep. With *auto-recall* on, switching profile recalls
-   the slot vnaview saved for it.
-5. **Snapshots and export** (collapsed). Save a named snapshot (stored as JSON
-   under `<data>/snapshots/`) and overlay it as a dashed reference trace.
-   Export the last sweep or any snapshot as Touchstone `.s1p` or CSV, or as
-   `.s2p` when S21 was measured.
-6. **Advanced sweep** (collapsed) has manual start, stop and points (requests
-   over the device limit are split into several scans), an optional S21
-   2-port measurement, and software port extension (cable length and VF) to
-   de-embed a cable after calibration. A custom range calibrated and saved
-   in slot 2 can be restored with *Load saved custom range*, which runs
-   `profile custom` on PiX firmware or `recall 2` on stock firmware.
+   | profile | range (MHz) | points | slot |
+   |---|---|---|---|
+   | survey | 50–1500 | 401 | 1 |
+   | wide | 300–1000 | 401 | 3 |
+   | 433 | 388.92–478.92 | 401 | 4 |
+   | 869 | 779–959 | 401 | 5 |
+   | 915 | 825–1005 | 401 | 6 |
+   | custom | as saved | as saved | 2 |
+
+   Slot 0 is left for the user, because stock firmware loads it at power-on.
+   The same slots are used with stock firmware, so a cal saved from either
+   side is found by the other. Offsets are measured from 433.92, 869 and
+   915 MHz.
+2. **Calibration strip:** a green one-liner when the active calibration
+   matches this profile. Otherwise it opens the one-tap
+   **OPEN → SHORT → LOAD → DONE → SAVE** flow. Fit the standards at the end
+   of the pigtail.
+3. **Tiles:**
+   * **SWEEP**: one sweep.
+   * **LIVE**: continuous sweeping.
+   * **TUNE**: full-screen trimming (below).
+   * **REF**: one tap stores the trace as a dashed reference (tap again to
+     replace, × to clear, both undoable). A row then shows **Δf** of the
+     resonance, **ΔSWR** at the band reference and the change in band worst
+     SWR. Detuning test: REF in free air, then hand or enclosure, then
+     read Δf.
+   * **HOLD**: min/max SWR envelope.
+   * **AVG**: tap to cycle the complex average over ×1/2/4/8/16 sweeps.
+   * **COMPARE** and **REPORT**: below.
+4. **Automatic warnings:** "No antenna?" when |Γ| ≈ 1 everywhere, "Reflection
+   above 1" when the calibration does not fit, and "Looks lossy / resistive
+   (fake?)" when SWR is low and flat across a wide sweep with little
+   reactance swing. While a warning is up, verdicts show **CHECK** instead of
+   GOOD.
+5. **Verdict:** GOOD (worst in-band SWR < 1.5), OK (< 2) or BAD. Each card
+   shows worst SWR, its **mismatch loss**, RL, best SWR, % of the band under
+   SWR 2, and the resonance with its offset and Q. Mismatch loss
+   (−10·log10(1−|Γ|²)) is also in the cursor readout, the dip tables, TUNE
+   and the report.
+6. **Plots:** SWR with band shading, REF and HOLD. Smith, return loss, R/X
+   and S21 are in tabs.
+
+### TUNE and the trim calculator
+
+TUNE opens a full-screen view that runs a fast, narrow live sweep (101
+points, inside the profile's calibrated range, re-centred automatically).
+It shows the resonance, the offset to the target with **▼ SHORTEN / ▲
+LENGTHEN / ✓ ON TARGET** (resonance below target = too long), SWR at target
+(colour-graded), RL and mismatch loss. **Tone** (off by default) plays a
+pitch that rises as SWR at the target falls, so you can trim without
+looking.
+
+Trim calculator: enter the element length once and tap **Start**. The first
+prediction is L_new = L × f_res / f_target. After each cut, enter the cut
+(prefilled at 80 % of the suggestion) and tap **Measure & log**, which takes
+a fresh sweep. vnaview learns this antenna's MHz/mm with a regularised fit:
+the textbook slope f/L is the prior, and logged cuts take over once they
+move the resonance clearly beyond the measurement scatter. The big CUT
+number always uses the live resonance, so it agrees with the readout above
+it. Logs are stored per antenna in `<data>/trim/`, with undo of the last
+entry and a sparkline and table. In `-mock`, logging a cut also shortens the
+simulated element (f = k/(L+δ), δ = 6 mm), so the learning can be watched
+without hardware.
+
+### S21 COMPARE
+
+A two-step wizard with large step text. Port 1 goes to a fixed reference
+antenna and port 2 to antenna A; tap **Store A**. Then swap port 2 to each
+candidate. It shows the live in-band **Δ dB vs A** (power average) in large
+type, worst and best Δ, and a Δ trace, and **Add to leaderboard** records
+each antenna. The measurement is relative only, so no THRU calibration is
+needed; keep the geometry fixed. Replacing A or starting over asks first and
+can be undone. The session is stored in `<data>/compare.json`.
+
+### REPORT
+
+Pick a name, the profile sweeps to include (the latest of each), the trim
+log and optional notes. You get a printable HTML page, which prints to PDF
+with A4 margins and needs no JavaScript. It contains:
+* the verdict per band with mismatch loss;
+* SWR, RL and Smith plots for each sweep, as inline SVG;
+* resonances with BW and Q;
+* the trim log;
+* the S21 compare leaderboard.
+
+Reports are saved in `<data>/reports/` and listed in the dialog for
+download.
+
+### Advanced, snapshots, device
+
+* *Advanced*: manual start, stop and points; S21; port extension; restore
+  the custom range saved in slot 2.
+* *Snapshots & export*: named snapshots and .s1p/.s2p/CSV export.
+* *Device*: device info and profiles. In mock mode it also has the mock
+  antenna switch.
 
 ### On-device profiles (PiX firmware fork)
 
@@ -120,6 +175,13 @@ browser agree. Stock firmware falls back to `scan` with explicit ranges plus
 | `POST /api/continuous` `{"on":true}` | continuous sweeping (results via SSE) |
 | `GET /api/last` | last result |
 | `GET /api/export?format=s1p\|s2p\|csv[&snapshot=name]` | download |
+| `POST /api/avg {"n":4}` | averaging (1, 2, 4, 8, 16) |
+| `POST /api/tune {"on":true,"target":869000000}` / `{"on":false}` | TUNE mode |
+| `POST /api/ref`, `DELETE /api/ref`, `POST /api/ref/undo`, `GET /api/ref?profile=` | REF trace per profile |
+| `GET /api/trim`, `GET /api/trim/{name}`, `POST /api/trim/{name}/log {"lengthMm"} or {"cutMm"}`, `.../undo`, `.../target`, `.../select` | trim sessions |
+| `POST /api/compare {"on"}`, `POST /api/compare/a {"name"}`, `POST /api/compare/add {"name"}`, `POST /api/compare/undo`, `DELETE /api/compare` | S21 compare |
+| `POST /api/report {"name","profiles","trim","notes"}`, `GET /api/reports`, `GET /api/reports/{file}[?download=1]` | reports |
+| `POST /api/mock/antenna {"name"}` | mock only: swap the simulated antenna |
 | `GET/POST /api/snapshots`, `GET/DELETE /api/snapshots/{name}` | snapshots |
 | `GET /api/cal`, `POST /api/cal/step/{reset,open,short,load,isoln,thru,done,on,off}`, `POST /api/cal/save {"slot"}`, `POST /api/cal/recall {"slot"}` | calibration |
 | `PUT /api/profiles/{id}/slot {"slot"}`, `POST /api/settings {"autoRecall"}` | settings |
@@ -131,13 +193,16 @@ Example: `curl -s -XPOST localhost:8080/api/sweep | jq .summary.bands`
 ```
 main.go                      flags, device auto-detect, wiring
 web/                         embedded UI (index.html, app.js, style.css; vanilla JS + canvas)
-internal/rf/                 RF math: SWR, RL, Z, port extension, bandwidth, dips,
-                             band verdicts, Touchstone/CSV
+internal/rf/                 RF math: SWR, RL, mismatch loss, Z, Q, port extension,
+                             bandwidth, dips, band verdicts, warnings, REF deltas,
+                             TUNE readout, trim learning, Touchstone/CSV
 internal/vna/                Device interface (+ optional Profiler)
 internal/vna/nanovnah/       NanoVNA-H/H4 shell driver: shell I/O, parser, driver
 internal/vna/mock/           byte-level shell simulator + multi-mode antenna model
-internal/serialport/         raw termios port, sysfs VID:PID detection
-internal/server/             HTTP API, SSE hub, sweep loop, profiles, snapshots/settings store
+internal/serialport/         raw termios port (TIOCEXCL), sysfs VID:PID detection,
+                             refuses ports held by another process
+internal/server/             HTTP API, SSE hub, sweep loop, profiles, averaging, TUNE,
+                             REF, trim, compare, report (SVG), store
 ```
 
 ## Shell protocol notes (NanoVNA-D `main.c`)

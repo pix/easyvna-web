@@ -21,6 +21,7 @@ type Derived struct {
 	GammaMag []float64 `json:"gammaMag"`
 	SWR      []float64 `json:"swr"`
 	RL       []float64 `json:"rl"`    // return loss, dB, positive
+	ML       []float64 `json:"ml"`    // mismatch loss, dB
 	S11dB    []float64 `json:"s11dB"` // = -RL
 	S11Phase []float64 `json:"s11Ph"` // degrees
 	R        []float64 `json:"r"`     // ohms
@@ -63,6 +64,7 @@ type BandSummary struct {
 	BestSWR      float64 `json:"bestSWR"`
 	BestSWRFreq  float64 `json:"bestSWRFreq"`
 	WorstRL      float64 `json:"worstRL"`
+	WorstML      float64 `json:"worstML"` // mismatch loss at the worst point, dB
 	PctBelow2    float64 `json:"pctBelow2"`
 	PctBelow15   float64 `json:"pctBelow15"`
 	Pass2        bool    `json:"pass2"`   // worst SWR < 2
@@ -91,6 +93,9 @@ type Summary struct {
 	BW15        Bandwidth     `json:"bw15"`
 	Bands       []BandSummary `json:"bands"`
 	Dips        []Dip         `json:"dips"`
+	MLAtMin     float64       `json:"mlAtMin"`
+	Q           float64       `json:"q,omitempty"` // estimated from the SWR<2 bandwidth at the best match
+	Warnings    []Warning     `json:"warnings"`
 	S21MaxDB    *float64      `json:"s21MaxDB,omitempty"`
 	S21MaxFreq  *float64      `json:"s21MaxFreq,omitempty"`
 }
@@ -104,11 +109,13 @@ func Derive(s11, s21 []complex128) Derived {
 	d := Derived{
 		GammaMag: make([]float64, n), SWR: make([]float64, n), RL: make([]float64, n),
 		S11dB: make([]float64, n), S11Phase: make([]float64, n), R: make([]float64, n), X: make([]float64, n),
+		ML: make([]float64, n),
 	}
 	for i, g := range s11 {
 		d.GammaMag[i] = Mag(g)
 		d.SWR[i] = SWR(g)
 		d.RL[i] = ReturnLoss(g)
+		d.ML[i] = MismatchLoss(d.GammaMag[i])
 		d.S11dB[i] = -d.RL[i]
 		d.S11Phase[i] = PhaseDeg(g)
 		z := Impedance(g)
@@ -166,6 +173,13 @@ func Analyze(freq []float64, d Derived, bands []Band) (Summary, error) {
 
 	s.BW2 = SWRBandwidth(freq, d.SWR, i, 2)
 	s.BW15 = SWRBandwidth(freq, d.SWR, i, 1.5)
+	if len(d.GammaMag) == n {
+		s.MLAtMin = MismatchLoss(d.GammaMag[i])
+	}
+	if s.BW2.Found && !s.BW2.LoOpen && !s.BW2.HiOpen {
+		s.Q = QFromBandwidth(s.MinSWRFreq, s.BW2.Width, 2)
+	}
+	s.Warnings = Detect(freq, d)
 	s.Dips = FindDips(freq, d, DipMinProminenceDB, DipMinRLdB)
 	ClassifyDips(s.Dips, LoRaBands)
 	s.Bands = []BandSummary{}
@@ -350,5 +364,8 @@ func SummarizeBand(freq []float64, d Derived, band Band) BandSummary {
 	bs.Pass2 = bs.Covered && bs.WorstSWR < 2
 	bs.Pass15 = bs.Covered && bs.WorstSWR < 1.5
 	bs.Verdict = Verdict(bs.WorstSWR)
+	if bs.WorstSWR > 0 {
+		bs.WorstML = MismatchLoss(GammaFromSWR(bs.WorstSWR))
+	}
 	return bs
 }

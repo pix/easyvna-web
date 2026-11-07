@@ -53,6 +53,8 @@ type Dip struct {
 	X          float64   `json:"x"`
 	Prominence float64   `json:"prominence"` // dB of return loss
 	BW2        Bandwidth `json:"bw2"`
+	ML         float64   `json:"ml"`          // mismatch loss at the dip, dB
+	Q          float64   `json:"q,omitempty"` // from the SWR<2 bandwidth
 	// Classification against the LoRa bands.
 	Band           string  `json:"band"` // nearest band name
 	InBand         bool    `json:"inBand"`
@@ -106,6 +108,10 @@ func FindDips(freq []float64, d Derived, minProm, minRL float64) []Dip {
 			}
 		}
 		dip.BW2 = SWRBandwidth(freq, d.SWR, i, 2)
+		dip.ML = MismatchLoss(GammaFromSWR(dip.SWR))
+		if dip.BW2.Found && !dip.BW2.LoOpen && !dip.BW2.HiOpen {
+			dip.Q = QFromBandwidth(dip.Freq, dip.BW2.Width, 2)
+		}
 		dips = append(dips, dip)
 	}
 	sort.Slice(dips, func(a, b int) bool { return dips[a].Freq < dips[b].Freq })

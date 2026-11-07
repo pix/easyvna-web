@@ -343,3 +343,30 @@ func TestCloseResumesAndReadEOF(t *testing.T) {
 		t.Errorf("last command %q, want resume", sim.Log[len(sim.Log)-1])
 	}
 }
+
+func TestReadOnlyRefusesStateChanges(t *testing.T) {
+	d, sim := openSim(t, mock.Options{Profiles: true}, Options{ReadOnly: true})
+	ctx := context.Background()
+	if err := d.Calibrate(ctx, vna.CalOpen, nil); !errors.Is(err, ErrReadOnly) {
+		t.Errorf("cal: %v", err)
+	}
+	if err := d.SaveCal(ctx, 3); !errors.Is(err, ErrReadOnly) {
+		t.Errorf("save: %v", err)
+	}
+	if err := d.RecallCal(ctx, 3); !errors.Is(err, ErrReadOnly) {
+		t.Errorf("recall: %v", err)
+	}
+	if _, err := d.ApplyProfile(ctx, "869"); !errors.Is(err, ErrReadOnly) {
+		t.Errorf("profile: %v", err)
+	}
+	if _, err := d.Scan(ctx, vna.ScanRequest{Start: 800e6, Stop: 900e6, Points: 11}); err != nil {
+		t.Errorf("scan must still work: %v", err)
+	}
+	for _, l := range sim.Log {
+		for _, bad := range []string{"cal ", "save", "recall", "profile 869"} {
+			if strings.HasPrefix(l, bad) {
+				t.Errorf("read-only driver sent %q", l)
+			}
+		}
+	}
+}

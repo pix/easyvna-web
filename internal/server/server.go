@@ -31,6 +31,7 @@ type Config struct {
 	Bands     []rf.Band `json:"bands"`
 	Identify  bool      `json:"identify"`
 	PortExtPs float64   `json:"portExtPs"` // one-way port extension delay, ps
+	Avg       int       `json:"avg"`       // average N sweeps (1 = off)
 }
 
 func (c Config) scanRequest() vna.ScanRequest {
@@ -80,6 +81,13 @@ type State struct {
 	Antenna    string    `json:"mockAntenna,omitempty"`
 	// DeviceProfiles is set when the firmware has the `profile` command.
 	DeviceProfiles *vna.DeviceProfiles `json:"deviceProfiles,omitempty"`
+	ReadOnly       bool                `json:"readOnly"`
+	MockScenarios  []string            `json:"mockScenarios,omitempty"`
+	Refs           map[string]RefInfo  `json:"refs"`
+	Tune           TuneView            `json:"tune"`
+	Compare        CompareView         `json:"compare"`
+	TrimActive     string              `json:"trimActive,omitempty"`
+	ReportChoices  []ReportChoice      `json:"reportChoices"`
 }
 
 // Result is one processed sweep, as sent to the UI and stored in snapshots.
@@ -95,6 +103,10 @@ type Result struct {
 	S21        [][2]float64 `json:"s21,omitempty"`
 	Derived    rf.Derived   `json:"derived"`
 	Summary    rf.Summary   `json:"summary"`
+	AvgN       int          `json:"avgN,omitempty"`    // sweeps averaged into this result
+	Ref        *rf.RefDelta `json:"ref,omitempty"`     // comparison with the profile's REF trace
+	Tune       *rf.TuneInfo `json:"tune,omitempty"`    // TUNE view readout
+	Compare    *CompareLive `json:"compare,omitempty"` // S21 compare against stored antenna A
 }
 
 func (r *Result) complexS11() []complex128 { return toComplex(r.S11) }
@@ -120,6 +132,15 @@ type Options struct {
 	Static      fs.FS
 	MockAntenna string
 	Logger      *log.Logger
+	// ReadOnly disables everything that changes stored device state
+	// (calibration, save, recall, on-device profile switching).
+	ReadOnly bool
+	// SetMockAntenna swaps the simulated antenna (mock mode only).
+	SetMockAntenna func(name string) error
+	// MockCut shortens the simulated element by mm (mock mode only), so the
+	// trim calculator can be exercised without hardware.
+	MockCut       func(mm float64)
+	MockScenarios []string
 }
 
 // Server is the vnaview application.
@@ -145,6 +166,15 @@ type Server struct {
 	seq      int64
 	devProfs *vna.DeviceProfiles
 
+	avgBuf, avgBuf21 [][]complex128
+	avgKey           string
+	lastByProfile    map[string]*Result
+	tune             *tuneState
+	refs             map[string]*Result
+	compare          *CompareSession
+	compareOn        bool
+	compareS21Prev   bool
+
 	continuous atomic.Bool
 	wake       chan struct{}
 }
@@ -163,14 +193,18 @@ func New(opt Options) *Server {
 		}
 	}
 	s.applyProfileLocked(s.profiles[0])
+	s.cfg.Avg = 1
 	s.cal.Flow = CalFlow{Steps: map[string]string{}}
+	s.lastByProfile = map[string]*Result{}
+	s.refs = s.store.LoadRefs()
+	s.compare = s.store.LoadCompare()
 	return s
 }
 
 func (s *Server) applyProfileLocked(p Profile) {
-	pe := s.cfg.PortExtPs
+	pe, avg := s.cfg.PortExtPs, s.cfg.Avg
 	s.cfg = Config{Profile: p.ID, Start: p.Start, Stop: p.Stop, Points: p.Points, Bands: p.Bands,
-		Identify: p.Identify, PortExtPs: pe, S21: s.cfg.S21}
+		Identify: p.Identify, PortExtPs: pe, S21: s.cfg.S21, Avg: avg}
 }
 
 func (s *Server) profile(id string) (Profile, bool) {
@@ -340,6 +374,7 @@ func (s *Server) sweepOnce(ctx context.Context) (*Result, error) {
 	s.seq++
 	res.Seq = s.seq
 	s.last = res
+	s.postProcessLocked(res)
 	hadErr := s.lastErr != ""
 	s.lastErr = ""
 	s.mu.Unlock()
@@ -365,7 +400,10 @@ func (s *Server) process(sw *vna.Sweep, cfg Config) *Result {
 			s21[i] = rf.TransmissionExtension(sw.S21[i], f, tau)
 		}
 	}
-	return buildResult(sw.Freq, s11, s21, cfg, sw.Started, sw.Duration)
+	s11, s21, avgN := s.average(cfg, sw.Freq, s11, s21)
+	r := buildResult(sw.Freq, s11, s21, cfg, sw.Started, sw.Duration)
+	r.AvgN = avgN
+	return r
 }
 
 func buildResult(freq []float64, s11, s21 []complex128, cfg Config, t time.Time, dur time.Duration) *Result {
@@ -396,6 +434,16 @@ func (s *Server) state() State {
 		Points: []int{101, 201, 401, 801, 1601},
 	}
 	st.Cal.Settings = s.settings
+	st.ReadOnly, st.MockScenarios, st.TrimActive = s.opt.ReadOnly, s.opt.MockScenarios, s.settings.TrimActive
+	st.Refs = map[string]RefInfo{}
+	for k, r := range s.refs {
+		st.Refs[k] = RefInfo{Time: r.Time, Points: len(r.Freq), Start: r.Config.Start, Stop: r.Config.Stop, HasUndo: s.store.HasRefPrev(k)}
+	}
+	if s.tune != nil {
+		st.Tune = TuneView{Active: true, Target: s.tune.Target, Start: s.cfg.Start, Stop: s.cfg.Stop}
+	}
+	st.Compare = s.compareViewLocked()
+	st.ReportChoices = s.reportChoicesLocked()
 	if a := s.cal.Active; a != nil {
 		m := a.Start == s.cfg.Start && a.Stop == s.cfg.Stop
 		st.Cal.Matches = &m

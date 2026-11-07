@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -75,4 +76,25 @@ func readAttr(dir, name string) string {
 		return ""
 	}
 	return strings.ToLower(strings.TrimSpace(string(b)))
+}
+
+// BusyError means another program has the port open; vnaview backs off
+// instead of fighting over it.
+type BusyError struct {
+	Path    string
+	Holders []Holder
+}
+
+func (e *BusyError) Error() string {
+	if len(e.Holders) == 0 {
+		return e.Path + " is busy (opened exclusively by another program)"
+	}
+	var b strings.Builder
+	for i, h := range e.Holders {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		b.WriteString(h.Comm + " (pid " + strconv.Itoa(h.PID) + ")")
+	}
+	return e.Path + " is in use by " + b.String() + "; close it there, then press Reconnect"
 }

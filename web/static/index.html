@@ -12,6 +12,7 @@
   <div class="brand">vnaview</div>
   <div id="devpill" class="pill" title="Device"><span class="dot"></span><span id="devtext">connecting…</span></div>
   <div id="calpill" class="pill" title="Calibration as reported by the firmware">CAL ?</div>
+  <div id="ropill" class="pill ro" hidden title="Started with -readonly: calibration, save, recall and on-device profile switching are disabled">READ-ONLY</div>
   <div class="spacer"></div>
   <button id="btnConnect" class="ghost" type="button">Reconnect</button>
   <button id="btnTheme" class="ghost" type="button" aria-label="Toggle light/dark theme">Theme</button>
@@ -19,46 +20,58 @@
 
 <main>
   <div id="banner" class="banner" hidden></div>
+  <div id="warnings"></div>
 
-  <!-- 1. Profiles + sweep -->
-  <section class="profiles-row">
-    <div id="profiles" class="profiles" role="group" aria-label="Sweep profiles"></div>
-    <div class="sweepbtns">
-      <button id="btnSingle" class="primary" type="button">Single sweep</button>
-      <button id="btnCont" class="toggle" type="button" aria-pressed="false"><span class="led"></span>Continuous</button>
-      <div id="sweepinfo" class="muted small"></div>
-    </div>
-  </section>
+  <!-- 1. Profiles -->
+  <section id="profiles" class="profiles" role="group" aria-label="Sweep profiles"></section>
 
-  <!-- 2. Calibration strip -->
-  <section class="calstrip panel" aria-label="Calibration">
+  <!-- 2. Calibration (expands only when needed) -->
+  <section class="calstrip panel" aria-label="Calibration" id="calstrip">
     <div class="calhead">
-      <div><strong>Calibrate</strong> <span id="calfor" class="muted"></span></div>
-      <div id="calactive" class="small"></div>
+      <div id="calsummary"></div>
+      <button id="btnCalToggle" class="ghost small" type="button">Recalibrate</button>
     </div>
-    <div class="calsteps">
-      <button class="calstep" data-step="open" type="button"><span class="n">1</span>OPEN</button>
-      <span class="arrow" aria-hidden="true">›</span>
-      <button class="calstep" data-step="short" type="button"><span class="n">2</span>SHORT</button>
-      <span class="arrow" aria-hidden="true">›</span>
-      <button class="calstep" data-step="load" type="button"><span class="n">3</span>LOAD</button>
-      <span class="arrow" aria-hidden="true">›</span>
-      <button class="calstep" data-step="done" type="button"><span class="n">4</span>DONE</button>
-      <span class="arrow" aria-hidden="true">›</span>
-      <button class="calstep" data-step="save" type="button"><span class="n">5</span>SAVE <span id="slotlbl"></span></button>
-      <div class="calside">
-        <label class="small">slot <select id="slotSel"></select></label>
-        <button id="btnRecall" class="ghost small" type="button">Recall</button>
-        <label class="small check"><input id="autoRecall" type="checkbox"> auto-recall per profile</label>
+    <div id="calbody">
+      <div class="calsteps">
+        <button class="calstep" data-step="open" type="button"><span class="n">1</span>OPEN</button>
+        <span class="arrow" aria-hidden="true">›</span>
+        <button class="calstep" data-step="short" type="button"><span class="n">2</span>SHORT</button>
+        <span class="arrow" aria-hidden="true">›</span>
+        <button class="calstep" data-step="load" type="button"><span class="n">3</span>LOAD</button>
+        <span class="arrow" aria-hidden="true">›</span>
+        <button class="calstep" data-step="done" type="button"><span class="n">4</span>DONE</button>
+        <span class="arrow" aria-hidden="true">›</span>
+        <button class="calstep" data-step="save" type="button"><span class="n">5</span>SAVE <span id="slotlbl"></span></button>
+        <div class="calside">
+          <label class="small">slot <select id="slotSel"></select></label>
+          <button id="btnRecall" class="ghost small" type="button">Recall</button>
+          <label class="small check"><input id="autoRecall" type="checkbox"> auto-recall per profile</label>
+        </div>
       </div>
+      <div id="calmsg" class="calmsg"></div>
     </div>
-    <div id="calmsg" class="calmsg small"></div>
   </section>
 
-  <!-- 3. Verdict -->
+  <!-- 3. Big action tiles: every state is visible on its tile -->
+  <section class="actions" aria-label="Actions">
+    <button id="aSweep" class="tile primary" type="button"><b>SWEEP</b><span>one sweep</span></button>
+    <button id="aLive" class="tile" type="button" aria-pressed="false"><b><i class="led"></i>LIVE</b><span>off</span></button>
+    <button id="aTune" class="tile accent" type="button"><b>TUNE</b><span>trim to target</span></button>
+    <div class="tilewrap">
+      <button id="aRef" class="tile" type="button"><b>REF</b><span>store this trace</span></button>
+      <button id="aRefClear" class="tileclose" type="button" title="Clear REF" aria-label="Clear REF" hidden>×</button>
+    </div>
+    <button id="aHold" class="tile" type="button" aria-pressed="false"><b>HOLD</b><span>min/max off</span></button>
+    <button id="aAvg" class="tile" type="button"><b>AVG ×1</b><span>tap to change</span></button>
+    <button id="aCompare" class="tile" type="button"><b>COMPARE</b><span>S21 A vs B</span></button>
+    <button id="aReport" class="tile" type="button"><b>REPORT</b><span>printable page</span></button>
+  </section>
+  <div id="hint" class="hint"></div>
+
+  <!-- 4. Verdict -->
   <section id="verdict" class="verdict" aria-live="polite"></section>
 
-  <!-- 4. Main SWR plot -->
+  <!-- 5. Main SWR plot -->
   <section class="panel plotpanel">
     <div class="plothead">
       <h2>SWR</h2>
@@ -73,7 +86,7 @@
     <div id="readout" class="readout"></div>
   </section>
 
-  <!-- 5. Secondary views -->
+  <!-- 6. Secondary views -->
   <section class="panel">
     <div class="tabs" role="tablist">
       <button role="tab" data-tab="smith" type="button">Smith chart</button>
@@ -89,14 +102,14 @@
     </div>
   </section>
 
-  <!-- 6. Collapsed extras -->
+  <!-- 7. Collapsed extras -->
   <details class="panel" id="advanced">
     <summary>Advanced sweep</summary>
     <form id="advForm" class="grid">
       <label>Start (MHz)<input id="advStart" type="number" step="0.001" min="0.01" required></label>
       <label>Stop (MHz)<input id="advStop" type="number" step="0.001" min="0.01" required></label>
       <label>Points<select id="advPoints"></select></label>
-      <label class="check"><input id="advS21" type="checkbox"> Also measure S21 (2-port check)</label>
+      <label class="check"><input id="advS21" type="checkbox"> Also measure S21 (2-port)</label>
       <fieldset class="portext">
         <legend>Port extension (de-embed a cable after calibration)</legend>
         <label>Length (cm)<input id="peLen" type="number" step="0.1" min="0" value="0"></label>
@@ -128,10 +141,77 @@
 
   <details class="panel" id="devPanel">
     <summary>Device</summary>
+    <div id="mockbox" class="mockbox" hidden>
+      <b>Mock antenna</b> (simulation only):
+      <span id="mockBtns" class="mockbtns"></span>
+    </div>
     <pre id="devinfo" class="devinfo"></pre>
   </details>
 </main>
-<div id="toast" class="toast" role="status" hidden></div>
+
+<!-- TUNE: full screen -->
+<div id="tuneView" class="overlay tune" hidden role="dialog" aria-modal="true" aria-label="Tune">
+  <div class="ovbar">
+    <b class="ovtitle">TUNE</b>
+    <div id="tuneTargets" class="targets" role="group" aria-label="Target frequency"></div>
+    <div class="spacer"></div>
+    <button id="tuneTone" class="toggle" type="button" aria-pressed="false"><i class="led"></i>Tone</button>
+    <button id="tuneClose" class="close" type="button" aria-label="Close tune">✕</button>
+  </div>
+  <div class="tunebody">
+    <div class="tunebig">
+      <div class="tcell">
+        <div class="tl">Resonance</div>
+        <div class="tv" id="tRes">–</div>
+      </div>
+      <div class="tcell dir" id="tDirCell">
+        <div class="tl" id="tOffLbl">Offset to target</div>
+        <div class="tv" id="tOff">–</div>
+        <div class="tdir" id="tDir"></div>
+      </div>
+    </div>
+    <div class="tunestats">
+      <div class="ts" id="tSwrCell"><div class="tl">SWR at target</div><div class="tv2" id="tSwr">–</div></div>
+      <div class="ts"><div class="tl">Return loss</div><div class="tv2" id="tRl">–</div></div>
+      <div class="ts"><div class="tl">Mismatch loss</div><div class="tv2" id="tMl">–</div></div>
+      <div class="ts"><div class="tl">SWR at resonance</div><div class="tv2" id="tSwrRes">–</div></div>
+    </div>
+    <canvas id="tunePlot" class="plot tuneplot"></canvas>
+    <div class="trim panel" id="trimPanel"></div>
+  </div>
+</div>
+
+<!-- COMPARE wizard -->
+<div id="cmpView" class="overlay" hidden role="dialog" aria-modal="true" aria-label="S21 compare">
+  <div class="ovbar">
+    <b class="ovtitle">COMPARE</b>
+    <span class="muted small" id="cmpBand"></span>
+    <div class="spacer"></div>
+    <button id="cmpClose" class="close" type="button" aria-label="Close compare">✕</button>
+  </div>
+  <div class="cmpbody" id="cmpBody"></div>
+</div>
+
+<!-- REPORT dialog -->
+<div id="repView" class="overlay" hidden role="dialog" aria-modal="true" aria-label="Report">
+  <div class="ovbar">
+    <b class="ovtitle">REPORT</b>
+    <div class="spacer"></div>
+    <button id="repClose" class="close" type="button" aria-label="Close report">✕</button>
+  </div>
+  <div class="repbody" id="repBody"></div>
+</div>
+
+<!-- generic confirm -->
+<div id="askView" class="overlay ask" hidden role="alertdialog" aria-modal="true">
+  <div class="askbox panel">
+    <h3 id="askTitle"></h3>
+    <p id="askText"></p>
+    <div class="askbtns"><button id="askNo" class="ghost" type="button">Cancel</button><button id="askYes" class="primary" type="button">OK</button></div>
+  </div>
+</div>
+
+<div id="toast" class="toast" role="status" hidden><span id="toastText"></span><button id="toastUndo" class="ghost small" type="button" hidden>Undo</button></div>
 <script src="app.js"></script>
 </body>
 </html>

@@ -113,7 +113,7 @@ func New(opt Options) *Sim {
 	if opt.PointTime == 0 {
 		opt.PointTime = 400 * time.Microsecond
 	}
-	if len(opt.Antenna.Modes) == 0 {
+	if opt.Antenna.Name == "" {
 		opt.Antenna = DefaultAntenna()
 	}
 	if opt.Noise == 0 {
@@ -134,6 +134,13 @@ func New(opt Options) *Sim {
 	s.cond = sync.NewCond(&s.mu)
 	s.out.WriteString("\r\nNanoVNA Shell\r\n" + "ch> ")
 	return s
+}
+
+// SetAntenna swaps the simulated antenna (as if the user connected another one).
+func (s *Sim) SetAntenna(a Antenna) {
+	s.mu.Lock()
+	s.opt.Antenna = a
+	s.mu.Unlock()
 }
 
 // Read returns pending output, waiting up to 100 ms (like a serial port with
@@ -446,6 +453,7 @@ func (s *Sim) cmdScan(a []string) string {
 	s21 := make([]complex128, points)
 	s.mu.Lock()
 	applied := s.calStatus&calApply != 0
+	ant := s.opt.Antenna
 	s.mu.Unlock()
 	t := time.Since(s.t0).Seconds()
 	for i := range freqs {
@@ -454,7 +462,7 @@ func (s *Sim) cmdScan(a []string) string {
 			f = start + math.Floor((stop-start)*float64(i)/float64(points-1))
 		}
 		freqs[i] = f
-		g, tr := s.opt.Antenna.Measure(f, t)
+		g, tr := ant.Measure(f, t)
 		if !applied || mask&8 != 0 {
 			g = rawError(g, f)
 		}

@@ -23,10 +23,16 @@ type Options struct {
 	// to complete at least one full sweep.
 	CalSettle time.Duration
 	Mock      bool
+	// ReadOnly refuses every command that changes stored device state
+	// (cal, save, recall, profile apply). Sweeps are still allowed.
+	ReadOnly bool
 	// Trace, if set, receives every raw shell exchange, including the
 	// identification at connect time.
 	Trace func(cmd string, raw []byte)
 }
+
+// ErrReadOnly is returned for state-changing commands in read-only mode.
+var ErrReadOnly = errors.New("nanovna: read-only mode (cal/save/recall/profile are disabled)")
 
 // Driver implements vna.Device for NanoVNA-H / H4 shell firmware.
 type Driver struct {
@@ -310,6 +316,9 @@ func (d *Driver) CalStatus(ctx context.Context) (vna.CalStatus, error) {
 func (d *Driver) Calibrate(ctx context.Context, step vna.CalStep, rng *vna.ScanRequest) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	if d.opt.ReadOnly {
+		return ErrReadOnly
+	}
 	if rng != nil && (step == vna.CalReset || step.Measures()) {
 		n := rng.Points
 		if n > d.maxPoints {
@@ -338,6 +347,9 @@ func (d *Driver) Calibrate(ctx context.Context, step vna.CalStep, rng *vna.ScanR
 func (d *Driver) SaveCal(ctx context.Context, slot int) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	if d.opt.ReadOnly {
+		return ErrReadOnly
+	}
 	if slot < 0 || (d.info.CalSlots > 0 && slot >= d.info.CalSlots) {
 		return fmt.Errorf("slot %d out of range 0..%d", slot, d.info.CalSlots-1)
 	}
@@ -349,6 +361,9 @@ func (d *Driver) SaveCal(ctx context.Context, slot int) error {
 func (d *Driver) RecallCal(ctx context.Context, slot int) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	if d.opt.ReadOnly {
+		return ErrReadOnly
+	}
 	if slot < 0 || (d.info.CalSlots > 0 && slot >= d.info.CalSlots) {
 		return fmt.Errorf("slot %d out of range 0..%d", slot, d.info.CalSlots-1)
 	}
@@ -379,6 +394,9 @@ func (d *Driver) Profiles(ctx context.Context) (vna.DeviceProfiles, error) {
 func (d *Driver) ApplyProfile(ctx context.Context, name string) (vna.DeviceProfile, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	if d.opt.ReadOnly {
+		return vna.DeviceProfile{}, ErrReadOnly
+	}
 	if !d.SupportsProfiles() {
 		return vna.DeviceProfile{}, errors.ErrUnsupported
 	}

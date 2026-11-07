@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -35,6 +36,7 @@ func main() {
 	maxPoints := flag.Int("maxpoints", 0, "override points per device scan (0 = auto: 401 on H4, 101 on H)")
 	calSettle := flag.Duration("cal-settle", 1500*time.Millisecond, "time the device sweeps with a standard attached before `cal <std>`")
 	trace := flag.Bool("trace", false, "log every shell exchange (debugging)")
+	readOnly := flag.Bool("readonly", false, "never change stored device state: no cal/save/recall/profile switching (sweeps only)")
 	flag.Parse()
 
 	logger := log.New(os.Stderr, "vnaview: ", log.LstdFlags)
@@ -44,20 +46,58 @@ func main() {
 	}
 
 	var open server.Opener
+	var setMock func(string) error
+	var mockCut func(float64)
 	antennaName := ""
 	if *useMock {
-		mk, ok := mock.Scenarios[*mockAnt]
+		_, ok := mock.Scenarios[*mockAnt]
 		if !ok {
 			logger.Fatalf("unknown -mock-antenna %q (have %s)", *mockAnt, strings.Join(scenarioNames(), ", "))
 		}
 		if *mockFW != "custom" && *mockFW != "stock" {
 			logger.Fatalf("-mock-firmware must be custom or stock")
 		}
-		antennaName = *mockAnt + ": " + mk().Name + " [" + *mockFW + " firmware]"
+		antennaName = *mockAnt
+		var mu sync.Mutex
+		current, curName := (*mock.Sim)(nil), *mockAnt
+		cutTotal := 0.0
+		setMock = func(name string) error {
+			mkNew, ok := mock.Scenarios[name]
+			if !ok {
+				return fmt.Errorf("unknown mock antenna %q", name)
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			curName, cutTotal = name, 0
+			if current != nil {
+				current.SetAntenna(mkNew())
+			}
+			return nil
+		}
+		// Simulated element: f0 = k/(L+δ) with L = 82 mm and δ = 6 mm end
+		// effect, so the plain ratio formula is a bit off and the trim
+		// calculator has something to learn.
+		const mockLen, mockDelta = 82.0, 6.0
+		mockCut = func(mm float64) {
+			mu.Lock()
+			defer mu.Unlock()
+			cutTotal += mm
+			a := mock.Scenarios[curName]()
+			if len(a.Modes) > 0 {
+				k := a.Modes[0].F0 * (mockLen + mockDelta)
+				a.Modes[0].F0 = k / (mockLen - cutTotal + mockDelta)
+			}
+			if current != nil {
+				current.SetAntenna(a)
+			}
+		}
 		open = func(ctx context.Context) (vna.Device, error) {
-			sim := mock.New(mock.Options{Antenna: mk(), MaxPoints: *maxPoints, Profiles: *mockFW == "custom"})
+			mu.Lock()
+			sim := mock.New(mock.Options{Antenna: mock.Scenarios[curName](), MaxPoints: *maxPoints, Profiles: *mockFW == "custom"})
+			current = sim
+			mu.Unlock()
 			return openDriver(ctx, sim, nanovnah.Options{PortName: "mock", Mock: true, MaxPoints: *maxPoints,
-				CalSettle: 200 * time.Millisecond}, *trace, logger)
+				CalSettle: 200 * time.Millisecond, ReadOnly: *readOnly}, *trace, logger)
 		}
 	} else {
 		open = func(ctx context.Context) (vna.Device, error) {
@@ -73,7 +113,7 @@ func main() {
 			if err != nil {
 				return nil, err
 			}
-			d, err := openDriver(ctx, sp, nanovnah.Options{PortName: path, MaxPoints: *maxPoints, CalSettle: *calSettle}, *trace, logger)
+			d, err := openDriver(ctx, sp, nanovnah.Options{PortName: path, MaxPoints: *maxPoints, CalSettle: *calSettle, ReadOnly: *readOnly}, *trace, logger)
 			if err != nil {
 				sp.Close()
 				return nil, fmt.Errorf("%s: %w", path, err)
@@ -82,7 +122,12 @@ func main() {
 		}
 	}
 
-	srv := server.New(server.Options{Open: open, Store: store, Static: web.Static(), MockAntenna: antennaName, Logger: logger})
+	var scen []string
+	if *useMock {
+		scen = scenarioNames()
+	}
+	srv := server.New(server.Options{Open: open, Store: store, Static: web.Static(), MockAntenna: antennaName, Logger: logger,
+		ReadOnly: *readOnly, SetMockAntenna: setMock, MockScenarios: scen, MockCut: mockCut})
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -100,6 +145,9 @@ func main() {
 		_ = hs.Shutdown(sctx)
 	}()
 	mode := "hardware"
+	if *readOnly {
+		mode += ", READ-ONLY"
+	}
 	if *useMock {
 		mode = "mock (" + antennaName + ")"
 	}

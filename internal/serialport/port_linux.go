@@ -21,8 +21,14 @@ type Port struct {
 // Open opens path at 115200 8N1 raw. (USB CDC ignores the baud rate, but a
 // real UART bridge does not.)
 func Open(path string) (*Port, error) {
+	if h := Holders(path); len(h) > 0 {
+		return nil, &BusyError{Path: path, Holders: h}
+	}
 	fd, err := syscall.Open(path, syscall.O_RDWR|syscall.O_NOCTTY|syscall.O_CLOEXEC, 0)
 	if err != nil {
+		if err == syscall.EBUSY {
+			return nil, &BusyError{Path: path}
+		}
 		return nil, fmt.Errorf("open %s: %w", path, err)
 	}
 	var t syscall.Termios
@@ -44,6 +50,9 @@ func Open(path string) (*Port, error) {
 		syscall.Close(fd)
 		return nil, fmt.Errorf("%s: set raw mode: %w", path, err)
 	}
+	// Exclusive mode: further open() calls by other programs fail with EBUSY
+	// while we hold the port.
+	_, _, _ = syscall.Syscall(syscall.SYS_IOCTL, uintptr(fd), tiocexcl, 0)
 	// Flush stale input (TCFLSH, TCIFLUSH).
 	_, _, _ = syscall.Syscall(syscall.SYS_IOCTL, uintptr(fd), tcflsh, 0)
 	return &Port{fd: fd}, nil
@@ -107,7 +116,8 @@ func (p *Port) Close() error {
 
 // Constants missing from package syscall (values for x86/arm Linux).
 const (
-	crtscts = 0x80000000
-	cbaud   = 0x100f
-	tcflsh  = 0x540b
+	crtscts  = 0x80000000
+	cbaud    = 0x100f
+	tcflsh   = 0x540b
+	tiocexcl = 0x540c
 )

@@ -19,6 +19,9 @@ type Profile struct {
 	CalSlot  int       `json:"calSlot"`  // default firmware slot for this profile's calibration
 }
 
+// Slot 1 belongs to the SURVEY profile (PiX firmware v5+), slot 0 stays the
+// user's own (stock firmware loads it at power-on).
+
 // CustomSlot is the calibration slot of the custom (advanced) range. It
 // matches the PiX firmware, which keeps slots 0 and 1 for the user because
 // stock firmware loads slot 0 at power-on.
@@ -32,6 +35,8 @@ func DefaultProfiles() []Profile {
 	return []Profile{
 		{ID: "wide", Label: "Wide", Sub: "300–1000 MHz · identify", Start: 300e6, Stop: 1000e6, Points: 401,
 			Bands: []rf.Band{rf.Band433, rf.Band869, rf.Band915}, Identify: true, CalSlot: 3},
+		{ID: "survey", Label: "Survey", Sub: "50–1500 MHz · identify", Start: 50e6, Stop: 1500e6, Points: 401,
+			Bands: []rf.Band{rf.Band433, rf.Band869, rf.Band915}, Identify: true, CalSlot: 1},
 		{ID: "433", Label: "433", Sub: "388.92–478.92 MHz", Start: 388.92e6, Stop: 478.92e6, Points: 401,
 			Bands: []rf.Band{rf.Band433}, CalSlot: 4},
 		{ID: "869", Label: "869", Sub: "779–959 MHz", Start: 779e6, Stop: 959e6, Points: 401,

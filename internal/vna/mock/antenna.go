@@ -12,6 +12,8 @@ type Mode struct {
 	F0 float64
 	R  float64
 	Q  float64
+	// Flat keeps R constant (a resistor-like load instead of a radiator).
+	Flat bool
 }
 
 // Antenna is a multi-mode antenna behind a coax pigtail. The modes are
@@ -31,6 +33,8 @@ type Antenna struct {
 	Drift float64
 	// S21Coupling is the peak |S21| of the simulated two-antenna link.
 	S21Coupling float64
+	// Open simulates an unterminated cable (no antenna).
+	Open bool
 }
 
 // Scenarios selectable with -mock-antenna.
@@ -52,6 +56,27 @@ var Scenarios = map[string]func() Antenna{
 			CableLen: 0.10, CableVF: 0.695, CableLossDB: 0.08, Drift: 0.0015, S21Coupling: 0.03,
 		}
 	},
+	// A well-tuned 868/869 MHz whip with a bit more gain.
+	"869tuned": func() Antenna {
+		return Antenna{
+			Name:     "869 whip, tuned",
+			Modes:    []Mode{{F0: 868.5e6, R: 47, Q: 13}, {F0: 2.6e9, R: 90, Q: 10}},
+			CableLen: 0.10, CableVF: 0.695, CableLossDB: 0.08, Drift: 0.0015, S21Coupling: 0.04,
+		}
+	},
+	// A fake antenna: essentially a 47 Ω resistor in a nice housing.
+	"dummy": func() Antenna {
+		return Antenna{
+			Name:     "lossy dummy (resistor in an antenna housing)",
+			Modes:    []Mode{{F0: 700e6, R: 47, Q: 0.08, Flat: true}},
+			CableLen: 0.10, CableVF: 0.695, CableLossDB: 0.08, S21Coupling: 0.0004,
+		}
+	},
+	// Nothing connected to the pigtail.
+	"open": func() Antenna {
+		return Antenna{Name: "open cable (no antenna)", Open: true,
+			CableLen: 0.10, CableVF: 0.695, CableLossDB: 0.08, S21Coupling: 0.00002}
+	},
 	// A well-tuned 915 MHz antenna.
 	"915": func() Antenna {
 		return Antenna{
@@ -68,6 +93,10 @@ func DefaultAntenna() Antenna { return Scenarios["dual"]() }
 // Impedance of the bare antenna at frequency f, t seconds after start.
 func (a Antenna) Impedance(f, t float64) complex128 {
 	scale := 1 + a.Drift*math.Sin(2*math.Pi*t/23)
+	if a.Open {
+		// A few tenths of a pF of fringing capacitance at the open end.
+		return 1 / complex(1e-7, 2*math.Pi*f*0.3e-12)
+	}
 	w := 2 * math.Pi * f
 	var y complex128
 	for _, m := range a.Modes {
@@ -76,6 +105,9 @@ func (a Antenna) Impedance(f, t float64) complex128 {
 		c := 1 / (w0 * w0 * l)
 		// Radiation resistance grows roughly with f^2 around resonance.
 		r := m.R * (0.2 + 0.8*(f/(m.F0*scale))*(f/(m.F0*scale)))
+		if m.Flat {
+			r = m.R
+		}
 		z := complex(r, w*l-1/(w*c))
 		y += 1 / z
 	}

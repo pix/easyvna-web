@@ -36,6 +36,27 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/cal/step/{step}", s.hCalStep)
 	mux.HandleFunc("POST /api/cal/save", s.hCalSave)
 	mux.HandleFunc("POST /api/cal/recall", s.hCalRecall)
+	mux.HandleFunc("POST /api/avg", s.hAvg)
+	mux.HandleFunc("POST /api/tune", s.hTune)
+	mux.HandleFunc("POST /api/ref", s.hRefSet)
+	mux.HandleFunc("DELETE /api/ref", s.hRefClear)
+	mux.HandleFunc("POST /api/ref/undo", s.hRefUndo)
+	mux.HandleFunc("GET /api/ref", s.hRefGet)
+	mux.HandleFunc("GET /api/trim", s.hTrimList)
+	mux.HandleFunc("GET /api/trim/{name}", s.hTrimGet)
+	mux.HandleFunc("POST /api/trim/{name}/log", s.hTrimLog)
+	mux.HandleFunc("POST /api/trim/{name}/undo", s.hTrimUndo)
+	mux.HandleFunc("POST /api/trim/{name}/target", s.hTrimTarget)
+	mux.HandleFunc("POST /api/trim/{name}/select", s.hTrimSelect)
+	mux.HandleFunc("POST /api/compare", s.hCompareStart)
+	mux.HandleFunc("POST /api/compare/a", s.hCompareStoreA)
+	mux.HandleFunc("POST /api/compare/add", s.hCompareAdd)
+	mux.HandleFunc("POST /api/compare/undo", s.hCompareUndo)
+	mux.HandleFunc("DELETE /api/compare", s.hCompareReset)
+	mux.HandleFunc("POST /api/report", s.hReport)
+	mux.HandleFunc("GET /api/reports", s.hReportList)
+	mux.HandleFunc("GET /api/reports/{file}", s.hReportGet)
+	mux.HandleFunc("POST /api/mock/antenna", s.hMockAntenna)
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {
@@ -117,11 +138,18 @@ func (s *Server) hProfile(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 404, fmt.Errorf("unknown profile %q", req.ID))
 		return
 	}
+	if s.tune != nil { // switching profile ends TUNE
+		s.continuous.Store(s.tune.WasContinuous)
+		s.tune = nil
+	}
 	s.applyProfileLocked(p)
 	meta, haveMeta := s.settings.Slots[p.CalSlot]
 	needRecall := s.settings.AutoRecall && haveMeta && meta.Start == p.Start && meta.Stop == p.Stop &&
 		(s.cal.Active == nil || s.cal.Active.Start != p.Start || s.cal.Active.Stop != p.Stop)
-	useDevice := s.devProfs != nil
+	useDevice := s.devProfs != nil && s.deviceHasProfileLocked(p.ID) && !s.opt.ReadOnly
+	if s.opt.ReadOnly {
+		needRecall = false
+	}
 	s.mu.Unlock()
 	msg := ""
 	switch {
@@ -435,6 +463,10 @@ func (s *Server) hCalStatus(w http.ResponseWriter, r *http.Request) {
 // hCalStep runs one calibration step over the current sweep range.
 // Body: {"fresh": true} on OPEN starts a new flow with `cal reset`.
 func (s *Server) hCalStep(w http.ResponseWriter, r *http.Request) {
+	if s.opt.ReadOnly {
+		writeErr(w, http.StatusForbidden, errReadOnly)
+		return
+	}
 	step, err := vna.ParseCalStep(r.PathValue("step"))
 	if err != nil {
 		writeErr(w, 400, err)
@@ -532,6 +564,10 @@ func (s *Server) calFail(step vna.CalStep, err error) {
 }
 
 func (s *Server) hCalSave(w http.ResponseWriter, r *http.Request) {
+	if s.opt.ReadOnly {
+		writeErr(w, http.StatusForbidden, errReadOnly)
+		return
+	}
 	var req struct {
 		Slot *int `json:"slot"`
 	}
@@ -583,6 +619,10 @@ func (s *Server) hCalSave(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) hCalRecall(w http.ResponseWriter, r *http.Request) {
+	if s.opt.ReadOnly {
+		writeErr(w, http.StatusForbidden, errReadOnly)
+		return
+	}
 	var req struct {
 		Slot int `json:"slot"`
 	}
@@ -599,14 +639,30 @@ func (s *Server) hCalRecall(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, s.state().Cal)
 }
 
+var errReadOnly = errors.New("read-only mode: calibration, save and recall are disabled (restart without -readonly)")
+
+// deviceHasProfileLocked reports whether the firmware lists profile id
+// (e.g. "survey" only exists on newer PiX firmware).
+func (s *Server) deviceHasProfileLocked(id string) bool {
+	if s.devProfs == nil {
+		return false
+	}
+	for _, p := range s.devProfs.Profiles {
+		if p.Name == id {
+			return true
+		}
+	}
+	return false
+}
+
 // hCustomProfile restores the custom range saved with the custom slot: on
 // PiX firmware via `profile custom`, otherwise from what vnaview recorded
 // when it saved that slot (then recalled if auto-recall is on).
 func (s *Server) hCustomProfile(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
-	useDevice := s.devProfs != nil
+	useDevice := s.devProfs != nil && s.devProfs.Custom != nil && !s.opt.ReadOnly
 	meta, haveMeta := s.settings.Slots[CustomSlot]
-	auto := s.settings.AutoRecall
+	auto := s.settings.AutoRecall && !s.opt.ReadOnly
 	s.mu.Unlock()
 	var start, stop float64
 	points := 401
