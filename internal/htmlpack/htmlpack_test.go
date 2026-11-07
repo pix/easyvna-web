@@ -69,7 +69,7 @@ func TestBuildRoundTrip(t *testing.T) {
 	if got != p {
 		t.Fatal("page rebuilt from its blocks differs from the file")
 	}
-	if texts["ev-app"] != string(in.AppJS) || texts["ev-host"] != string(in.HostJS) || texts["ev-css"] != string(in.StyleCSS) {
+	if texts["ev-app"] != lf(in.AppJS) || texts["ev-host"] != lf(in.HostJS) || texts["ev-css"] != lf(in.StyleCSS) {
 		t.Fatal("blocks are not verbatim copies of the sources")
 	}
 	body := texts["ev-body"]
@@ -100,6 +100,31 @@ func TestBuildRoundTrip(t *testing.T) {
 	}
 }
 
+// A CRLF checkout (Windows, core.autocrlf=true) builds the same page.
+func TestBuildCRLF(t *testing.T) {
+	in := repoInputs(t)
+	want, err := Build(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	crlf := func(b []byte) []byte {
+		return bytes.ReplaceAll(bytes.ReplaceAll(b, []byte("\r\n"), []byte("\n")), []byte("\n"), []byte("\r\n"))
+	}
+	w := in
+	w.IndexHTML, w.StyleCSS, w.AppJS, w.HostCSS, w.HostJS, w.WasmExecJS =
+		crlf(in.IndexHTML), crlf(in.StyleCSS), crlf(in.AppJS), crlf(in.HostCSS), crlf(in.HostJS), crlf(in.WasmExecJS)
+	got, err := Build(w)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatal("CRLF sources give a different page")
+	}
+	if bytes.ContainsRune(got, '\r') {
+		t.Fatal("page contains a CR")
+	}
+}
+
 func TestBuildRejects(t *testing.T) {
 	base := repoInputs(t)
 	cases := map[string]func(*Inputs){
@@ -112,7 +137,6 @@ func TestBuildRejects(t *testing.T) {
 		"end tag in js":  func(in *Inputs) { in.AppJS = []byte("var s = '</SCRIPT>';") },
 		"comment in js":  func(in *Inputs) { in.HostJS = []byte("var s = '<!--';") },
 		"end tag in css": func(in *Inputs) { in.StyleCSS = []byte("a{} </style>") },
-		"CR":             func(in *Inputs) { in.StyleCSS = []byte("a{}\r\n") },
 	}
 	for name, mod := range cases {
 		in := base

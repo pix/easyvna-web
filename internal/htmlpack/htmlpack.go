@@ -86,7 +86,7 @@ func check(id, tag, content string) error {
 	low := strings.ToLower(content)
 	switch {
 	case strings.ContainsRune(content, '\r'):
-		return fmt.Errorf("%s: contains a CR (the parser turns CRLF into LF)", id)
+		return fmt.Errorf("%s: contains a CR (the parser turns it into LF)", id)
 	case strings.ContainsRune(content, 0):
 		return fmt.Errorf("%s: contains a NUL byte", id)
 	case strings.Contains(low, "</"+tag):
@@ -97,12 +97,20 @@ func check(id, tag, content string) error {
 	return nil
 }
 
-// Build returns the page.
+// lf turns CRLF and lone CR into LF, as the HTML parser would: a checkout
+// with CRLF line endings (Windows, core.autocrlf) gives the same page.
+func lf(b []byte) string {
+	return strings.ReplaceAll(strings.ReplaceAll(string(b), "\r\n", "\n"), "\r", "\n")
+}
+
+// Build returns the page. Text inputs are normalised to LF line endings
+// first, so the page holds no CR and the browser keeps every block byte
+// for byte (which "Download for offline use" relies on).
 func Build(in Inputs) ([]byte, error) {
 	if len(in.Wasm) < 8 || !bytes.Equal(in.Wasm[:4], []byte("\x00asm")) {
 		return nil, errors.New("htmlpack: Wasm is not a WebAssembly module")
 	}
-	idx := string(in.IndexHTML)
+	idx := lf(in.IndexHTML)
 	m := bodyRe.FindStringSubmatch(idx)
 	if m == nil {
 		return nil, errors.New("htmlpack: index.html has no <body>")
@@ -136,14 +144,14 @@ func Build(in Inputs) ([]byte, error) {
 	loader := "<div id=\"ev-loading\" class=\"ev-loading\" role=\"status\"><div class=\"ev-spin\" aria-hidden=\"true\"></div>" +
 		"<p id=\"ev-loading-text\">Loading EasyVNA Web…</p><noscript><p>EasyVNA Web needs JavaScript.</p></noscript></div>\n"
 	blocks := []block{
-		{"ev-css", head + `<style id="ev-css">`, string(in.StyleCSS), "</style>\n"},
-		{"ev-hostcss", `<style id="ev-hostcss">`, string(in.HostCSS), "</style>\n</head>\n<body>\n" + loader},
+		{"ev-css", head + `<style id="ev-css">`, lf(in.StyleCSS), "</style>\n"},
+		{"ev-hostcss", `<style id="ev-hostcss">`, lf(in.HostCSS), "</style>\n</head>\n<body>\n" + loader},
 		{"ev-body", `<script id="ev-body" type="text/html">`, body, "</script>\n"},
-		{"ev-app", `<script id="ev-app" type="text/plain">`, string(in.AppJS), "</script>\n"},
-		{"ev-wasmexec", `<script id="ev-wasmexec">`, string(in.WasmExecJS), "</script>\n"},
+		{"ev-app", `<script id="ev-app" type="text/plain">`, lf(in.AppJS), "</script>\n"},
+		{"ev-wasmexec", `<script id="ev-wasmexec">`, lf(in.WasmExecJS), "</script>\n"},
 		{"ev-wasm", `<script id="ev-wasm" type="application/octet-stream">`, b64, "</script>\n"},
 		{"ev-skel", `<script id="ev-skel" type="application/json">`, "", "</script>\n"},
-		{"ev-host", `<script id="ev-host">`, string(in.HostJS), "</script>\n</body>\n</html>\n"},
+		{"ev-host", `<script id="ev-host">`, lf(in.HostJS), "</script>\n</body>\n</html>\n"},
 	}
 	sk := Skeleton{Parts: []string{""}}
 	for _, b := range blocks {
