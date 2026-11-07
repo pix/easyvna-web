@@ -73,6 +73,7 @@ func (s *Server) postProcessLocked(res *Result) {
 		d.RefTime = ref.Time.Format(time.RFC3339)
 		res.Ref = &d
 	}
+	s.feedHoldLocked(res)
 	if s.compareOn {
 		c := s.compare
 		if c == nil {

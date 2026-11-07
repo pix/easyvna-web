@@ -57,6 +57,8 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/reports", s.hReportList)
 	mux.HandleFunc("GET /api/reports/{file}", s.hReportGet)
 	mux.HandleFunc("POST /api/mock/antenna", s.hMockAntenna)
+	mux.HandleFunc("POST /api/hold", s.hHold)
+	mux.HandleFunc("GET /api/hold", s.hHoldGet)
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {

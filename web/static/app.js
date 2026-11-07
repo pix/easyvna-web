@@ -5,7 +5,7 @@ const $ = (id) => document.getElementById(id);
 const S = {
   state: null, res: null, ref: null, refKey: '', refName: '',
   cursorIdx: null, tab: 'smith', swrMaxUser: null, snapshots: [], lastCfgKey: '',
-  hold: { on: false, key: '', min: null, max: null, n: 0 },
+  hold: { version: -1, traces: {}, highlight: 0, lastCaptured: 0 },
   calOpen: false, trim: null, trimList: [], tone: null, cmpName: 'B', cmpAName: 'A',
 };
 const CUSTOM_SLOT = 2; // matches the PiX firmware's custom profile slot
@@ -260,8 +260,17 @@ function renderTiles() {
   }
   tile('aRef', ref ? 'REF ✓' : 'REF', refSub, ref ? 'set' : '');
   $('aRefClear').hidden = !ref;
-  tile('aHold', 'HOLD', S.hold.on ? `on · ${S.hold.n} sweep${S.hold.n === 1 ? '' : 's'} · tap: off` : 'min/max off', S.hold.on ? 'on' : '');
-  $('aHold').setAttribute('aria-pressed', String(S.hold.on));
+  const hv = st.hold, hl = S.res && S.res.hold;
+  let hsub = 'stable positions · off';
+  if (hv.on) {
+    if (!hl) hsub = 'on · waiting for a sweep';
+    else if (hl.status === 'moving') hsub = `moving… · ${hl.positions} position${hl.positions === 1 ? '' : 's'}`;
+    else if (hl.status === 'settling' || hl.status === 'waiting') hsub = `settling ${hl.run}/${hl.need} · keep still`;
+    else hsub = `${hl.positions} position${hl.positions === 1 ? '' : 's'}` + (hl.positions > 1 ? ` · Δres ${(hl.resSpread / 1e6).toFixed(1)} MHz` : '');
+  }
+  tile('aHold', 'HOLD', hsub, hv.on ? 'on' : '');
+  $('aHold').setAttribute('aria-pressed', String(hv.on));
+  renderHoldPanel();
   const avg = st.config.avg || 1;
   tile('aAvg', `AVG ×${avg}`, avg > 1 ? `averaging ${avg} · tap: ×${nextAvg(avg)}` : 'off · tap: ×2', avg > 1 ? 'on' : '');
   const c = st.compare;
@@ -277,7 +286,15 @@ const nextAvg = (n) => AVGS[(AVGS.indexOf(n) + 1) % AVGS.length];
 $('aSweep').onclick = () => run(() => api('POST', 'api/sweep'));
 $('aLive').onclick = () => run(() => api('POST', 'api/continuous', { on: !(S.state && S.state.continuous) }));
 $('aAvg').onclick = () => run(() => api('POST', 'api/avg', { n: nextAvg((S.state && S.state.config.avg) || 1) }));
-$('aHold').onclick = () => { S.hold = { on: !S.hold.on, key: '', min: null, max: null, n: 0 }; if (S.res) updateHold(S.res); renderTiles(); drawAll(); };
+$('aHold').onclick = () => run(async () => {
+  const on = !S.state.hold.on;
+  if (!on && S.state.hold.positions > 0 &&
+      !(await ask('Turn HOLD off?', `The ${S.state.hold.positions} captured position(s) are discarded.`, 'Turn off'))) return;
+  const r = await api('POST', 'api/hold', { on });
+  S.hold.highlight = 0; S.hold.traces = {};
+  toast(r.message);
+  if (on && !r.state.continuous) await api('POST', 'api/continuous', { on: true });
+});
 $('aRef').onclick = () => run(async () => {
   const r = await api('POST', 'api/ref');
   toast(r.message, { undo: async () => { await api('POST', 'api/ref/undo'); toast('REF restored'); } });
@@ -302,13 +319,69 @@ async function syncRef() {
   drawAll();
 }
 
-// ---------- HOLD (min/max envelope, client side) ----------
-function updateHold(r) {
-  const h = S.hold; if (!h.on) return;
-  const key = r.freq.length + ':' + r.freq[0] + ':' + r.freq[r.freq.length - 1];
-  if (key !== h.key) { h.key = key; h.min = r.derived.swr.slice(); h.max = r.derived.swr.slice(); h.n = 1; return; }
-  r.derived.swr.forEach((v, i) => { if (v < h.min[i]) h.min[i] = v; if (v > h.max[i]) h.max[i] = v; });
-  h.n++;
+// ---------- HOLD: stable positions (motion-rejecting envelope, server side) ----------
+function onHoldResult(r) {
+  const h = r.hold; if (!h) return;
+  if (h.captured && h.captured !== S.hold.lastCaptured) {
+    S.hold.lastCaptured = h.captured;
+    toast(`position ${h.captured} captured` + (h.positions > 1 ? ` · resonance spread ${(h.resSpread / 1e6).toFixed(1)} MHz` : ''));
+  }
+  if (h.version !== S.hold.version) {
+    S.hold.version = h.version;
+    if (S.hold.highlight && !h.list.some((p) => p.id === S.hold.highlight)) S.hold.highlight = 0;
+    if (S.hold.highlight) loadHoldTraces();
+  }
+}
+async function loadHoldTraces() {
+  try {
+    const r = await api('GET', 'api/hold');
+    S.hold.traces = {}; for (const p of r.positions) S.hold.traces[p.id] = p.swr;
+  } catch { S.hold.traces = {}; }
+  drawAll();
+}
+function renderHoldPanel() {
+  const st = S.state, box = $('holdPanel');
+  box.hidden = !st.hold.on;
+  if (box.hidden) return;
+  const h = S.res && S.res.hold;
+  const n = h ? h.positions : 0;
+  const status = !h ? 'waiting for a sweep' : h.status === 'moving' ? '<b class="mv">moving…</b> (sweep rejected)'
+    : h.status === 'settling' || h.status === 'waiting' ? `settling ${h.run}/${h.need}: keep it still`
+    : h.status === 'captured' ? `<b class="ok">position ${h.captured} captured</b>`
+    : h.status === 'duplicate' ? `steady, same as position ${h.sameAs}` : h.status === 'full' ? 'position list full: clear some'
+    : `steady at position ${h.sameAs || n}: now bend or move it to the next position`;
+  const key = JSON.stringify([h && h.version, n, S.hold.highlight, st.hold.n, st.hold.sensitivity]);
+  if (key === S.hold.panelKey && $('holdStatus')) { $('holdStatus').innerHTML = status; return; }
+  S.hold.panelKey = key;
+  const seg = (key, vals, cur) => vals.map((v) => `<button type="button" data-${key}="${v}" aria-pressed="${String(v) === String(cur)}">${v}</button>`).join('');
+  const chips = h && h.list.length ? h.list.map((p) => `<span class="pchip ${S.hold.highlight === p.id ? 'hl' : ''}" data-id="${p.id}">
+      <button type="button" class="pmain" data-id="${p.id}" title="Highlight on the plot">#${p.id} <b>${mhz(p.resFreq)}</b>${p.bandWorst ? ` · worst ${swrText(p.bandWorst)}` : ` · SWR ${swrText(p.minSWR)}`}</button>
+      <button type="button" class="px" data-rm="${p.id}" aria-label="Remove position ${p.id}">×</button></span>`).join('') : '<span class="muted">No positions yet.</span>';
+  box.innerHTML = `<div class="holdgrid">
+    <div class="hstat"><div class="tl">Positions</div><div class="hv">${n}</div></div>
+    <div class="hstat"><div class="tl">Resonance spread</div><div class="hv">${n > 1 ? (h.resSpread / 1e6).toFixed(1) + '<small> MHz</small>' : '–'}</div>
+      <div class="small muted">${n ? `${mhz(h.resMin)}–${mhz(h.resMax)} MHz` : ''}</div></div>
+    <div class="hstat ${n && h.worstBand ? grade(h.worstBand) : ''}"><div class="tl">Worst in-band SWR</div><div class="hv">${n && h.worstBand ? swrText(h.worstBand) : '–'}</div>
+      <div class="small muted">${n && h.worstBandId ? 'position #' + h.worstBandId : ''}</div></div>
+    <div class="hctl"><div class="hstatus" id="holdStatus">${status}</div>
+      <div class="row small">steady sweeps <span class="seg" id="holdN">${seg('n', [2, 3, 4, 5], st.hold.n)}</span>
+      motion <span class="seg" id="holdSens">${seg('s', ['low', 'normal', 'high'], st.hold.sensitivity)}</span>
+      <button type="button" class="ghost small" id="holdClear" ${n ? '' : 'disabled'}>Clear</button></div></div>
+  </div>
+  <div class="pchips">${chips}</div>
+  <div class="small muted">Bend or move the antenna, hold it still for a moment, repeat. Only steady positions count. Sweeps taken while it moves are rejected.</div>`;
+  for (const b of box.querySelectorAll('[data-n]')) b.onclick = () => run(() => api('POST', 'api/hold', { n: Number(b.dataset.n) }));
+  for (const b of box.querySelectorAll('[data-s]')) b.onclick = () => run(() => api('POST', 'api/hold', { sensitivity: b.dataset.s }));
+  for (const b of box.querySelectorAll('.pmain')) b.onclick = () => { const id = Number(b.dataset.id); S.hold.highlight = S.hold.highlight === id ? 0 : id; if (S.hold.highlight && !S.hold.traces[id]) loadHoldTraces(); renderHoldPanel(); drawAll(); };
+  for (const b of box.querySelectorAll('[data-rm]')) b.onclick = () => run(async () => {
+    const r = await api('POST', 'api/hold', { remove: Number(b.dataset.rm) });
+    toast(r.message, { undo: async () => { await api('POST', 'api/hold', { undo: true }); } });
+  });
+  const cl = $('holdClear');
+  if (cl) cl.onclick = () => run(async () => {
+    const r = await api('POST', 'api/hold', { clear: true });
+    toast(r.message, { undo: async () => { await api('POST', 'api/hold', { undo: true }); } });
+  });
 }
 
 // ---------- advanced ----------
@@ -420,7 +493,7 @@ function setResult(r) {
   const tuneRes = !!r.tune;
   const first = !S.res || S.res.config.profile !== r.config.profile || S.res.freq.length !== r.freq.length || !!S.res.tune !== tuneRes;
   S.res = r;
-  updateHold(r);
+  onHoldResult(r);
   if (first || S.cursorIdx == null || S.cursorIdx >= r.freq.length) S.cursorIdx = r.summary.minSWRIndex;
   $('expS2p').hidden = !(r.s21 && r.s21.length);
   renderWarnings(); renderVerdict(); renderTiles();
@@ -647,16 +720,20 @@ const swrTicks = (m) => m <= 3 ? [1, 1.5, 2, 2.5, 3] : m <= 5 ? [1, 1.5, 2, 3, 4
 
 function drawSWR() {
   const m = swrMax(), r = S.res;
-  const holdOK = S.hold.on && r && S.hold.min && S.hold.min.length === r.freq.length;
+  const hl = r && r.hold, holdOK = !!(hl && hl.envMin && hl.envMin.length === r.freq.length);
+  const hiTrace = hl && S.hold.highlight && S.hold.traces[S.hold.highlight];
+  const ys = r ? [{ y: r.derived.swr, color: css('--series1'), label: 'SWR' }] : [];
+  if (hiTrace && hiTrace.length === r.freq.length) ys.unshift({ y: hiTrace, color: '#1baf7a', label: '#' + S.hold.highlight, width: 3 });
   drawLine($('swrPlot'), {
-    ys: r ? [{ y: r.derived.swr, color: css('--series1'), label: 'SWR' }] : [],
+    ys,
     ymin: 1, ymax: m, yticks: swrTicks(m), yfmt: (t) => String(t),
     hlines: [{ y: 1.5, label: 'SWR 1.5' }, { y: 2, label: 'SWR 2' }],
-    ref: (rr) => rr.derived.swr, dips: (d) => d.swr, envelope: holdOK ? { min: S.hold.min, max: S.hold.max } : null,
+    ref: (rr) => rr.derived.swr, dips: (d) => d.swr, envelope: holdOK ? { min: hl.envMin, max: hl.envMax } : null,
   });
   $('legend').innerHTML = `<span><i style="border-color:var(--series1)"></i>Live${r && r.avgN > 1 ? ` (avg ${r.avgN})` : ''}</span>` +
     (S.ref ? `<span><i class="dash" style="border-color:var(--series2)"></i>${esc(S.refName)}</span>` : '') +
-    (holdOK ? `<span class="band"><i style="background:var(--band2)"></i>HOLD min/max</span>` : '') +
+    (holdOK ? `<span class="band"><i style="background:var(--band2)"></i>HOLD: ${hl.positions} steady position${hl.positions === 1 ? '' : 's'}</span>` : '') +
+    (hiTrace ? `<span><i style="border-color:#1baf7a"></i>position #${S.hold.highlight}</span>` : '') +
     `<span class="band"><i></i>Band</span>`;
   updateScaleButtons();
 }
@@ -742,7 +819,7 @@ function renderReadout() {
     `<span>Mismatch loss <b>${d.ml[i].toFixed(2)} dB</b></span>`, `<span>Return loss <b>${d.rl[i].toFixed(1)} dB</b></span>`,
     `<span>|Γ| <b>${d.gammaMag[i].toFixed(3)}</b></span>`, `<span>Z <b>${fmtZ(d.r[i], d.x[i])}</b> (${d.x[i] >= 0 ? 'L' : 'C'} ${fmtLC(d.x[i], f)})</span>`];
   if (d.s21dB) parts.push(`<span>S21 <b>${d.s21dB[i].toFixed(1)} dB</b></span>`);
-  if (S.hold.on && S.hold.min && S.hold.min.length === r.freq.length) parts.push(`<span>HOLD <b>${swrText(S.hold.min[i])}–${swrText(S.hold.max[i])}</b></span>`);
+  if (r.hold && r.hold.envMin && r.hold.envMin.length === r.freq.length) parts.push(`<span>HOLD <b>${swrText(r.hold.envMin[i])}–${swrText(r.hold.envMax[i])}</b></span>`);
   if (S.ref) {
     const j = nearestIdx(S.ref.freq, f);
     if (Math.abs(S.ref.freq[j] - f) < (r.freq[1] - r.freq[0]) * 2) parts.push(`<span style="color:var(--ink2)">REF SWR <b>${swrText(S.ref.derived.swr[j])}</b></span>`);

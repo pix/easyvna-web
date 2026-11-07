@@ -88,6 +88,7 @@ type State struct {
 	Compare        CompareView         `json:"compare"`
 	TrimActive     string              `json:"trimActive,omitempty"`
 	ReportChoices  []ReportChoice      `json:"reportChoices"`
+	Hold           HoldView            `json:"hold"`
 }
 
 // Result is one processed sweep, as sent to the UI and stored in snapshots.
@@ -107,6 +108,7 @@ type Result struct {
 	Ref        *rf.RefDelta `json:"ref,omitempty"`     // comparison with the profile's REF trace
 	Tune       *rf.TuneInfo `json:"tune,omitempty"`    // TUNE view readout
 	Compare    *CompareLive `json:"compare,omitempty"` // S21 compare against stored antenna A
+	Hold       *HoldLive    `json:"hold,omitempty"`    // stable-positions HOLD
 }
 
 func (r *Result) complexS11() []complex128 { return toComplex(r.S11) }
@@ -174,6 +176,7 @@ type Server struct {
 	compare          *CompareSession
 	compareOn        bool
 	compareS21Prev   bool
+	hold             *holdState
 
 	continuous atomic.Bool
 	wake       chan struct{}
@@ -198,6 +201,7 @@ func New(opt Options) *Server {
 	s.lastByProfile = map[string]*Result{}
 	s.refs = s.store.LoadRefs()
 	s.compare = s.store.LoadCompare()
+	s.hold = newHoldState()
 	return s
 }
 
@@ -444,6 +448,7 @@ func (s *Server) state() State {
 	}
 	st.Compare = s.compareViewLocked()
 	st.ReportChoices = s.reportChoicesLocked()
+	st.Hold = s.hold.view()
 	if a := s.cal.Active; a != nil {
 		m := a.Start == s.cfg.Start && a.Stop == s.cfg.Stop
 		st.Cal.Matches = &m

@@ -374,3 +374,76 @@ func TestReadOnlyMode(t *testing.T) {
 		}
 	}
 }
+
+func TestHoldStablePositions(t *testing.T) {
+	g := newRig(t, "869", false, false)
+	call(t, g.ts, "POST", "/api/profile", `{"id":"869"}`, nil)
+	var m msgState
+	call(t, g.ts, "POST", "/api/hold", `{"on":true}`, &m)
+	if !m.State.Hold.On || m.State.Hold.N != 3 {
+		t.Fatalf("hold on: %+v", m.State.Hold)
+	}
+	sweep := func() *HoldLive {
+		var r Result
+		call(t, g.ts, "POST", "/api/sweep", "", &r)
+		if r.Hold == nil {
+			t.Fatal("no hold info in result")
+		}
+		return r.Hold
+	}
+	var h *HoldLive
+	for i := 0; i < 3; i++ {
+		h = sweep()
+	}
+	if h.Status != "captured" || h.Captured != 1 || h.Positions != 1 {
+		t.Fatalf("first position: %+v", h.HoldUpdate)
+	}
+	// "Bend" the antenna: the first sweep after the change is motion.
+	call(t, g.ts, "POST", "/api/mock/antenna", `{"name":"869tuned"}`, nil)
+	if h = sweep(); h.Status != "moving" {
+		t.Fatalf("not rejected as moving: %+v", h.HoldUpdate)
+	}
+	h = sweep()
+	h = sweep()
+	if h.Status != "captured" || h.Positions != 2 || h.ResSpread < 5e6 || len(h.EnvMax) != 401 || h.WorstBand < 1 {
+		t.Fatalf("second position: %+v / spread %.1f MHz", h.HoldUpdate, h.ResSpread/1e6)
+	}
+	var full struct {
+		Version   int `json:"version"`
+		Positions []struct {
+			ID  int       `json:"id"`
+			SWR []float64 `json:"swr"`
+		} `json:"positions"`
+	}
+	call(t, g.ts, "GET", "/api/hold", "", &full)
+	if len(full.Positions) != 2 || len(full.Positions[1].SWR) != 401 || full.Version != h.Version {
+		t.Fatalf("full positions: %d", len(full.Positions))
+	}
+	// Remove, undo, clear, undo.
+	call(t, g.ts, "POST", "/api/hold", `{"remove":1}`, &m)
+	if m.State.Hold.Positions != 1 || !m.State.Hold.HasUndo {
+		t.Errorf("remove: %+v", m.State.Hold)
+	}
+	call(t, g.ts, "POST", "/api/hold", `{"undo":true}`, &m)
+	if m.State.Hold.Positions != 2 {
+		t.Errorf("undo remove: %+v", m.State.Hold)
+	}
+	call(t, g.ts, "POST", "/api/hold", `{"clear":true}`, &m)
+	call(t, g.ts, "POST", "/api/hold", `{"undo":true}`, &m)
+	if m.State.Hold.Positions != 2 {
+		t.Errorf("undo clear: %+v", m.State.Hold)
+	}
+	if c := call(t, g.ts, "POST", "/api/hold", `{"n":1}`, nil); c != 400 {
+		t.Errorf("n=1 accepted: %d", c)
+	}
+	call(t, g.ts, "POST", "/api/hold", `{"sensitivity":"high"}`, &m)
+	if m.State.Hold.Sensitivity != "high" {
+		t.Errorf("sensitivity: %+v", m.State.Hold)
+	}
+	call(t, g.ts, "POST", "/api/hold", `{"on":false}`, &m)
+	var r Result
+	call(t, g.ts, "POST", "/api/sweep", "", &r)
+	if m.State.Hold.On || r.Hold != nil {
+		t.Errorf("hold off still active")
+	}
+}

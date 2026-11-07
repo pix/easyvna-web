@@ -35,6 +35,11 @@ type Antenna struct {
 	S21Coupling float64
 	// Open simulates an unterminated cable (no antenna).
 	Open bool
+	// Bend makes the resonance wander like an antenna being bent or moved
+	// by hand: still positions (relative offset up to ±Bend) separated by
+	// short motion bursts. BendPeriod is still time + motion time.
+	Bend       float64
+	BendPeriod float64 // seconds (default 6)
 }
 
 // Scenarios selectable with -mock-antenna.
@@ -77,6 +82,16 @@ var Scenarios = map[string]func() Antenna{
 		return Antenna{Name: "open cable (no antenna)", Open: true,
 			CableLen: 0.10, CableVF: 0.695, CableLossDB: 0.08, S21Coupling: 0.00002}
 	},
+	// A whip being bent/moved by hand: settles in a new position every few
+	// seconds with a burst of motion in between (exercises HOLD).
+	"bend": func() Antenna {
+		return Antenna{
+			Name:     "869 whip being bent by hand (motion bursts)",
+			Modes:    []Mode{{F0: 867e6, R: 46, Q: 13}, {F0: 2.6e9, R: 90, Q: 10}},
+			CableLen: 0.10, CableVF: 0.695, CableLossDB: 0.08, S21Coupling: 0.035,
+			Bend: 0.009, BendPeriod: 6,
+		}
+	},
 	// A well-tuned 915 MHz antenna.
 	"915": func() Antenna {
 		return Antenna{
@@ -92,7 +107,7 @@ func DefaultAntenna() Antenna { return Scenarios["dual"]() }
 
 // Impedance of the bare antenna at frequency f, t seconds after start.
 func (a Antenna) Impedance(f, t float64) complex128 {
-	scale := 1 + a.Drift*math.Sin(2*math.Pi*t/23)
+	scale := 1 + a.Drift*math.Sin(2*math.Pi*t/23) + a.bendOffset(t)
 	if a.Open {
 		// A few tenths of a pF of fringing capacitance at the open end.
 		return 1 / complex(1e-7, 2*math.Pi*f*0.3e-12)
@@ -133,4 +148,34 @@ func (a Antenna) Measure(f, t float64) (s11, s21 complex128) {
 	mg := cmplx.Abs(g)
 	s21 = cmplx.Rect(a.S21Coupling*(1-mg*mg)*att, -w*(tau+3e-9))
 	return s11, s21
+}
+
+// bendOffset is the relative resonance shift of a hand-bent antenna at time
+// t: each period starts with a ~1.6 s motion burst (moving to a new random
+// position with some wobble), then the antenna stays still.
+func (a Antenna) bendOffset(t float64) float64 {
+	if a.Bend == 0 {
+		return 0
+	}
+	period := a.BendPeriod
+	if period <= 0 {
+		period = 6
+	}
+	const motion = 1.6
+	k := math.Floor(t / period)
+	ph := t - k*period
+	pos := func(k float64) float64 { // deterministic pseudo-random in [-1, 1]
+		x := uint64(int64(k)) * 0x9E3779B97F4A7C15
+		x ^= x >> 31
+		x *= 0xBF58476D1CE4E5B9
+		x ^= x >> 29
+		return float64(x%20001)/10000 - 1
+	}
+	if ph >= motion {
+		return a.Bend * pos(k)
+	}
+	u := ph / motion
+	s := u * u * (3 - 2*u) // smoothstep
+	wobble := 0.6 * math.Sin(math.Pi*u) * math.Sin(2*math.Pi*u*3)
+	return a.Bend * (pos(k-1) + (pos(k)-pos(k-1))*s + wobble)
 }

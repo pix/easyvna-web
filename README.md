@@ -24,7 +24,7 @@ Then open http://127.0.0.1:8080.
 | `-port` | auto | serial device, e.g. `/dev/serial/by-id/usb-nanovna.com_NanoVNA-H4_400-if00`; auto-detect looks for USB `0483:5740` on `/dev/ttyACM*` (sysfs only, other ports are never opened) |
 | `-readonly` | off | never change stored device state: cal, save, recall and on-device profile switching are refused (in the server and the driver); sweeps still work |
 | `-mock` | off | simulate a NanoVNA-H4 (the real shell protocol is spoken by the simulator) |
-| `-mock-antenna` | `dual` | `dual` (433 whip, slightly long, with a 2nd mode near 850 MHz), `869` (whip slightly long), `869tuned`, `915` (tuned), `dummy` (lossy resistor posing as an antenna), `open` (no antenna). Switch live under *Device* in the UI |
+| `-mock-antenna` | `dual` | `dual` (433 whip, slightly long, with a 2nd mode near 850 MHz), `869` (whip slightly long), `869tuned`, `915` (tuned), `dummy` (lossy resistor posing as an antenna), `open` (no antenna), `bend` (whip being bent by hand: a new still position every 6 s with a motion burst in between). Switch live under *Device* in the UI |
 | `-mock-firmware` | `custom` | `custom` simulates the PiX fork (`profile` command, `Fork: PiX` line), `stock` plain NanoVNA-D |
 | `-data` | `$XDG_DATA_HOME/vnaview` or `~/.local/share/vnaview` | settings, REF traces, trim logs, compare session, reports, snapshots |
 | `-maxpoints` | auto | points per device scan (auto: 401 on H4, 101 on H, learnt from the firmware's error otherwise) |
@@ -73,7 +73,20 @@ Overwrites ask first and say what they replace, and cheap actions offer
      resonance, **ΔSWR** at the band reference and the change in band worst
      SWR. Detuning test: REF in free air, then hand or enclosure, then
      read Δf.
-   * **HOLD**: min/max SWR envelope.
+   * **HOLD**: a *stable positions* envelope for bend and hand-effect tests.
+     * A sweep whose RMS |ΔΓ| to the previous one exceeds the motion
+       threshold is shown as "moving…" and rejected. Sensitivity low, normal
+       or high is 0.03, 0.015 or 0.008.
+     * When N consecutive sweeps agree (default 3, adjustable 2–5), their
+       complex average, lightly smoothed, is captured as one position, and a
+       toast says "position 4 captured".
+     * A stable run that matches an existing position is not added again.
+       Slow creep is caught by also comparing against the start of the run.
+     * The envelope is min/max over positions only. The panel shows the
+       number of positions, the **resonance spread** (min–max and Δ MHz)
+       and the worst in-band SWR across positions.
+     * Tap a position to highlight its trace, or × to remove it. Clear and
+       remove can be undone.
    * **AVG**: tap to cycle the complex average over ×1/2/4/8/16 sweeps.
    * **COMPARE** and **REPORT**: below.
 4. **Automatic warnings:** "No antenna?" when |Γ| ≈ 1 everywhere, "Reflection
@@ -181,6 +194,7 @@ browser agree. Stock firmware falls back to `scan` with explicit ranges plus
 | `GET /api/trim`, `GET /api/trim/{name}`, `POST /api/trim/{name}/log {"lengthMm"} or {"cutMm"}`, `.../undo`, `.../target`, `.../select` | trim sessions |
 | `POST /api/compare {"on"}`, `POST /api/compare/a {"name"}`, `POST /api/compare/add {"name"}`, `POST /api/compare/undo`, `DELETE /api/compare` | S21 compare |
 | `POST /api/report {"name","profiles","trim","notes"}`, `GET /api/reports`, `GET /api/reports/{file}[?download=1]` | reports |
+| `POST /api/hold {"on"}` / `{"n"}` / `{"sensitivity"}` / `{"clear":true}` / `{"remove":id}` / `{"undo":true}`, `GET /api/hold` | HOLD stable positions |
 | `POST /api/mock/antenna {"name"}` | mock only: swap the simulated antenna |
 | `GET/POST /api/snapshots`, `GET/DELETE /api/snapshots/{name}` | snapshots |
 | `GET /api/cal`, `POST /api/cal/step/{reset,open,short,load,isoln,thru,done,on,off}`, `POST /api/cal/save {"slot"}`, `POST /api/cal/recall {"slot"}` | calibration |
