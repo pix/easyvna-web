@@ -23,6 +23,7 @@ jobs:
           go vet ./...
           GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go vet ./...
           GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go vet ./...
+          GOOS=js GOARCH=wasm go vet ./...
       - name: test
         run: go test -race ./...
       - name: cross-build
@@ -30,6 +31,8 @@ jobs:
           for t in windows/amd64 windows/arm64 linux/arm64 darwin/arm64; do
             CGO_ENABLED=0 GOOS=${t%/*} GOARCH=${t#*/} go build -o /dev/null . || exit 1
           done
+      - name: single-file browser version
+        run: scripts/build-html.sh
 
   windows:
     runs-on: windows-latest

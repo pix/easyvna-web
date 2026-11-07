@@ -1,0 +1,54 @@
+name: pages
+
+# Builds the single-file browser version (dist/easyvna-web.html) and
+# deploys it to GitHub Pages: https://pix.github.io/easyvna-web/
+# Needs Settings → Pages → Source: "GitHub Actions".
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4.2.2
+        with:
+          fetch-depth: 0 # git describe gives the version shown in the page
+      - uses: actions/setup-go@v5.0.2
+        with:
+          go-version-file: go.mod
+      - name: test
+        run: go test ./...
+      - name: build the single HTML file
+        run: |
+          scripts/build-html.sh
+          mkdir -p site
+          cp dist/easyvna-web.html site/index.html
+          cp dist/easyvna-web.html site/easyvna-web.html
+          touch site/.nojekyll
+          ls -l site
+      - uses: actions/configure-pages@v5.0.0
+      - uses: actions/upload-pages-artifact@v3.0.1
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4.0.5

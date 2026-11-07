@@ -19,11 +19,16 @@ jobs:
         run: go test ./...
       - name: build archives
         run: scripts/dist.sh "${GITHUB_REF_NAME}"
+      - name: build the single-file browser version
+        run: |
+          scripts/build-html.sh "${GITHUB_REF_NAME}"
+          (cd dist && sha256sum easyvna-web.html >> SHA256SUMS)
       - name: create release
         uses: softprops/action-gh-release@v2.0.8
         with:
           files: |
             dist/*.zip
             dist/*.tar.gz
+            dist/easyvna-web.html
             dist/SHA256SUMS
           generate_release_notes: true
