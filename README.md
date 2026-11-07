@@ -4,11 +4,16 @@
 
 **Plug in a NanoVNA, tap a LoRa band, and see right away whether your antenna is good.** It also helps you trim it, test it and print a report.
 
+**Try it in your browser: <https://pix.github.io/easyvna-web/>** (simulator, no
+NanoVNA needed: <https://pix.github.io/easyvna-web/?demo>)
+
 > [!WARNING]
 > **Developed with Claude (Anthropic's AI assistant, via Claude Code) under
 > the direction of PiX.** It is largely AI-generated. It has been tested in
 > simulation and on one NanoVNA-H4 under Linux. The Windows build is
-> untested on real hardware unless stated. Use at your own risk.
+> untested on real hardware unless stated. The browser version (Web Serial)
+> has been tested with the simulator and a simulated serial port only. Use
+> at your own risk.
 
 ![EasyVNA Web: the 869 MHz profile with its verdict, a REF overlay and the SWR plot](doc/screenshots/hero.png)
 
@@ -31,6 +36,30 @@
 - **Works on a phone** at the bench, in light or dark mode.
 - **Runs as a single `.exe` on Windows.** Double-click it and the browser
   opens. Nothing to install, no internet needed.
+
+## Use it in your browser (no install)
+
+Open **<https://pix.github.io/easyvna-web/>** in **Chrome or Edge on a
+computer** (Windows, macOS, Linux, ChromeOS), plug in the NanoVNA and press
+**Connect**. The browser asks which serial port to use: pick the NanoVNA
+(USB `0483:5740`). Next time it reconnects by itself.
+
+* It is the same program, compiled to WebAssembly and packed into **one HTML
+  file**. Nothing is installed and nothing is sent anywhere: the page talks
+  to the NanoVNA over USB with Web Serial, and your settings, REF traces, trim
+  logs, reports and snapshots stay **in this browser** (IndexedDB). Use
+  **Export data** / **Import data** in the bar under the title to back them
+  up or move them to another computer.
+* **No NanoVNA?** <https://pix.github.io/easyvna-web/?demo> runs the built-in
+  simulator. It works in every browser, phones included.
+* **Firefox, Safari and phones** have no Web Serial, so they cannot reach the
+  NanoVNA: USB needs Chrome or Edge on a computer; the simulator works
+  everywhere.
+* **Offline:** **Download for offline use** saves the whole app as
+  `easyvna-web.html`. Double-click it later, even without internet; USB works
+  from the file too. Each release also has `easyvna-web.html` attached.
+* Reports open in a new tab (allow pop-ups for the page); **Download HTML**
+  in the report keeps a copy.
 
 ## Quick start
 
@@ -267,8 +296,15 @@ every antenna.
 Open the address shown in the console window (normally
 http://127.0.0.1:8080) yourself, or use `-no-browser` and bookmark it.
 
+**The browser version does not see the NanoVNA**
+Use Chrome or Edge on a computer, press **Connect** and pick the NanoVNA in
+the list. If opening fails, another program or tab has the port (close
+NanoVNA-Saver, a serial terminal or a second EasyVNA Web tab). On Linux your
+user needs the serial-port group (`uucp` or `dialout`), as for the program.
+
 **Where is my data?**
-In `%LOCALAPPDATA%\easyvna-web` on Windows, `~/.local/share/easyvna-web` on
+In the browser version, in the browser itself (use **Export data** for a
+copy). Otherwise in `%LOCALAPPDATA%\easyvna-web` on Windows, `~/.local/share/easyvna-web` on
 Linux, and `~/Library/Application Support/easyvna-web` on macOS. Use `-data`
 to choose another folder.
 
