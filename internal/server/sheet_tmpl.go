@@ -122,7 +122,7 @@ td.num, th.num { text-align: right; }
     <table><thead><tr><th class="num">Length</th><th class="num">Cut</th><th class="num">f res</th><th class="num">SWR@tgt</th></tr></thead><tbody>
     {{range .Trim}}<tr><td class="num">{{f1 .LengthMm}}</td><td class="num">{{if .CutMm}}{{f1 .CutMm}}{{else}}–{{end}}</td><td class="num">{{mhz .FreqHz}}</td><td class="num">{{swr .SWRAtTarget}}</td></tr>{{end}}
     </tbody></table>
-    <p class="muted" style="margin:.6mm 0 0;font-size:6.8pt">mm · MHz · target {{mhz .TrimTgt}} MHz</p>
+    <p class="muted" style="margin:.6mm 0 0;font-size:6.8pt">mm · MHz · target {{mhz .TrimTgt}} MHz{{with .TrimNext}} · next: {{if gt .CutMm 0.15}}{{if .Cautious}}<b>first cut {{f1 .FirstCutMm}} mm</b> (full estimate {{f1 .CutMm}}; MHz/mm not learnt yet, a cut wire cannot be lengthened){{else}}<b>cut {{f1 .CutMm}} mm</b>{{end}}{{else if lt .CutMm -0.15}}<b>too short: do not cut</b> (lengthen {{f1 (neg .CutMm)}}){{else}}<b>on target</b>{{end}}{{end}}</p>
   </div>{{end}}
 </div>
 

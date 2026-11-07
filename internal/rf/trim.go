@@ -2,6 +2,7 @@ package rf
 
 import (
 	"errors"
+	"fmt"
 	"math"
 )
 
@@ -27,6 +28,54 @@ type TrimPrediction struct {
 	Confidence float64 `json:"confidence"`
 	Points     int     `json:"points"`
 	Note       string  `json:"note,omitempty"`
+	// Cautious is set until this antenna's MHz/mm has been learnt (fewer
+	// than two logged lengths, or no length change yet): then only part of
+	// the estimated cut is recommended, because a cut wire cannot be made
+	// longer again.
+	Cautious bool `json:"cautious"`
+	// FirstCutMm is what to cut now: CutMm when learnt, else the cautious
+	// share of it (CautiousFraction, rounded down to CutStepMm). 0 when the
+	// element is too short or on target.
+	FirstCutMm float64 `json:"firstCutMm"`
+	// Advice says what to do in plain words.
+	Advice string `json:"advice"`
+}
+
+// Cautious first cut.
+const (
+	CautiousFraction = 0.6 // share of the estimate cut while MHz/mm is unknown
+	CutStepMm        = 0.5 // first cuts are rounded down to this step
+	OnTargetMm       = 0.15
+)
+
+// FirstCut is the cautious first cut for an estimated full cut (mm): 60 %
+// of it, rounded down to 0.5 mm. It is 0 for a full cut of 0 or less.
+func FirstCut(fullMm float64) float64 {
+	if fullMm <= 0 {
+		return 0
+	}
+	return math.Floor(fullMm*CautiousFraction/CutStepMm+1e-9) * CutStepMm
+}
+
+// CutAdvice turns an estimated cut (mm, > 0 = too long, < 0 = too short)
+// into what to cut now and a plain-language explanation.
+func CutAdvice(fullMm float64, cautious bool) (first float64, advice string) {
+	switch {
+	case fullMm < -OnTargetMm:
+		return 0, fmt.Sprintf("Resonance is above the target: the element is too short. Do not cut: cutting raises the resonance even more. "+
+			"Lengthen it by about %.1f mm (solder on wire or add an extension), or accept the offset.", -fullMm)
+	case fullMm <= OnTargetMm:
+		return 0, "On target: leave it."
+	case !cautious:
+		return fullMm, fmt.Sprintf("Resonance is below the target: the element is too long. Cut %.1f mm (learnt from this antenna's log).", fullMm)
+	}
+	first = FirstCut(fullMm)
+	why := "this antenna's MHz/mm is not learnt yet, and a cut wire cannot be made longer again. Log the result: the next estimate uses what this cut did."
+	if first <= 0 {
+		return 0, fmt.Sprintf("Resonance is below the target: the element is too long, but only by about %.1f mm. Trim less than %.1f mm at a time and measure: %s", fullMm, CutStepMm, why)
+	}
+	return first, fmt.Sprintf("Resonance is below the target: the element is too long. First cut: %.1f mm (full estimate %.1f mm). Cut only %.0f %% now: %s",
+		first, fullMm, 100*CautiousFraction, why)
 }
 
 // ErrTrimInput is returned for unusable input.
@@ -98,11 +147,13 @@ func PredictTrim(log []TrimPoint, target float64) (TrimPrediction, error) {
 		p.Method = "fit"
 	}
 	anchorL, anchorF := last.LengthMm, last.FreqHz
+	p.Cautious = len(pts) < 2 || p.Method != "fit"
 	if len(pts) == 1 {
 		// Use the exact ratio form for the very first estimate.
 		nl := last.LengthMm * last.FreqHz / target
 		p.NewLengthMm, p.CutMm = nl, last.LengthMm-nl
 		p.MHzPerMm = -s0 / 1e6
+		p.FirstCutMm, p.Advice = CutAdvice(p.CutMm, p.Cautious)
 		return p, nil
 	}
 	nl := anchorL + (target-anchorF)/slope
@@ -110,5 +161,6 @@ func PredictTrim(log []TrimPoint, target float64) (TrimPrediction, error) {
 	p.MHzPerMm = -slope / 1e6
 	// Local slope of f = k/(L+δ) is −f/(L+δ)  ⇒  δ = −f/s − L.
 	p.EndEffectMm = -anchorF/slope - anchorL
+	p.FirstCutMm, p.Advice = CutAdvice(p.CutMm, p.Cautious)
 	return p, nil
 }

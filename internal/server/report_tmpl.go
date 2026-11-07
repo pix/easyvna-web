@@ -140,7 +140,7 @@ table.dips td:nth-child(-n+8) { white-space: nowrap; }
 
 {{with .Trim}}<section class="card"><h2>Trim log <small>· {{.Name}} · target {{mhz3 .Target}} MHz</small></h2>
   <div class="cols"><div>{{$.TrimSpark}}
-    {{with .Prediction}}<p style="margin:1mm 0 0">Next: {{if gt .CutMm 0.15}}<b>cut {{f1 .CutMm}} mm</b>{{else if lt .CutMm -0.15}}<b>lengthen {{f1 (neg .CutMm)}} mm</b>{{else}}<b>on target</b>{{end}} → {{f1 .NewLengthMm}} mm<br><span class="vrange">{{f2 .MHzPerMm}} MHz/mm ({{.Method}}{{if eq .Method "fit"}}, learnt from {{.Points}} logs{{end}})</span></p>{{end}}</div>
+    {{with .Prediction}}<p style="margin:1mm 0 0">Next: {{if gt .CutMm 0.15}}{{if .Cautious}}<b>first cut {{f1 .FirstCutMm}} mm</b> (full estimate {{f1 .CutMm}} mm){{else}}<b>cut {{f1 .CutMm}} mm</b> → {{f1 .NewLengthMm}} mm{{end}}{{else if lt .CutMm -0.15}}<b>do not cut: lengthen {{f1 (neg .CutMm)}} mm</b>{{else}}<b>on target</b>{{end}}<br><span class="vrange">{{f2 .MHzPerMm}} MHz/mm ({{.Method}}{{if eq .Method "fit"}}, learnt from {{.Points}} logs{{end}}). {{.Advice}}</span></p>{{end}}</div>
   <table><thead><tr><th>#</th><th>Time</th><th class="num">Length</th><th class="num">Cut</th><th class="num">Resonance</th><th class="num">Δ target</th><th class="num">SWR @ target</th></tr></thead><tbody>
   {{range $i, $e := .Entries}}<tr><td>{{inc $i}}</td><td>{{hms $e.Time}}</td><td class="num">{{f1 $e.LengthMm}} mm</td><td class="num">{{if $e.CutMm}}{{f1 $e.CutMm}} mm{{else}}–{{end}}</td><td class="num">{{mhz3 $e.FreqHz}} MHz</td><td class="num">{{dmhz $e.FreqHz $.Trim.Target}} MHz</td><td class="num">{{swr $e.SWRAtTarget}}</td></tr>{{end}}
   </tbody></table></div>

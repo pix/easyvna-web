@@ -331,6 +331,7 @@ input[type="number"], input:not([type]), select {
 .tv small { font-size: 0.35em; font-weight: 600; color: var(--muted); }
 .tdir { font-size: clamp(22px, 4.5vw, 38px); font-weight: 800; letter-spacing: 0.04em; margin-top: 4px; }
 .tdir small { font-size: 0.45em; font-weight: 600; letter-spacing: 0; }
+.tdir small.tcut { display: block; font-size: 0.42em; margin-top: 2px; }
 .dir.shorten, .dir.lengthen { border-width: 3px; }
 .dir.shorten { border-color: var(--warn); }
 .dir.lengthen { border-color: var(--bad); }

@@ -182,6 +182,7 @@ type sheetData struct {
 	Trim      []TrimEntry
 	TrimMore  int
 	TrimTgt   float64
+	TrimNext  *rf.TrimPrediction
 	Warnings  []rf.Warning
 }
 
@@ -408,6 +409,8 @@ func (s *Server) buildSheet(id string, a AntennaInfo) ([]byte, error) {
 			d.TrimMore, e = len(e)-4, e[len(e)-4:]
 		}
 		d.Trim, d.TrimTgt = e, t.Target
+		t.predict()
+		d.TrimNext = t.Prediction
 	}
 	var buf bytes.Buffer
 	if err := sheetTmpl.Execute(&buf, d); err != nil {

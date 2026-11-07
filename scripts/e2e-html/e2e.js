@@ -193,9 +193,16 @@ async function demoFlow(browser, base, label, shots) {
     await page.fill('#trimLen', '82');
     await page.click('#trimStart');
     await page.waitForSelector('#trimLog', { timeout: 15000 });
+    await page.waitForFunction(() => /FIRST CUT|TRIM < 0\.5/.test(document.getElementById('cutBig').textContent), null, { timeout: 10000 });
+    const first = await page.evaluate(() => ({ big: document.getElementById('cutBig').textContent, note: document.getElementById('cutNote').textContent,
+      pre: Number(document.getElementById('trimCut').value), p: S.trim.prediction, dir: document.getElementById('tDir').textContent }));
+    check(`${label}: first cut is cautious (60 %, 0.5 mm steps) and explained`, first.p.cautious && first.pre >= 0 && first.pre % 0.5 === 0 && first.pre < first.p.cutMm &&
+      /full estimate/.test(first.note) && /cannot lengthen a cut wire/.test(first.note) && /first cut/.test(first.dir), JSON.stringify(first));
+    if (shots) { await page.evaluate(() => { document.getElementById('toast').hidden = true; }); await page.screenshot({ path: path.join(SHOTS, 'html-tune-first-cut.png') }); console.log('  saved ' + path.join(SHOTS, 'html-tune-first-cut.png')); }
     await page.fill('#trimCut', '1');
     await page.click('#trimLog');
     await page.waitForFunction(() => S.trim && S.trim.entries.length === 2, null, { timeout: 20000 });
+    check(`${label}: after a logged cut MHz/mm is learnt (no longer cautious)`, await page.evaluate(() => !S.trim.prediction.cautious && !/FIRST CUT/.test(document.getElementById('cutBig').textContent)));
     await page.waitForFunction(() => /MHz/.test(document.getElementById('tRes').textContent), null, { timeout: 10000 });
     if (shots) {
       await page.evaluate(() => { document.getElementById('toast').hidden = true; });

@@ -153,8 +153,13 @@ warnings catch *no antenna*, *bad calibration* and *lossy "fake"* antennas.
 numbers, the offset to the target with **▼ SHORTEN / ▲ LENGTHEN /
 ✓ ON TARGET**, and SWR at the target. Enter the element length once. After
 each cut, enter how much you cut and tap **Measure & log**. The trim
-calculator learns this antenna's MHz/mm and tells you the next cut. Turn on
-**Tone** to trim by ear.
+calculator learns this antenna's MHz/mm and tells you the next cut. Until
+it has learnt it (before your first logged cut), it only suggests a
+cautious **first cut**: 60 % of the estimate, rounded down to 0.5 mm, shown
+as *first cut 4.5 mm (full estimate 7.6 mm)*, because a cut wire cannot be
+made longer again. Resonance below the target means the element is too
+long (cut); above the target it is too short, and it tells you **not** to
+cut. Turn on **Tone** to trim by ear.
 
 ![TUNE with the trim calculator](doc/screenshots/tune-trim.png)
 
@@ -239,7 +244,7 @@ sweep as `.s1p`, `.s2p` (when S21 was measured) or CSV.
 | **Identify** | every resonance with SWR, R+jX, bandwidth and Q, the nearest LoRa band, and higher-order modes flagged |
 | **Calibration** | one-tap OPEN/SHORT/LOAD/DONE/SAVE per profile, with slot tracking, auto-recall, and a warning when the calibration does not fit the sweep |
 | **TUNE** | live narrow sweep, SHORTEN/LENGTHEN, SWR at the target, optional audio tone |
-| **Trim calculator** | learns MHz/mm from each cut, per-antenna logs with undo |
+| **Trim calculator** | learns MHz/mm from each cut, cautious first cut (60 %) until it has, "do not cut" when too short, per-antenna logs with undo; the next cut is on the report and the sheet |
 | **REF** | one-tap reference trace, Δf / ΔSWR, detuning test |
 | **HOLD** | stable-positions envelope with motion rejection and resonance spread |
 | **AVG** | averaging over ×1 / 2 / 4 / 8 / 16 sweeps |

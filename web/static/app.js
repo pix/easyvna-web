@@ -1022,7 +1022,12 @@ function renderTune() {
   const arrows = { shorten: '▼ SHORTEN', lengthen: '▲ LENGTHEN', ok: '✓ ON TARGET', unknown: 'no resonance in view' };
   if (ti.found) $('tOff').innerHTML = `${sgn(ti.offset / 1e6, 2)}<small> MHz</small>`;
   else $('tOff').innerHTML = ti.edgeLow ? '<small>below window</small>' : ti.edgeHigh ? '<small>above window</small>' : '–';
-  $('tDir').innerHTML = esc(arrows[ti.direction]) + (ti.direction === 'shorten' ? '<small> too long</small>' : ti.direction === 'lengthen' ? '<small> too short</small>' : '');
+  let dirSub = '';
+  if (ti.direction === 'shorten') {
+    const lc = liveCut();
+    dirSub = '<small> too long</small>' + (lc.cut > 0.15 ? `<small class="tcut">${lc.cautious ? `first cut ${lc.first.toFixed(1)} mm (of ~${lc.cut.toFixed(1)})` : `cut ${lc.cut.toFixed(1)} mm`}</small>` : '');
+  } else if (ti.direction === 'lengthen') dirSub = '<small> too short</small><small class="tcut">do not cut: cutting makes it worse</small>';
+  $('tDir').innerHTML = esc(arrows[ti.direction]) + dirSub;
   cell.classList.add(ti.direction);
   $('tSwrCell').className = 'ts ' + grade(ti.swrAtTarget);
   $('tSwr').textContent = swrText(ti.swrAtTarget);
@@ -1104,23 +1109,17 @@ function renderTrim(force) {
     });
   } else {
     const p = t.prediction, last = t.entries[t.entries.length - 1];
-    let note = '';
-    const { big, cls, cut } = liveCut();
-    if (p) {
-      note = `→ ${(last.lengthMm - cut).toFixed(1)} mm for ${mhzR(t.target)} MHz · ` + (p.method === 'fit'
-        ? `${p.mhzPerMm.toFixed(2)} MHz/mm learnt from ${p.points} logs (${Math.round(p.confidence * 100)} % from this antenna, textbook ${p.priorMHzPerMm.toFixed(2)})`
-        : `first estimate L × f_res / f_target (${p.mhzPerMm.toFixed(2)} MHz/mm). It learns this antenna from every cut you log.`);
-      if (p.note) note += ' · ' + p.note;
-      if (cut < -0.15) note += ' · Cannot un-cut: add a short extension or solder on wire, or accept the offset.';
-    }
-    const sugg = cut > 0.15 ? Math.round(cut * 0.8 * 10) / 10 : 0;
+    const lc = liveCut();
+    const note = cutNote(lc);
+    const cut = lc.cut;
+    const sugg = cut > 0.15 ? (lc.cautious ? lc.first : Math.round(cut * 0.8 * 10) / 10) : 0;
     const rows = t.entries.map((e, i) => `<tr><td>${i + 1}</td><td>${e.lengthMm.toFixed(1)}</td><td>${e.cutMm ? e.cutMm.toFixed(1) : '–'}</td><td>${mhz(e.freqHz)}</td><td>${sgn((e.freqHz - t.target) / 1e6, 2)}</td><td>${swrText(e.swrAtTarget)}</td></tr>`).join('');
     box.innerHTML = `<h3>Trim calculator · ${esc(t.name)} <span class="muted small">now ${last.lengthMm.toFixed(1)} mm</span></h3>
       <div class="trimgrid"><div>
-        <div class="cutbig ${cls}" id="cutBig">${big}</div><div class="cutnote" id="cutNote">${esc(note)}</div>
+        <div class="cutbig ${lc.cls}" id="cutBig">${lc.big}</div><div class="cutnote" id="cutNote">${esc(note)}</div>
         <div class="row"><span>I cut</span><input id="trimCut" type="number" step="0.1" min="0" value="${sugg}" aria-label="mm cut">
         <span>mm</span><button id="trimLog" class="primary bigbtn" type="button">Measure &amp; log</button></div>
-        <div class="cutnote">Tip: cut a bit less than suggested (prefilled at 80 %), log, and repeat. Each log takes a fresh sweep.</div>
+        <div class="cutnote">${p && p.cautious ? 'First cuts are cautious (60 %): this antenna\'s MHz/mm is not learnt yet, and you cannot lengthen a cut wire.' : 'Tip: cut a bit less than suggested (prefilled at 80 %), log, and repeat.'} Each log takes a fresh sweep.</div>
         <div class="row"><button id="trimUndo" class="ghost small" type="button">Undo last log</button>
         <button id="trimNew" class="ghost small" type="button">New antenna</button>${switcher}</div>
       </div><div>
@@ -1148,23 +1147,44 @@ function renderTrim(force) {
   drawSpark();
 }
 // liveCut turns the live TUNE resonance into a cut using the learnt MHz/mm,
-// so the big number always agrees with the TUNE readout above it.
+// so the big number always agrees with the TUNE readout above it. Until
+// MHz/mm is learnt (prediction.cautious) only the first, cautious part of
+// the cut is shown: 60 % rounded down to 0.5 mm, because a cut wire cannot
+// be made longer again.
+function firstCut(full) { return full > 0 ? Math.floor(full * 0.6 / 0.5 + 1e-9) * 0.5 : 0; }
 function liveCut() {
   const t = S.trim, p = t && t.prediction, ti = S.res && S.res.tune;
-  if (!p) return { big: '–', cls: '', cut: 0 };
+  if (!p) return { big: '–', cls: '', cut: 0, first: 0, cautious: false };
   let cut = p.cutMm;
+  const cautious = !!p.cautious;
   if (ti && ti.found && Math.abs(ti.target - t.target) < 1) {
-    if (ti.direction === 'ok') return { big: '✓ leave it', cls: 'ok', cut: 0 };
+    if (ti.direction === 'ok') return { big: '✓ leave it', cls: 'ok', cut: 0, first: 0, cautious };
     cut = (t.target - ti.resFreq) / 1e6 / p.mhzPerMm;
   }
-  if (Math.abs(cut) < 0.15) return { big: '✓ leave it', cls: 'ok', cut };
-  if (cut > 0) return { big: `CUT ${cut.toFixed(1)} mm`, cls: '', cut };
-  return { big: `LENGTHEN ${(-cut).toFixed(1)} mm`, cls: 'lengthen', cut };
+  if (Math.abs(cut) < 0.15) return { big: '✓ leave it', cls: 'ok', cut, first: 0, cautious };
+  if (cut < 0) return { big: `DO NOT CUT · lengthen ${(-cut).toFixed(1)} mm`, cls: 'lengthen', cut, first: 0, cautious };
+  if (!cautious) return { big: `CUT ${cut.toFixed(1)} mm`, cls: '', cut, first: cut, cautious };
+  const first = firstCut(cut);
+  return { big: first > 0 ? `FIRST CUT ${first.toFixed(1)} mm` : 'TRIM < 0.5 mm', cls: '', cut, first, cautious };
+}
+function cutNote(lc) {
+  const t = S.trim, p = t && t.prediction; if (!p) return '';
+  const last = t.entries[t.entries.length - 1];
+  let note;
+  if (lc.cut < -0.15) note = 'Resonance is above the target: the element is too short. Cutting makes it worse. Add a short extension or solder on wire, or accept the offset.';
+  else if (lc.cut > 0.15 && lc.cautious) note = `First cut ${lc.first.toFixed(1)} mm (full estimate ${lc.cut.toFixed(1)} mm): cut only part of it until this antenna's MHz/mm is learnt, because you cannot lengthen a cut wire. Log it, then the next estimate uses what this cut did.`;
+  else note = `→ ${(last.lengthMm - lc.cut).toFixed(1)} mm for ${mhzR(t.target)} MHz`;
+  note += ' · ' + (p.method === 'fit'
+    ? `${p.mhzPerMm.toFixed(2)} MHz/mm learnt from ${p.points} logs (${Math.round(p.confidence * 100)} % from this antenna, textbook ${p.priorMHzPerMm.toFixed(2)})`
+    : `first estimate L × f_res / f_target (${p.mhzPerMm.toFixed(2)} MHz/mm)`);
+  if (p.note) note += ' · ' + p.note;
+  return note;
 }
 function updateCutBig() {
   const el = $('cutBig'); if (!el) return;
-  const { big, cls } = liveCut();
-  el.textContent = big; el.className = 'cutbig ' + cls;
+  const lc = liveCut();
+  el.textContent = lc.big; el.className = 'cutbig ' + lc.cls;
+  const n = $('cutNote'); if (n) n.textContent = cutNote(lc);
 }
 function drawSpark() {
   const cv = $('trimSpark'), t = S.trim; if (!cv || !t || !t.entries.length) return;
