@@ -15,18 +15,7 @@ const reportHTML = `<!doctype html>
 }
 :root { color-scheme: light; --ink: #1a1a1a; --ink2: #444; --muted: #6b6b6b; --line: #d4d4d0; --soft: #f4f4f1;
   --pass: #0a7d0a; --ok: #b07a00; --fail: #b3261e; --na: #8a8a85; }
-* { box-sizing: border-box; }
-html { background: #e6e6e2; }
-body { margin: 0; color: var(--ink); font: 9.5pt/1.4 Helvetica, Arial, "Segoe UI", sans-serif; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-.paper { width: 210mm; max-width: 100%; margin: 12px auto 24px; background: #fff; padding: 12mm 13mm; box-shadow: 0 2px 12px rgba(0,0,0,.15); }
-.toolbar { width: 210mm; max-width: 100%; margin: 12px auto 0; display: flex; gap: 8px; }
-.toolbar .sp { flex: 1; }
-.toolbar .paperpick { display: inline-flex; border: 1px solid #bbb; border-radius: 6px; overflow: hidden; }
-.toolbar .paperpick button { border: 0; border-radius: 0; }
-.toolbar .paperpick button[aria-pressed="true"] { background: #222; color: #fff; }
-html.letter .paper, html.letter .toolbar { width: 215.9mm; }
-.toolbar button, .toolbar a { font: 10pt Helvetica, Arial, sans-serif; padding: 6px 12px; border: 1px solid #bbb; border-radius: 6px; background: #fff; color: #222; text-decoration: none; cursor: pointer; }
-
+` + paperCSS + `
 /* header */
 .rh { display: grid; grid-template-columns: 1fr auto; gap: 4mm; border-bottom: 0.6mm solid var(--ink); padding-bottom: 3mm; margin-bottom: 4mm; }
 .kicker { font-size: 8.5pt; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); font-weight: 700; }
@@ -65,6 +54,7 @@ h3 { font-size: 10pt; margin: 3mm 0 1.5mm; break-after: avoid; page-break-after:
 svg.plot { display: block; width: 100%; height: auto; }
 .row2 { display: grid; grid-template-columns: 124fr 52fr; gap: 4mm; align-items: start; margin-top: 2mm; break-inside: avoid; page-break-inside: avoid; }
 .row2 svg.smith { max-width: 52mm; }
+.zplot { margin-top: 3mm; }
 
 /* tables */
 table { width: 100%; border-collapse: collapse; font-size: 8.5pt; font-variant-numeric: tabular-nums; break-inside: avoid; page-break-inside: avoid; }
@@ -88,32 +78,8 @@ table.dips td:nth-child(-n+8) { white-space: nowrap; }
   .paper { padding: 5mm; } .meta { grid-template-columns: auto 1fr; } .row2, .cols { grid-template-columns: 1fr; }
 }
 </style>
-<style id="pagesize">@page { size: A4 portrait; }</style>
-<script>
-// Paper size: ?paper=a4|letter, else the last choice, else the browser
-// locale (US, Canada, Mexico, Philippines… print on Letter).
-(function () {
-  var LETTER = /-(US|CA|MX|PH|CL|CO|VE|GT|CR|PA|DO|PR|SV|NI|BZ)\b/i;
-  function get() {
-    var q = (location.search.match(/[?&]paper=(a4|letter)/i) || [])[1];
-    if (q) return q.toLowerCase();
-    try { var v = localStorage.getItem("easyvna.paper"); if (v === "a4" || v === "letter") return v; } catch (e) {}
-    var langs = navigator.languages || [navigator.language || ""];
-    return LETTER.test(langs[0] || "") ? "letter" : "a4";
-  }
-  window.setPaper = function (p, remember) {
-    document.documentElement.classList.toggle("letter", p === "letter");
-    document.getElementById("pagesize").textContent = "@page { size: " + (p === "letter" ? "letter" : "A4") + " portrait; }";
-    var bs = document.querySelectorAll(".paperpick button");
-    for (var i = 0; i < bs.length; i++) bs[i].setAttribute("aria-pressed", String(bs[i].value === p));
-    if (remember) { try { localStorage.setItem("easyvna.paper", p); } catch (e) {} }
-  };
-  var p = get();
-  window.setPaper(p, false);
-  document.addEventListener("DOMContentLoaded", function () { window.setPaper(p, false); });
-})();
-</script></head><body>
-<div class="toolbar noprint"><button onclick="print()">Print / save as PDF</button><span class="paperpick" role="group" aria-label="Paper size"><button value="a4" onclick="setPaper('a4',true)">A4</button><button value="letter" onclick="setPaper('letter',true)">Letter</button></span><span class="sp"></span><a href="?download=1">Download HTML</a></div>
+` + paperScript + `</head><body>
+` + paperToolbar + `
 <div class="paper">
 
 <header class="rh">
@@ -154,7 +120,7 @@ table.dips td:nth-child(-n+8) { white-space: nowrap; }
 {{range .Sections}}<section class="prof">
   <h2>{{.Label}} <small>· swept {{hms .Res.Time}}{{if gt .Res.AvgN 1}} · average of {{.Res.AvgN}}{{end}}</small></h2>
   <div class="card">{{.SWR}}</div>
-  <div class="row2"><div class="card">{{.RL}}</div><div class="card">{{.Smith}}</div></div>
+  <div class="row2"><div><div class="card">{{.RL}}</div><div class="card zplot">{{.Z}}</div></div><div class="card">{{.Smith}}</div></div>
   <table class="kv kv4"><tbody>{{range .KeyRows}}<tr>{{range .}}<td>{{.K}}</td><td>{{.V}}</td>{{end}}</tr>{{end}}</tbody></table>
   {{if .Res.Summary.Dips}}<h3>Resonances</h3><table class="dips"><thead><tr><th>#</th><th class="num">MHz</th><th class="num">SWR</th><th class="num">RL</th><th class="num">ML</th><th>Z</th><th class="num">BW&lt;2</th><th class="num">Q</th><th>Note</th></tr></thead><tbody>
     {{range $i, $d := .Res.Summary.Dips}}<tr><td>{{inc $i}}</td><td class="num"><b>{{mhz $d.Freq}}</b></td><td class="num">{{swr $d.SWR}}</td><td class="num">{{f1 $d.RL}}</td><td class="num">{{f2 $d.ML}}</td><td>{{z $d.R $d.X}}</td><td class="num">{{bw $d.BW2}}</td><td class="num">{{q $d.Q}}</td><td>{{$d.Advice}}</td></tr>{{end}}
@@ -190,3 +156,48 @@ table.dips td:nth-child(-n+8) { white-space: nowrap; }
 <p class="vrange" style="margin-top:4mm">Grades: PASS = worst in-band SWR &lt; 1.5, OK &lt; 2, FAIL otherwise (band edges interpolated). Q is estimated from the SWR &lt; 2 bandwidth assuming a match at resonance. Mismatch loss = −10·log10(1−|Γ|²).</p>
 <div class="foot"><span>EasyVNA Web · by PiX (and the Claude, OpenAI and Deepseek AI band)</span><span>report {{.ReportID}} · generated {{time .Generated}}</span></div>
 </div></body></html>`
+
+// paperCSS, paperScript and paperToolbar are shared by the report and the
+// antenna sheet: a sheet of paper on screen, an A4 / Letter switch that
+// sets @page (remembered, defaulting from the browser locale), a print
+// button and a "Download HTML" link.
+const paperCSS = `* { box-sizing: border-box; }
+html { background: #e6e6e2; }
+body { margin: 0; color: var(--ink); font: 9.5pt/1.4 Helvetica, Arial, "Segoe UI", sans-serif; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+.paper { width: 210mm; max-width: 100%; margin: 12px auto 24px; background: #fff; padding: 12mm 13mm; box-shadow: 0 2px 12px rgba(0,0,0,.15); }
+.toolbar { width: 210mm; max-width: 100%; margin: 12px auto 0; display: flex; gap: 8px; }
+.toolbar .sp { flex: 1; }
+.toolbar .paperpick { display: inline-flex; border: 1px solid #bbb; border-radius: 6px; overflow: hidden; }
+.toolbar .paperpick button { border: 0; border-radius: 0; }
+.toolbar .paperpick button[aria-pressed="true"] { background: #222; color: #fff; }
+html.letter .paper, html.letter .toolbar { width: 215.9mm; }
+.toolbar button, .toolbar a { font: 10pt Helvetica, Arial, sans-serif; padding: 6px 12px; border: 1px solid #bbb; border-radius: 6px; background: #fff; color: #222; text-decoration: none; cursor: pointer; }
+`
+
+const paperScript = `<style id="pagesize">@page { size: A4 portrait; }</style>
+<script>
+// Paper size: ?paper=a4|letter, else the last choice, else the browser
+// locale (US, Canada, Mexico, Philippines… print on Letter).
+(function () {
+  var LETTER = /-(US|CA|MX|PH|CL|CO|VE|GT|CR|PA|DO|PR|SV|NI|BZ)\b/i;
+  function get() {
+    var q = (location.search.match(/[?&]paper=(a4|letter)/i) || [])[1];
+    if (q) return q.toLowerCase();
+    try { var v = localStorage.getItem("easyvna.paper"); if (v === "a4" || v === "letter") return v; } catch (e) {}
+    var langs = navigator.languages || [navigator.language || ""];
+    return LETTER.test(langs[0] || "") ? "letter" : "a4";
+  }
+  window.setPaper = function (p, remember) {
+    document.documentElement.classList.toggle("letter", p === "letter");
+    document.getElementById("pagesize").textContent = "@page { size: " + (p === "letter" ? "letter" : "A4") + " portrait; }";
+    var bs = document.querySelectorAll(".paperpick button");
+    for (var i = 0; i < bs.length; i++) bs[i].setAttribute("aria-pressed", String(bs[i].value === p));
+    if (remember) { try { localStorage.setItem("easyvna.paper", p); } catch (e) {} }
+  };
+  var p = get();
+  window.setPaper(p, false);
+  document.addEventListener("DOMContentLoaded", function () { window.setPaper(p, false); });
+})();
+</script>`
+
+const paperToolbar = `<div class="toolbar noprint"><button onclick="print()">Print / save as PDF</button><span class="paperpick" role="group" aria-label="Paper size"><button value="a4" onclick="setPaper('a4',true)">A4</button><button value="letter" onclick="setPaper('letter',true)">Letter</button></span><span class="sp"></span><a href="?download=1">Download HTML</a></div>`

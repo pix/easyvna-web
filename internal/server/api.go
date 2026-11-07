@@ -60,6 +60,9 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/mock/antenna", s.hMockAntenna)
 	mux.HandleFunc("POST /api/hold", s.hHold)
 	mux.HandleFunc("GET /api/hold", s.hHoldGet)
+	mux.HandleFunc("GET /api/antennas", s.hAntennaList)
+	mux.HandleFunc("GET /api/antennas/{name}", s.hAntennaGet)
+	mux.HandleFunc("POST /api/sheet", s.hSheet)
 	if s.opt.Backup {
 		mux.HandleFunc("GET /api/backup", s.hBackupGet)
 		mux.HandleFunc("POST /api/backup", s.hBackupPost)

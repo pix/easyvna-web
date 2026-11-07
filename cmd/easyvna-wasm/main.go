@@ -74,7 +74,7 @@ func main() {
 	store := server.NewStoreBackend(mem, cfg.storeLabel)
 
 	opt := server.Options{Store: store, Static: emptyFS{}, Logger: logger, ReadOnly: cfg.readOnly,
-		Backup: true, AppName: "EasyVNA Web " + version + " (browser)"}
+		Backup: true, AppName: "EasyVNA Web " + version + " (browser)", HomeURL: "https://pix.github.io/easyvna-web/"}
 	if cfg.demo {
 		if _, ok := mock.Scenarios[cfg.antenna]; !ok {
 			cfg.antenna = "dual"

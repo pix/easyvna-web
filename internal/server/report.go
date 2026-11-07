@@ -40,6 +40,7 @@ type reportSection struct {
 	Res     *Result
 	SWR     template.HTML
 	RL      template.HTML
+	Z       template.HTML
 	Smith   template.HTML
 	Key     []reportKV
 	KeyRows [][]reportKV // Key in pairs, for a compact two-column table
@@ -256,6 +257,7 @@ func (s *Server) buildReport(id, name, notes string, profiles []string, trimName
 			d.Warnings = append(d.Warnings, w)
 		}
 		sec.SWR, sec.RL = reportPlots(r)
+		sec.Z = impedancePlot(r)
 		sec.Smith = smithSVG(r, 52)
 		sm := r.Summary
 		sec.Key = []reportKV{
@@ -344,6 +346,43 @@ func reportPlots(r *Result) (template.HTML, template.HTML) {
 		HLines: []svgHLine{{Y: -9.54, Label: "SWR 2", Dash: "9 5"}, {Y: -13.98, Label: "SWR 1.5", Dash: "2 4"}},
 		Title:  "Return loss (S11)", Class: "rl"}.render()
 	return swr, rl
+}
+
+// impedancePlot renders R and X (Ω) against frequency: R solid, X dashed,
+// so the two stay apart in greyscale. Values are clipped to ±600 Ω like
+// the UI's plot.
+func impedancePlot(r *Result) template.HTML { return impedancePlotWith(r, 124, 46, nil) }
+
+// impedancePlotWith draws the impedance plot at a given size, with the
+// R and X of an optional REF trace (thin, in the REF colour).
+func impedancePlotWith(r *Result, wmm, hmm float64, ref *Result) template.HTML {
+	lo, hi := 0.0, 100.0
+	for _, a := range [][]float64{r.Derived.R, r.Derived.X} {
+		for _, v := range a {
+			lo, hi = math.Min(lo, v), math.Max(hi, v)
+		}
+	}
+	lo, hi = math.Max(lo, -600), math.Min(hi, 600)
+	ticks := niceTicks(lo, hi, 4)
+	if len(ticks) > 0 {
+		lo, hi = math.Min(lo, ticks[0]), math.Max(hi, ticks[len(ticks)-1])
+	}
+	clip := func(a []float64) []float64 {
+		out := make([]float64, len(a))
+		for i, v := range a {
+			out[i] = math.Max(lo, math.Min(hi, v))
+		}
+		return out
+	}
+	var series []svgSeries
+	if ref != nil {
+		series = append(series, svgSeries{Y: clip(ref.Derived.R), Color: svgRef, Width: 1.4}, svgSeries{Y: clip(ref.Derived.X), Color: svgRef, Width: 1.4, Dash: "7 4"})
+	}
+	series = append(series, svgSeries{Y: clip(r.Derived.R), Color: svgTrace}, svgSeries{Y: clip(r.Derived.X), Color: svgInk, Dash: "7 4"})
+	return svgPlot{Wmm: wmm, Hmm: hmm, Freq: r.Freq, Series: series,
+		YMin: lo, YMax: hi, YTicks: ticks, YFmt: func(v float64) string { return fmt.Sprintf("%g", v) },
+		YUnit: "Ω", Bands: r.Config.Bands, HLines: []svgHLine{{Y: 50, Label: "50 Ω", Dash: "2 4"}},
+		Title: "Impedance: R solid, X dashed (Ω)", Class: "z"}.render()
 }
 
 // ReportChoice lists what a report can include (for the REPORT dialog).

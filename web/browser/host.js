@@ -250,7 +250,7 @@
     const r = e.data && e.data.easyvnaSaveReport ? reportWins.get(e.source) : null;
     if (r) saveBlob(new Blob([r.html], { type: 'text/html' }), r.file);
   });
-  function showReport(w, html, file) {
+  function showReport(w, html, file, hash) {
     const blob0 = new Blob([html], { type: 'text/html' });
     if (!w) { saveBlob(blob0, file); return; } // pop-up blocked: download it instead
     const fix = '<script>(function(){var a=document.querySelector(\'a[href="?download=1"]\');if(!a)return;' +
@@ -260,12 +260,12 @@
     const page = /<\/body>/i.test(html) ? html.replace(/<\/body>/i, fix + '</body>') : html + fix;
     reportWins.set(w, { html, file });
     for (const k of reportWins.keys()) if (k.closed) reportWins.delete(k);
-    w.location.href = URL.createObjectURL(new Blob([page], { type: 'text/html' })); // kept: the page links to itself
+    w.location.href = URL.createObjectURL(new Blob([page], { type: 'text/html' })) + (hash || ''); // kept: the page links to itself
   }
-  async function openReport(w, url, file) {
+  async function openReport(w, url, file, hash) {
     try {
       const r = await okFetch(url);
-      showReport(w, await r.text(), file || decodeURIComponent(url.split('/').pop().split('?')[0]));
+      showReport(w, await r.text(), file || decodeURIComponent(url.split('/').pop().split('?')[0]), hash);
     } catch (e) { if (w) w.close(); throw e; }
   }
   function fail(e) {

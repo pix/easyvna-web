@@ -478,7 +478,7 @@ func TestPrintReportSections(t *testing.T) {
 	for _, want := range []string{
 		"EasyVNA antenna report", "@page", `counter(page) " of " counter(pages)`, "report " + id,
 		"Verdict per band", "HOLD: stable positions", "Resonance spread", "SIMULATED DATA",
-		"Return loss (S11)", "Smith chart", "line one", "by PiX",
+		"Return loss (S11)", "Impedance: R solid, X dashed", "Smith chart", "line one", "by PiX",
 	} {
 		if !strings.Contains(html, want) {
 			t.Errorf("print report lacks %q", want)

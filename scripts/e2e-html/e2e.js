@@ -31,6 +31,16 @@ const SHOTS = process.argv[3] ? path.resolve(process.argv[3]) : '';
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'easyvna-e2e-'));
 const sha = (b) => crypto.createHash('sha256').update(b).digest('hex');
 const PAGE_SHA = sha(fs.readFileSync(HTML));
+// A small PNG "photo" for the antenna sheet.
+const PHOTO = path.join(TMP, 'antenna.png');
+fs.writeFileSync(PHOTO, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAADAAAAAgCAIAAADbtmxLAAAAWElEQVR42mN8+OIDw2ACTAyDDAw6B7FQboS7gwWcvfPAidEoG3XQqINGHTTqoFEHjTpo1EGjDhp10KiDRh00qB3EiL/nalu0gRa2Hu4LGI2ykZKGRkOIAQC8qw5rNf7LwwAAAABJRU5ErkJggg==', 'base64'));
+const pdfPages = (buf) => (buf.toString('latin1').match(/\/Type\s*\/Page[^s]/g) || []).length;
+function pdfShot(pdf, name) { // PNG of page 1 when pdftoppm is installed
+  if (!SHOTS) return;
+  const p = path.join(SHOTS, name);
+  fs.writeFileSync(p + '.pdf', pdf);
+  try { require('child_process').execFileSync('pdftoppm', ['-r', '80', '-png', '-singlefile', p + '.pdf', p]); console.log('  saved ' + p + '.png'); } catch { /* optional */ }
+}
 
 let passed = 0;
 const failures = [];
@@ -59,6 +69,8 @@ const strip = (u) => u.split('#')[0].split('?')[0];
 // be requested; anything else is aborted and reported.
 async function newCtx(browser, pageURL, label, opts = {}) {
   const ctx = await browser.newContext({ acceptDownloads: true, viewport: { width: 1360, height: 900 }, colorScheme: 'light', ...opts });
+  // print() would open a dialog: count the calls instead.
+  await ctx.addInitScript(() => { window.print = () => { window.__printed = (window.__printed || 0) + 1; }; });
   const errors = [], extra = [];
   const own = new Set([strip(pageURL)]);
   ctx.allow = (u) => own.add(strip(u));
@@ -220,16 +232,73 @@ async function demoFlow(browser, base, label, shots) {
     const csv = await download(page, () => page.click('.exports a:has-text("CSV")'));
     check(`${label}: last sweep CSV download`, csv.name.endsWith('.csv') && csv.body.toString().split('\n').length > 100, csv.name);
   });
+  await step(`${label}: Ctrl+P prints every graph`, async () => {
+    await page.evaluate(() => window.dispatchEvent(new Event('beforeprint')));
+    await page.emulateMedia({ media: 'print' });
+    const cv = await page.evaluate(() => ['swrPlot', 'smith', 'rlPlot', 'zPlot'].map((id) => {
+      const c = document.getElementById(id), r = c.getBoundingClientRect(), d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
+      let ink = 0; for (let i = 0; i < d.length; i += 16) if (d[i + 3] > 0 && (d[i] < 200 || d[i + 1] < 200 || d[i + 2] < 200)) ink++;
+      return { id, visible: r.width > 100 && r.height > 50, ink };
+    }));
+    if (shots) { await page.screenshot({ path: path.join(SHOTS, 'html-ctrlp-print.png'), fullPage: true }); console.log('  saved ' + path.join(SHOTS, 'html-ctrlp-print.png')); }
+    await page.emulateMedia({ media: 'screen' });
+    await page.evaluate(() => window.dispatchEvent(new Event('afterprint')));
+    const back = await page.evaluate(() => document.getElementById('rlPlot').hidden && !document.documentElement.classList.contains('printing'));
+    check(`${label}: print view shows SWR, Smith, return loss and R/X, all drawn; restored after`, cv.every((c) => c.visible && c.ink > 200) && back, JSON.stringify(cv));
+  });
+  await step(`${label}: PRINT antenna sheet`, async () => {
+    await page.click('#aPrint');
+    await page.waitForSelector('#sh_name', { timeout: 10000 });
+    check(`${label}: sheet dialog pre-fills name and band`, (await page.inputValue('#sh_name')) === 'whip-e2e' && /869 MHz LoRa/.test(await page.inputValue('#sh_band')),
+      await page.inputValue('#sh_name'));
+    await page.fill('#sh_type', '¼λ whip');
+    await page.fill('#sh_connector', 'SMA male');
+    await page.fill('#sh_lengthMm', '81');
+    await page.fill('#sh_cable', 'RG316, 10 cm');
+    await page.fill('#sh_notes', 'e2e sheet. '.repeat(80));
+    await page.setInputFiles('#sh_photo', PHOTO);
+    await page.waitForSelector('#shPhotoPrev:not([hidden])');
+    const photo = await page.evaluate(() => S.sheetPhoto);
+    check(`${label}: photo downscaled to a JPEG data URL`, photo.startsWith('data:image/jpeg;base64,'));
+    if (shots) await shot(page, 'html-sheet-dialog.png', false);
+    const [sp] = await Promise.all([ctx.waitForEvent('page', { timeout: 20000 }), page.click('#shPrint')]);
+    await sp.waitForURL(/#print$/, { timeout: 20000 });
+    await sp.waitForSelector('.sheet');
+    await sp.waitForFunction(() => window.__printed >= 1, null, { timeout: 5000 });
+    const plots = await sp.evaluate(() => ['svg.swr', 'svg.smith', 'svg.rl', 'svg.z'].map((q) => {
+      const el = document.querySelector(q); return el ? el.querySelectorAll('polyline').length : 0;
+    }));
+    const txt = await sp.textContent('.sheet');
+    check(`${label}: sheet opens and prints by itself, with all 4 graphs`, plots.every((n) => n > 0) && /whip-e2e/.test(txt) && /SWR band centre/.test(txt) && /Trim log/.test(txt) && (await sp.$('.photo img')) !== null,
+      JSON.stringify(plots));
+    for (const paper of ['a4', 'letter']) {
+      await sp.evaluate((p) => setPaper(p, false), paper);
+      await sp.emulateMedia({ media: 'print' });
+      const pdf = await sp.pdf({ preferCSSPageSize: true, printBackground: true });
+      check(`${label}: sheet fits one ${paper === 'a4' ? 'A4' : 'Letter'} page`, pdfPages(pdf) === 1, String(pdfPages(pdf)));
+      if (shots) pdfShot(pdf, `html-sheet-${paper}`);
+    }
+    await sp.close();
+    await page.waitForFunction(() => document.getElementById('sheetView').hidden, null, { timeout: 5000 });
+    // Save as HTML, then the fields come back for the same name.
+    await page.click('#aPrint');
+    await page.waitForSelector('#sh_name');
+    check(`${label}: sheet fields remembered for the antenna`, (await page.inputValue('#sh_connector')) === 'SMA male' && (await page.evaluate(() => !!S.sheetPhoto)));
+    const dl = await download(page, () => page.click('#shSave'));
+    check(`${label}: Save sheet (HTML)`, /^whip-e2e-sheet-\d{8}-\d{6}\.html$/.test(dl.name) && /Antenna sheet/.test(dl.body.toString()), dl.name);
+    await page.click('#shCancel');
+  });
   await step(`${label}: report`, async () => {
     await page.click('#aReport');
     await page.waitForSelector('#repGo');
+    check(`${label}: report dialog says where it is saved`, /saved in this browser/.test(await page.textContent('#repBody')));
     await page.fill('#repName', 'whip-e2e');
     await page.selectOption('#repTrim', 'whip-e2e');
     const [rp] = await Promise.all([ctx.waitForEvent('page', { timeout: 20000 }), page.click('#repGo')]);
     await rp.waitForURL(/^blob:/, { timeout: 20000 });
     await rp.waitForSelector('.paper', { timeout: 10000 });
     const txt = await rp.textContent('body');
-    check(`${label}: report opens as a blob page`, rp.url().startsWith('blob:') && /whip-e2e/.test(txt), rp.url());
+    check(`${label}: report opens as a blob page, with the R/X plot`, rp.url().startsWith('blob:') && /whip-e2e/.test(txt) && (await rp.$('svg.z')) !== null, rp.url());
     await rp.click('.paperpick button[value=letter]');
     const letter = await rp.evaluate(() => document.documentElement.classList.contains('letter'));
     await rp.click('.paperpick button[value=a4]');
@@ -257,7 +326,7 @@ async function demoFlow(browser, base, label, shots) {
     const b = await download(page, () => page.click('#hostExport'));
     const bk = JSON.parse(b.body.toString());
     const names = bk.files.map((f) => f.name);
-    const want = ['settings.json', 'refs/ref-869.json', 'trim/whip-e2e.json', 'snapshots/e2e_snap.json', 'compare.json'];
+    const want = ['settings.json', 'refs/ref-869.json', 'trim/whip-e2e.json', 'snapshots/e2e_snap.json', 'compare.json', 'antennas/whip-e2e.json'];
     check(`${label}: Export data JSON`, bk.format === 'easyvna-web-backup' && want.every((n) => names.includes(n)) && names.some((n) => n.startsWith('reports/')),
       want.filter((n) => !names.includes(n)).join(','));
     backupFile = b.file;

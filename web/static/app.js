@@ -470,7 +470,7 @@ function renderSnaps() {
       <a class="btn ghost small" href="api/export?format=csv&snapshot=${q}" download>CSV</a>
       <button class="ghost small" data-a="del" type="button">Delete</button></td>`;
     tr.querySelector('[data-a=del]').onclick = () => run(async () => {
-      if (!(await ask(`Delete snapshot "${s.name}"?`, 'The file is removed from the data directory. This cannot be undone.', 'Delete'))) return;
+      if (!(await ask(`Delete snapshot "${s.name}"?`, `It is removed from ${HOST ? 'this browser' : 'the data directory'}. This cannot be undone.`, 'Delete'))) return;
       await api('DELETE', 'api/snapshots/' + q);
     });
     tb.appendChild(tr);
@@ -598,8 +598,10 @@ function identifyCard(r) {
 
 // ---------- drawing ----------
 function css(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
+let printDPR = 0; // fixed resolution while printing
+let printState = null; // set while the page is prepared for printing
 function setup(cv) {
-  const dpr = window.devicePixelRatio || 1, w = cv.clientWidth, h = cv.clientHeight;
+  const dpr = printDPR || window.devicePixelRatio || 1, w = cv.clientWidth, h = cv.clientHeight;
   if (cv.width !== Math.round(w * dpr) || cv.height !== Math.round(h * dpr)) { cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr); }
   const ctx = cv.getContext('2d');
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, w, h);
@@ -840,6 +842,7 @@ function drawAll() {
   if (raf) return;
   raf = requestAnimationFrame(() => {
     raf = 0;
+    if (printState) return; // keep the print bitmaps (print layout resizes the page)
     if (!$('tuneView').hidden) { drawTunePlot(); drawSpark(); return; }
     if (!$('cmpView').hidden) { drawCmpPlot(); return; }
     drawSWR();
@@ -848,24 +851,51 @@ function drawAll() {
   });
 }
 window.addEventListener('resize', drawAll);
-// Printing: canvases are bitmaps drawn in the current theme, so switch to
-// light colours and redraw synchronously before the print snapshot.
-let printTheme = null;
-function drawNow() {
-  drawSWR();
-  if (S.tab === 'smith') drawSmith(); else if (S.tab === 'rl') drawRL(); else if (S.tab === 'z') drawZ(); else if (S.tab === 's21') drawS21();
-  renderReadout();
+// Printing (PRINT tile or Ctrl+P): canvases are bitmaps drawn in the
+// current theme at screen size, so before the print snapshot show every
+// graph (not only the selected tab), give each a paper-friendly size and
+// resolution, and redraw it in light colours; restore everything after.
+const PRINT_SIZES = { swrPlot: [700, 300], smith: [430, 430], rlPlot: [700, 200], zPlot: [700, 200], s21Plot: [700, 200] };
+function printInfo() {
+  const st = S.state, r = S.res, p = currentProfile();
+  if (!st) return '';
+  const cal = st.cal.status, parts = [];
+  parts.push(`<b>${esc(p ? p.label + (p.identify ? '' : ' MHz') : st.config.profile)}</b> ${mhzR(st.config.start)}–${mhzR(st.config.stop)} MHz`);
+  if (r) parts.push(`${r.freq.length} points, swept ${new Date(r.time).toLocaleString()}${r.avgN > 1 ? `, average of ${r.avgN}` : ''}`);
+  parts.push('calibration ' + (!st.connected ? 'unknown' : !cal.known ? 'not reported' : cal.applied ? 'ON' : 'OFF') +
+    (st.cal.active ? ` (${esc(st.cal.active.source)})` : ''));
+  if (st.info) parts.push(`${esc(st.info.model)} fw ${esc(st.info.version)}${st.info.mock ? ' (simulated)' : ''}`);
+  if (S.ref) parts.push(esc(S.refName) + ' shown dashed');
+  if (st.hold.on) parts.push(`HOLD: ${st.hold.positions} position(s)`);
+  parts.push('printed ' + new Date().toLocaleString());
+  return parts.join(' · ');
 }
-window.addEventListener('beforeprint', () => {
-  printTheme = document.documentElement.dataset.theme || '';
-  document.documentElement.dataset.theme = 'light';
-  try { drawNow(); } catch { /* ignore */ }
-});
-window.addEventListener('afterprint', () => {
-  if (printTheme === null) return;
-  if (printTheme) document.documentElement.dataset.theme = printTheme; else delete document.documentElement.dataset.theme;
-  printTheme = null; drawAll();
-});
+function preparePrint() {
+  if (printState) return;
+  const root = document.documentElement;
+  printState = { theme: root.dataset.theme || '' };
+  root.dataset.theme = 'light';
+  root.classList.add('printing');
+  $('printInfo').innerHTML = printInfo();
+  const s21 = !!(S.state && S.state.config.s21);
+  for (const c of document.querySelectorAll('.tabbody canvas')) c.hidden = c.dataset.pane === 's21' && !s21;
+  for (const h of document.querySelectorAll('.printcap')) h.hidden = h.dataset.cap === 's21' && !s21;
+  for (const [id, [w, h]] of Object.entries(PRINT_SIZES)) { const c = $(id); c.style.width = w + 'px'; c.style.height = h + 'px'; }
+  printDPR = 2;
+  try { drawSWR(); drawSmith(); drawRL(); drawZ(); if (s21) drawS21(); renderReadout(); } catch (e) { console.warn(e); }
+}
+function endPrint() {
+  if (!printState) return;
+  const root = document.documentElement;
+  if (printState.theme) root.dataset.theme = printState.theme; else delete root.dataset.theme;
+  root.classList.remove('printing');
+  printState = null; printDPR = 0;
+  for (const id of Object.keys(PRINT_SIZES)) { const c = $(id); c.style.width = ''; c.style.height = ''; }
+  selectTab(S.tab); // hides the other tabs again and redraws
+}
+window.addEventListener('beforeprint', preparePrint);
+window.addEventListener('afterprint', endPrint);
+$('aPrint').onclick = () => run(openSheet);
 
 // ---------- interaction ----------
 function attachHover(cv) {
@@ -902,7 +932,7 @@ function selectTab(t) {
   drawAll();
 }
 for (const b of document.querySelectorAll('.tabs button')) b.onclick = () => selectTab(b.dataset.tab);
-function lockBody() { document.body.classList.toggle('locked', !$('tuneView').hidden || !$('cmpView').hidden || !$('repView').hidden); }
+function lockBody() { document.body.classList.toggle('locked', !$('tuneView').hidden || !$('cmpView').hidden || !$('repView').hidden || !$('sheetView').hidden); }
 
 // ---------- TUNE ----------
 function defaultTarget() {
@@ -1219,7 +1249,7 @@ async function openReport() {
   const ch = st.reportChoices;
   const name = st.trimActive || (S.trim && S.trim.name) || 'antenna-' + new Date().toISOString().slice(0, 10);
   $('repBody').innerHTML = `<div class="step">Make a printable report</div>
-    <div class="stepsub">It opens in a new tab (Print → Save as PDF) and is saved in the data directory.</div>
+    <div class="stepsub">It opens in a new tab (Print → Save as PDF) and is saved ${HOST ? 'in this browser' : 'in the data directory'}.</div>
     <label class="stepsub">Antenna name<br><input id="repName" class="wide" style="font-size:18px;padding:8px 10px;width:100%;max-width:420px" value="${esc(name)}" maxlength="80"></label>
     <div class="stepsub"><b>Include these sweeps</b> (latest of each profile):</div>
     <div class="choices">${ch.length ? ch.map((c) => `<label><input type="checkbox" checked value="${esc(c.profile)}"> <b>${esc(c.label)}</b> <span class="muted">swept ${hhmm(c.time)}</span> ${c.verdict ? badge(c.verdict) : ''}</label>`).join('')
@@ -1241,6 +1271,104 @@ async function openReport() {
   });
 }
 $('repClose').onclick = () => { $('repView').hidden = true; lockBody(); };
+
+// ---------- PRINT: one-page antenna sheet ----------
+const ANT_TYPES = ['¼λ whip', '½λ dipole', 'helical / spring', 'PCB / chip', 'ground plane', 'Yagi', 'other'];
+const CONNECTORS = ['SMA male', 'SMA female', 'RP-SMA male', 'RP-SMA female', 'u.FL / IPEX', 'N male', 'BNC male'];
+const BAND_PURPOSE = { 433: '433 MHz LoRa (EU433)', 869: '869 MHz LoRa EU (EU868)', 915: '915 MHz LoRa US / AU (US915)' };
+const SHEET_TEXT = [['type', 'Type', 'antTypes'], ['band', 'Band / purpose'], ['connector', 'Connector', 'antConns'], ['lengthMm', 'Physical length (mm)'],
+  ['ground', 'Ground plane / mounting'], ['cable', 'Feed cable (type, length)'], ['maker', 'Maker / source'], ['owner', 'Owner / location']];
+function sheetBand() {
+  const st = S.state, p = currentProfile();
+  if (BAND_PURPOSE[st.config.profile]) return BAND_PURPOSE[st.config.profile];
+  return p && !p.identify ? p.label + ' MHz' : '';
+}
+// downscalePhoto returns a JPEG data: URL at most max pixels on its long side.
+async function downscalePhoto(file, max = 800, q = 0.8) {
+  const bmp = await createImageBitmap(file);
+  const k = Math.min(1, max / Math.max(bmp.width, bmp.height));
+  const c = document.createElement('canvas');
+  c.width = Math.max(1, Math.round(bmp.width * k)); c.height = Math.max(1, Math.round(bmp.height * k));
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, c.width, c.height);
+  ctx.drawImage(bmp, 0, 0, c.width, c.height);
+  if (bmp.close) bmp.close();
+  return c.toDataURL('image/jpeg', q);
+}
+function sheetFill(a) {
+  for (const [k] of SHEET_TEXT) $('sh_' + k).value = a[k] ? String(a[k]) : '';
+  if (!a.band) $('sh_band').value = sheetBand();
+  $('sh_notes').value = a.notes || '';
+  S.sheetPhoto = a.photo || '';
+  const img = $('shPhotoPrev'); img.hidden = !S.sheetPhoto; img.src = S.sheetPhoto || '';
+  $('shPhotoDel').hidden = !S.sheetPhoto;
+}
+function sheetCollect() {
+  const a = { name: $('sh_name').value.trim(), notes: $('sh_notes').value, photo: S.sheetPhoto || '' };
+  for (const [k] of SHEET_TEXT) a[k] = $('sh_' + k).value.trim();
+  a.lengthMm = Number(a.lengthMm) || 0;
+  if (!a.name) throw new Error('give the antenna a name (the only required field)');
+  return a;
+}
+async function sheetLoad(name, keepIfNone) {
+  let a = null;
+  try { a = await api('GET', 'api/antennas/' + encodeURIComponent(name)); } catch { /* new antenna */ }
+  if (a) { sheetFill(a); $('shKnown').textContent = `Known antenna: fields filled from ${new Date(a.updated).toLocaleString()}.`; }
+  else { if (!keepIfNone) sheetFill({}); $('shKnown').textContent = name ? 'New antenna: its details are remembered for next time.' : ''; }
+}
+async function openSheet() {
+  if (!S.res) throw new Error('sweep the antenna first: the sheet shows the latest sweep');
+  if (S.state.tune.active) throw new Error('close TUNE first');
+  let list = [];
+  try { list = await api('GET', 'api/antennas'); } catch { /* none yet */ }
+  const name = S.sheetName || S.state.trimActive || (S.trim && S.trim.name) || (list[0] && list[0].name) || '';
+  const opts = (xs) => xs.map((x) => `<option value="${esc(x)}">`).join('');
+  $('sheetBody').innerHTML = `<div class="step">Antenna sheet</div>
+    <div class="stepsub">One page with the key figures and all graphs of the latest sweep (${esc(mhzR(S.res.config.start))}–${esc(mhzR(S.res.config.stop))} MHz, ${hhmm(S.res.time)}).
+      Only the name is needed. The details are remembered per antenna name; the sheet is also saved ${HOST ? 'in this browser' : 'in the data directory'}.</div>
+    <datalist id="antNames">${opts(list.map((x) => x.name))}</datalist><datalist id="antTypes">${opts(ANT_TYPES)}</datalist><datalist id="antConns">${opts(CONNECTORS)}</datalist>
+    <div class="sheetform">
+      <label class="wide">Antenna name / ID *<input id="sh_name" list="antNames" maxlength="80" required value="${esc(name)}" placeholder="e.g. whip-A or SN 0042"></label>
+      ${SHEET_TEXT.map(([k, l, dl]) => `<label>${l}<input id="sh_${k}" ${dl ? `list="${dl}"` : ''} ${k === 'lengthMm' ? 'type="number" min="0" step="0.1"' : 'maxlength="120"'}></label>`).join('')}
+      <label class="wide">Notes<textarea id="sh_notes" maxlength="2000" placeholder="e.g. 3D-printed enclosure, measured in free air 1 m above the bench"></textarea></label>
+      <div class="wide photorow"><label>Photo (optional)<input id="sh_photo" type="file" accept="image/*"></label>
+        <img id="shPhotoPrev" alt="Antenna photo" hidden><button id="shPhotoDel" class="ghost small" type="button" hidden>Remove photo</button></div>
+    </div>
+    <div class="stepsub muted" id="shKnown"></div>
+    <div class="row"><button id="shPrint" class="primary bigbtn" type="button">Print sheet</button>
+      <button id="shSave" class="bigbtn" type="button">Save sheet (HTML)</button>
+      <button id="shCancel" class="ghost" type="button">Cancel</button></div>`;
+  $('sheetView').hidden = false; lockBody();
+  sheetFill({});
+  if (name) await sheetLoad(name, false);
+  $('sh_name').onchange = () => run(() => sheetLoad($('sh_name').value.trim(), true));
+  $('sh_photo').onchange = (e) => run(async () => {
+    const f = e.target.files[0]; if (!f) return;
+    S.sheetPhoto = await downscalePhoto(f);
+    const img = $('shPhotoPrev'); img.src = S.sheetPhoto; img.hidden = false; $('shPhotoDel').hidden = false;
+  });
+  $('shPhotoDel').onclick = () => { S.sheetPhoto = ''; $('shPhotoPrev').hidden = true; $('shPhotoDel').hidden = true; $('sh_photo').value = ''; };
+  const make = async () => { const a = sheetCollect(); S.sheetName = a.name; return api('POST', 'api/sheet', { antenna: a }); };
+  $('shPrint').onclick = () => run(async () => {
+    const w = window.open('', '_blank');
+    try {
+      const r = await make();
+      if (HOST) await HOST.openReport(w, r.url, r.file, '#print');
+      else if (w) w.location = r.url + '#print'; else location.href = r.url + '#print';
+      closeSheet(); toast('Sheet saved: ' + r.file);
+    } catch (e) { if (w) w.close(); throw e; }
+  });
+  $('shSave').onclick = () => run(async () => {
+    const r = await make();
+    const a = document.createElement('a');
+    a.href = r.url + '?download=1'; a.download = r.file; a.hidden = true;
+    document.body.appendChild(a); a.click(); a.remove();
+    toast('Sheet saved: ' + r.file);
+  });
+  $('shCancel').onclick = closeSheet;
+}
+function closeSheet() { $('sheetView').hidden = true; lockBody(); }
+$('sheetClose').onclick = closeSheet;
 
 // ---------- start ----------
 selectTab('smith');

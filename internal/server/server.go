@@ -146,8 +146,12 @@ type Options struct {
 	// Backup enables GET/POST /api/backup (export / import every stored
 	// file as one JSON document). The browser build turns it on.
 	Backup bool
-	// AppName is recorded in backups, e.g. "EasyVNA Web v0.2.0".
+	// AppName is recorded in backups and printed on sheets, e.g.
+	// "EasyVNA Web v0.2.0".
 	AppName string
+	// HomeURL is printed in the antenna sheet footer (default: the
+	// project page on GitHub).
+	HomeURL string
 }
 
 // Server is the EasyVNA Web application.

@@ -262,7 +262,7 @@ input[type="number"], input:not([type]), select {
 
 /* ---- round 3: action tiles, banners, overlays ---- */
 .pill.ro { color: var(--warn-ink); border-color: currentColor; font-weight: 700; }
-.actions { display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); gap: 8px; }
+.actions { display: grid; grid-template-columns: repeat(9, minmax(0, 1fr)); gap: 8px; }
 .tilewrap { position: relative; display: flex; }
 .tilewrap .tile { flex: 1; }
 .tile {
@@ -378,7 +378,7 @@ textarea { font: inherit; padding: 8px; border-radius: 6px; border: 1px solid va
 body.locked { overflow: hidden; }
 
 @media (max-width: 900px) {
-  .actions { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .actions { grid-template-columns: repeat(5, minmax(0, 1fr)); }
 }
 @media (max-width: 760px) {
   .tunebig { grid-template-columns: 1fr; }
@@ -388,6 +388,7 @@ body.locked { overflow: hidden; }
 }
 @media (max-width: 420px) {
   .profiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .actions { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
 
 /* HOLD: stable positions */
@@ -409,6 +410,16 @@ body.locked { overflow: hidden; }
 
 /* footer / credits */
 .foot { text-align: center; font-size: 12px; color: var(--muted); padding: 8px 0 4px; }
+.printonly, .printcap { display: none; }
+/* PRINT: antenna sheet dialog */
+.sheetform { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 14px; max-width: 760px; margin: 10px 0; }
+.sheetform label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--ink2); }
+.sheetform input, .sheetform textarea { font-size: 16px; padding: 7px 9px; width: 100%; box-sizing: border-box; }
+.sheetform .wide { grid-column: 1 / -1; }
+.sheetform textarea { min-height: 70px; }
+.photorow { display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap; }
+.photorow img { max-height: 90px; max-width: 140px; border-radius: 6px; border: 1px solid var(--border); }
+@media (max-width: 760px) { .sheetform { grid-template-columns: 1fr; } }
 .foot a { color: inherit; }
 
 /* ---- printing the main page (Ctrl+P): clean, light, no controls ----
@@ -425,7 +436,13 @@ body.locked { overflow: hidden; }
   .top button, .profiles, .calstrip, .actions, .hint, .seg, #btnBest, .tabs, details, .overlay, .toast,
   .banner, .holdpanel .hctl, .pchip .px, #legend + .spacer { display: none !important; }
   .panel, .vcard, .wbanner, .refrow, .holdpanel { box-shadow: none; break-inside: avoid; page-break-inside: avoid; }
-  canvas.plot, canvas.plot.main, canvas.plot.smith { height: auto !important; max-width: 100%; }
+  canvas.plot, canvas.plot.main, canvas.plot.smith { width: 100% !important; height: auto !important; max-width: 100%; }
+  /* PRINT: every graph, each kept whole on a page */
+  #tabsPanel { break-inside: auto; page-break-inside: auto; }
+  .tabbody canvas { break-inside: avoid; page-break-inside: avoid; margin-bottom: 2mm; }
+  canvas.plot.smith { width: 48% !important; margin: 0 auto 1mm; }
+  .printcap:not([hidden]) { display: block; font-size: 11pt; margin: 3mm 0 1mm; break-after: avoid; page-break-after: avoid; }
   .tabbody canvas[hidden] { display: none !important; }
+  #printInfo { display: block; font-size: 9pt; color: #333; }
   .foot { display: block; margin-top: 4mm; }
 }

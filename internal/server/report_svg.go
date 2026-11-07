@@ -23,6 +23,8 @@ const (
 	svgFrame     = "#8a8a8a"
 	svgBandFill  = "#e2e8f2"
 	svgBandFill2 = "#c9d4e6"
+	svgRef       = "#c4562a" // REF overlay (also dashed, for greyscale)
+	svgHold      = "#6f6f6f" // HOLD envelope (dotted)
 )
 
 type svgSeries struct {
@@ -117,6 +119,9 @@ func (p svgPlot) render() template.HTML {
 		}
 	}
 	for _, tk := range p.YTicks {
+		if tk == 0 {
+			tk = 0 // no "-0" label
+		}
 		y := fy(tk)
 		fmt.Fprintf(&sb, `<line x1="%.1f" x2="%.1f" y1="%.1f" y2="%.1f" stroke="%s" stroke-width="1"/><text x="%.1f" y="%.1f" font-size="%.0f" fill="%s" text-anchor="end">%s</text>`,
 			x0, x1, y, y, svgGrid, x0-6, y+4, svgFont, svgMuted, p.YFmt(tk))
@@ -167,8 +172,9 @@ func (p svgPlot) render() template.HTML {
 	return template.HTML(sb.String())
 }
 
-// smithSVG draws a print-friendly Smith chart, sizeMm wide.
-func smithSVG(res *Result, sizeMm float64) template.HTML {
+// smithSVG draws a print-friendly Smith chart, sizeMm wide, with an
+// optional REF trace (dashed).
+func smithSVG(res *Result, sizeMm float64, ref ...*Result) template.HTML {
 	S := sizeMm * 4
 	c, R := S/2, S/2-30
 	cy := c + 8
@@ -195,6 +201,16 @@ func smithSVG(res *Result, sizeMm float64) template.HTML {
 	fmt.Fprintf(&sb, `<text x="%.1f" y="%.1f" font-size="%.0f" fill="%s" text-anchor="middle">+j50</text><text x="%.1f" y="%.1f" font-size="%.0f" fill="%s" text-anchor="middle">−j50</text>`,
 		c, cy-R-6, svgFont-1, svgMuted, c, cy+R+16, svgFont-1, svgMuted)
 	fmt.Fprintf(&sb, `<text x="%.1f" y="%.1f" font-size="%.0f" fill="%s">SWR 2</text>`, c+R/3*0.72+3, cy-R/3*0.72-2, svgFont-1, svgMuted)
+	for _, rr := range ref {
+		if rr == nil {
+			continue
+		}
+		var rp strings.Builder
+		for _, g := range rr.S11 {
+			fmt.Fprintf(&rp, "%.1f,%.1f ", c+g[0]*R, cy-g[1]*R)
+		}
+		fmt.Fprintf(&sb, `<polyline points="%s" fill="none" stroke="%s" stroke-width="1.8" stroke-dasharray="7 4"/>`, rp.String(), svgRef)
+	}
 	var pts strings.Builder
 	for _, g := range res.S11 {
 		fmt.Fprintf(&pts, "%.1f,%.1f ", c+g[0]*R, cy-g[1]*R)
