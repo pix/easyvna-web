@@ -1,5 +1,7 @@
 # EasyVNA Web
 
+*by PiX (and the Claude, OpenAI and Deepseek AI band)*
+
 **Check LoRa antennas with a NanoVNA, in your browser.** EasyVNA Web is a
 single program (one `.exe` on Windows) that drives a NanoVNA-H / H4 over USB
 and gives you a clear verdict per LoRa band (433 / 869 / 915 MHz). It also
@@ -36,10 +38,12 @@ a printable report card. It works offline and on a phone at the bench.
 - **Works on a phone.** The layout adapts to a phone, so you can keep it in
   your hand at the bench.
 - **Runs as a single .exe on Windows.** Double-click it and the browser
-  opens. There is nothing to install and no internet is needed. The same
-  holds on Linux and macOS.
+  opens. There is nothing to install and no internet is needed. A macOS
+  build is provided too, and on Linux it builds from source in one command.
 
 ## Screenshots
+
+The screenshots below were taken with the built-in simulator (`-mock`).
 
 | | |
 |---|---|
@@ -72,11 +76,14 @@ are stored in `%LOCALAPPDATA%\easyvna-web`. If another program such as
 NanoVNA-Saver has the COM port open, EasyVNA Web says the port is busy.
 Close the other program and press Reconnect.
 
-### Linux
+### Linux (build from source)
+
+There are no Linux release downloads. With Go 1.27 or newer, building takes
+one command:
 
 ```sh
-tar xzf easyvna-web-<version>-linux-amd64.tar.gz
-./easyvna-web-<version>-linux-amd64/easyvna-web
+go install github.com/pix/easyvna-web@latest   # or: git clone … && go build .
+easyvna-web
 ```
 
 Your user needs access to the serial device: group `uucp` on Arch, `dialout`
@@ -226,10 +233,13 @@ go build -o easyvna-web .          # build (Go 1.27+)
 go test -race ./... && go vet ./...
 ./easyvna-web -mock                # simulated NanoVNA-H4, no hardware
 scripts/dist.sh v0.1.0             # release archives + SHA256SUMS into dist/
+scripts/screenshots.sh mock        # regenerate doc/screenshots (needs node + playwright)
+scripts/screenshots.sh hardware    # same against a real NanoVNA, server in -readonly
 ```
 
 Everything builds with `CGO_ENABLED=0` for Windows (amd64/arm64), Linux and
-macOS. The only dependency is `golang.org/x/sys`. Serial ports use raw
+macOS. Releases ship Windows zips (amd64, arm64) and a macOS arm64 tarball.
+Linux users build from source. The only dependency is `golang.org/x/sys`. Serial ports use raw
 termios on Linux and macOS, and the Win32 comm API on Windows. Port
 detection uses sysfs on Linux, the registry on Windows (USB VID:PID, cross-
 checked with `HARDWARE\DEVICEMAP\SERIALCOMM` to skip unplugged devices),
@@ -332,7 +342,15 @@ per-OS data dir, port choice and port fallback, and the HTTP API end to end
 SSE). Simulations of a trim session and of a hand-bent antenna check that
 the trim fit and the HOLD motion rejection work.
 
+## Credits
+
+EasyVNA Web is by PiX (and the Claude, OpenAI and Deepseek AI band).
+
 ## License
 
-GPL-3.0, see [LICENSE](LICENSE). It matches the EasyVNA firmware, which
-is based on NanoVNA-D (GPL-3.0).
+BSD-3-Clause, see [LICENSE](LICENSE). Copyright (c) 2026, Camille Moncelier
+(PiX).
+
+EasyVNA Web is a separate program that talks to the NanoVNA over USB and
+contains no firmware code. The EasyVNA firmware itself is based on
+NanoVNA-D and keeps that project's GPL-3.0 license.

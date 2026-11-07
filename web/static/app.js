@@ -14,7 +14,7 @@ const LORA_TARGETS = [433.92e6, 869e6, 915e6];
 // ---------- helpers ----------
 const mhz = (f, d = 2) => (f / 1e6).toFixed(d);
 const mhzR = (f) => String(+(f / 1e6).toFixed(3));
-const sgn = (v, d = 1) => (v >= 0 ? '+' : '−') + Math.abs(v).toFixed(d);
+const sgn = (v, d = 1) => { const a = Math.abs(v).toFixed(d); return (Number(a) === 0 ? '' : v > 0 ? '+' : '−') + a; };
 function fmtZ(r, x) {
   const big = (v) => Math.abs(v) >= 1e4 ? v.toExponential(1) : v.toFixed(1);
   return `${big(r)} ${x < 0 ? '−' : '+'} j${big(Math.abs(x))} Ω`;
@@ -106,7 +106,7 @@ function renderState() {
   pill.classList.toggle('on', st.connected);
   if (st.connected && st.info) {
     const easy = st.info.fork && /easyvna|pix/i.test(st.info.fork);
-    $('devtext').textContent = `${st.info.model} · fw ${st.info.version}${easy ? ' · EasyVNA' : ''}${st.info.mock ? ' · MOCK' : ''}`;
+    $('devtext').textContent = `${st.info.model} · fw ${st.info.version}${easy ? ' · EasyVNA' : ''}${st.info.mock ? ' · SIMULATED' : ''}`;
   } else $('devtext').textContent = 'not connected';
   pill.title = st.info ? `${st.info.port}, ${st.info.maxPoints} points/scan${st.info.fork ? ', fork: ' + st.info.fork : ''}` : (st.error || '');
   $('ropill').hidden = !st.readOnly;

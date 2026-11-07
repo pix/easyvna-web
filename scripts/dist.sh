@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build release archives into dist/: Windows zips, Linux/macOS tar.gz and
+# Build release archives into dist/: Windows zips, a macOS tar.gz and
 # SHA256SUMS. Used by the release workflow and for local releases.
 #   scripts/dist.sh v0.1.0
 set -euo pipefail
@@ -8,7 +8,7 @@ cd "$(dirname "$0")/.."
 rm -rf dist
 mkdir -p dist
 
-targets=(windows/amd64 windows/arm64 linux/amd64 linux/arm64 darwin/arm64)
+targets=(windows/amd64 windows/arm64 darwin/arm64)
 for t in "${targets[@]}"; do
   goos=${t%/*}
   goarch=${t#*/}

@@ -369,9 +369,9 @@ func (s *Sim) cmdProfile(a []string) string {
 
 func (s *Sim) version() string {
 	if s.opt.Profiles {
-		return "1.2.50-mock"
+		return "1.2.50"
 	}
-	return "1.2.40-mock"
+	return "1.2.40"
 }
 
 func (s *Sim) forkLine() string {

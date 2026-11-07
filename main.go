@@ -43,7 +43,7 @@ func main() {
 	showVersion := flag.Bool("version", false, "print the version and exit")
 	flag.Parse()
 	if *showVersion {
-		fmt.Println("easyvna-web", version)
+		fmt.Println("easyvna-web", version, "- EasyVNA Web by PiX (and the Claude, OpenAI and Deepseek AI band)")
 		return
 	}
 

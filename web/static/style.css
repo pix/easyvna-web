@@ -406,3 +406,7 @@ body.locked { overflow: hidden; }
 .pchip .px { color: var(--muted); padding: 5px 9px 5px 4px; }
 .pchip.hl { border-color: #1baf7a; box-shadow: inset 0 0 0 1.5px #1baf7a; }
 @media (max-width: 760px) { .holdgrid { grid-template-columns: repeat(3, minmax(0, 1fr)); } .hctl { grid-column: 1 / -1; } }
+
+/* footer / credits */
+.foot { text-align: center; font-size: 12px; color: var(--muted); padding: 8px 0 4px; }
+.foot a { color: inherit; }

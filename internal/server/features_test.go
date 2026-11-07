@@ -447,3 +447,11 @@ func TestHoldStablePositions(t *testing.T) {
 		t.Errorf("hold off still active")
 	}
 }
+
+func TestSigned1(t *testing.T) {
+	for v, want := range map[float64]string{-0.04: "0.0", 0.04: "0.0", -1.26: "-1.3", 2.0: "+2.0"} {
+		if got := signed1(v); got != want {
+			t.Errorf("signed1(%v) = %q, want %q", v, got, want)
+		}
+	}
+}
