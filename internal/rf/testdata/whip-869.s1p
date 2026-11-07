@@ -1,0 +1,9 @@
+! Hand-written fixture: a 869 MHz whip, real/imaginary in MHz.
+! Second comment line
+# MHz S RI R 50
+860   0.30  -0.20
+865   0.10  -0.05   ! inline comment
+869   0.02   0.01
+873   0.12   0.08
+
+877   0.31   0.22

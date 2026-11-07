@@ -1,0 +1,5 @@
+! A 100 ohm series resistor described in a 75 ohm system (MA format)
+# MHz S MA R 75
+433 0.4 0 0.6 0 0.6 0 0.4 0
+868 0.4 0 0.6 0 0.6 0 0.4 0
+915 0.4 0 0.6 0 0.6 0 0.4 0

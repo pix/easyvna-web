@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/pix/easyvna-web/internal/rf"
@@ -46,11 +47,6 @@ func (s *Server) average(cfg Config, freq []float64, s11, s21 []complex128) ([]c
 // keeps the latest result per profile for reports. s.mu must be held.
 func (s *Server) postProcessLocked(res *Result) {
 	cfg := res.Config
-	var primary *rf.Band
-	if len(cfg.Bands) > 0 {
-		b := cfg.Bands[0]
-		primary = &b
-	}
 	if s.tune != nil {
 		ti := rf.Tune(res.Freq, res.Derived, s.tune.Target)
 		res.Tune = &ti
@@ -59,19 +55,7 @@ func (s *Server) postProcessLocked(res *Result) {
 		s.lastByProfile[cfg.Profile] = res
 	}
 	if ref := s.refs[cfg.Profile]; ref != nil {
-		point := 0.0
-		if s.tune != nil {
-			point = s.tune.Target
-		} else if primary != nil && !cfg.Identify {
-			point = primary.Reference()
-		}
-		var band *rf.Band
-		if !cfg.Identify {
-			band = primary
-		}
-		d := rf.CompareRef(res.Freq, res.Derived, res.Summary.Dips, ref.Freq, ref.Derived, ref.Summary.Dips, point, band)
-		d.RefTime = ref.Time.Format(time.RFC3339)
-		res.Ref = &d
+		res.Ref = s.refDeltaLocked(res, ref)
 	}
 	s.feedHoldLocked(res)
 	if s.compareOn {
@@ -81,6 +65,33 @@ func (s *Server) postProcessLocked(res *Result) {
 		}
 		res.Compare = c.live(res)
 	}
+}
+
+// refDeltaLocked compares res with a REF trace: Δf of the resonance near the
+// TUNE target or the primary band reference, ΔSWR there and in the band.
+func (s *Server) refDeltaLocked(res, ref *Result) *rf.RefDelta {
+	cfg := res.Config
+	var primary *rf.Band
+	if len(cfg.Bands) > 0 {
+		b := cfg.Bands[0]
+		primary = &b
+	}
+	point := 0.0
+	if res.Tune != nil {
+		point = res.Tune.Target
+	} else if primary != nil && !cfg.Identify {
+		point = primary.Reference()
+	}
+	var band *rf.Band
+	if !cfg.Identify {
+		band = primary
+	}
+	d := rf.CompareRef(res.Freq, res.Derived, res.Summary.Dips, ref.Freq, ref.Derived, ref.Summary.Dips, point, band)
+	d.RefTime = ref.Time.Format(time.RFC3339)
+	if ref.Source != nil {
+		d.RefFile = ref.Source.File
+	}
+	return &d
 }
 
 // ---------- TUNE ----------
@@ -231,17 +242,26 @@ type RefInfo struct {
 	Start   float64   `json:"start"`
 	Stop    float64   `json:"stop"`
 	HasUndo bool      `json:"hasUndo"`
+	File    string    `json:"file,omitempty"` // set when the REF came from a file
 }
 
 func (s *Server) hRefSet(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	last := s.last
-	if last == nil || last.Config.Profile != s.cfg.Profile {
+	if last == nil || (last.Config.Profile != s.cfg.Profile && last.Source == nil) {
 		s.mu.Unlock()
 		writeErr(w, 409, errors.New("sweep this profile first, then tap REF"))
 		return
 	}
 	prof := s.cfg.Profile
+	if last.Source != nil {
+		// A file becomes the REF of the current profile, so live sweeps of
+		// that profile are compared with it.
+		cp := *last
+		cp.Config.Profile = prof
+		cp.Ref = nil
+		last = &cp
+	}
 	prev := s.refs[prof]
 	s.mu.Unlock()
 	if err := s.store.SaveRef(prof, last, prev); err != nil {
@@ -253,8 +273,11 @@ func (s *Server) hRefSet(w http.ResponseWriter, r *http.Request) {
 	s.mu.Unlock()
 	s.publishState()
 	msg := "REF stored"
+	if last.Source != nil {
+		msg = "REF stored from " + last.Source.File
+	}
 	if prev != nil {
-		msg = "REF replaced (previous from " + prev.Time.Format("15:04:05") + ")"
+		msg = strings.Replace(msg, "stored", "replaced", 1) + " (previous from " + prev.Time.Format("15:04:05") + ")"
 	}
 	writeJSON(w, 200, map[string]any{"message": msg, "replaced": prev != nil, "state": s.state()})
 }

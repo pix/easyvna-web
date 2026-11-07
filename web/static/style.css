@@ -104,6 +104,12 @@ button, input, select { font: inherit; color: inherit; }
 
 main { max-width: 1120px; margin: 0 auto; padding: 16px; display: flex; flex-direction: column; gap: 14px; }
 .panel { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; box-shadow: var(--shadow); }
+.filebar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; padding: 10px 14px; border-radius: 10px;
+  border: 2px dashed var(--accent); background: var(--surface); }
+.filebar .ftag { font-weight: 800; letter-spacing: .06em; color: var(--accent-ink); background: var(--accent); border-radius: 6px; padding: 2px 8px; }
+.filebar .fname { font-weight: 700; overflow-wrap: anywhere; }
+.filebar .fnote { color: var(--muted); font-size: 13px; flex-basis: 100%; }
+.filebar .sp { flex: 1; }
 .banner { padding: 10px 14px; border-radius: 8px; border: 1px solid var(--bad); color: var(--bad-ink); background: var(--surface); }
 
 /* buttons */

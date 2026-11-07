@@ -1,0 +1,5 @@
+// NanoVNA-App style export with a European decimal comma
+Freq(MHz);S11 LogMag(dB);S11 Phase(deg);S11 SWR
+433,05;-6,0206;90;3,0
+433,92;-20;0;1,22
+434,79;-6,0206;-90;3,0

@@ -167,6 +167,7 @@ type sheetData struct {
 	Device    string
 	Firmware  string
 	Simulated bool
+	File      string // set for a measurement opened from a file
 	Sweep     string
 	CalState  string
 	CalOK     bool
@@ -304,7 +305,7 @@ func (s *Server) buildSheet(id string, a AntennaInfo) ([]byte, error) {
 		}
 	}
 	d.CalState, d.CalOK = s.calNoteLocked(r)
-	if !r.CalApplied {
+	if !r.CalApplied && r.Source == nil {
 		d.CalState = "NOT CALIBRATED: figures include the cable and the VNA's own errors"
 	}
 	label := "Custom sweep"
@@ -315,6 +316,14 @@ func (s *Server) buildSheet(id string, a AntennaInfo) ([]byte, error) {
 		}
 	}
 	d.Sweep = fmt.Sprintf("%s · %s · %d points · swept %s", label, mhzRange(r.Config.Start, r.Config.Stop), len(r.Freq), r.Time.Format("2006-01-02 15:04:05"))
+	if src := r.Source; src != nil {
+		d.File = src.File
+		d.Device, d.Firmware, d.Simulated = "– (opened from a file)", "–", false
+		d.Sweep = fmt.Sprintf("%s · %s · %s · %d points · opened %s", fileLabel(src), src.Format, mhzRange(r.Config.Start, r.Config.Stop), len(r.Freq), r.Time.Format("2006-01-02 15:04:05"))
+		for _, n := range src.Notes {
+			d.Sweep += " · " + n
+		}
+	}
 	if r.AvgN > 1 {
 		d.Sweep += fmt.Sprintf(" · average of %d", r.AvgN)
 	}
@@ -323,6 +332,9 @@ func (s *Server) buildSheet(id string, a AntennaInfo) ([]byte, error) {
 		d.VNote = "measurement warning, see below"
 	}
 	ref := s.refs[r.Config.Profile]
+	if r.Source != nil {
+		ref = s.refs[s.cfg.Profile] // a file is compared with the current profile's REF
+	}
 	if ref != nil && (len(ref.Freq) != len(r.Freq) || ref.Config.Start != r.Config.Start || ref.Config.Stop != r.Config.Stop) {
 		ref = nil
 	}

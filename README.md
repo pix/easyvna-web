@@ -33,6 +33,9 @@ NanoVNA needed: <https://pix.github.io/easyvna-web/?demo>)
   calibration needed.
 - **Report card.** One button produces a clean A4 or Letter PDF with the verdicts,
   plots, trim log and comparison.
+- **Open measurement files.** Load a `.s1p`, `.s2p` or CSV from any VNA
+  program and get the same verdict, plots, report and sheet, clearly
+  marked *not live*. No NanoVNA needed, so it works in every browser.
 - **Works on a phone** at the bench, in light or dark mode.
 - **Runs as a single `.exe` on Windows.** Double-click it and the browser
   opens. Nothing to install, no internet needed.
@@ -54,7 +57,9 @@ computer** (Windows, macOS, Linux, ChromeOS), plug in the NanoVNA and press
   simulator. It works in every browser, phones included.
 * **Firefox, Safari and phones** have no Web Serial, so they cannot reach the
   NanoVNA: USB needs Chrome or Edge on a computer; the simulator works
-  everywhere.
+  everywhere. **Open a measurement file** (next to that notice) works in
+  every browser too: load a `.s1p`, `.s2p` or CSV saved by another program
+  and get the full analysis, report and sheet.
 * **Offline:** **Download for offline use** saves the whole app as
   `easyvna-web.html`. Double-click it later, even without internet; USB works
   from the file too. Each release also has `easyvna-web.html` attached.
@@ -203,6 +208,20 @@ REF and HOLD when they are on. It fits on one A4 or Letter page.
 **Print sheet** prints it; **Save sheet (HTML)** keeps a copy. Ctrl+P on
 the main page also prints every graph at once.
 
+### 9. Open a measurement file
+
+**Open file** (top right) loads a measurement saved by EasyVNA Web or by
+another VNA program: Touchstone `.s1p`, `.s2p` (S11, plus S21 when it is
+there) or a CSV export (NanoVNA-Saver / NanoVNA-App style: frequency with
+S11 as real/imaginary, dB or magnitude with phase, or R and X). Files made
+for another reference impedance (75 Ω…) are converted to 50 Ω; files that
+cannot be read are refused with the reason. The file then gets the usual
+verdict, plots, REF overlay, report and antenna sheet, under a blue
+**FILE · NOT LIVE** bar with its name. Tap **REF** to use the file as the
+reference for live sweeps (last month's measurement against today's), and
+**Back to live** to sweep again. **Snapshots & export** saves the current
+sweep as `.s1p`, `.s2p` (when S21 was measured) or CSV.
+
 ### On a phone
 
 <p align="center">
@@ -228,7 +247,7 @@ the main page also prints every graph at once.
 | **Warnings** | no antenna or open cable, reflection above 1 (bad calibration), lossy / fake antenna |
 | **Report** | printable A4 / Letter report with vector plots (SWR, return loss, impedance, Smith) and tables, saved in the data folder |
 | **Antenna sheet** | PRINT: a one-page datasheet of the antenna (photo, key figures, all four graphs, notes, trim log); its details are remembered per antenna name |
-| **Export** | Touchstone `.s1p` / `.s2p`, CSV, named snapshots |
+| **Files** | open `.s1p` / `.s2p` / CSV (Touchstone 1 and 2.0, any S format and unit, other reference impedances renormalised to 50 Ω) as a labelled *not live* measurement with the full analysis; export Touchstone `.s1p` / `.s2p`, CSV, named snapshots |
 | **Plots** | SWR, return loss, Smith chart, R/X, S21, with a cursor readout |
 | **Anywhere** | phone layout, light and dark mode, works offline |
 
@@ -314,6 +333,13 @@ Use Chrome or Edge on a computer, press **Connect** and pick the NanoVNA in
 the list. If opening fails, another program or tab has the port (close
 NanoVNA-Saver, a serial terminal or a second EasyVNA Web tab). On Linux your
 user needs the serial-port group (`uucp` or `dialout`), as for the program.
+
+**"Cannot open this file"**
+EasyVNA Web reads S-parameter files only: Touchstone with one or two
+ports, or a CSV that has a frequency column and S11 with its phase (real
+and imaginary, dB or magnitude with phase, or R and X). SWR or return loss
+alone has no phase, so such a CSV is refused. The message names the line
+or column it did not understand.
 
 **Where is my data?**
 In the browser version, in the browser itself (use **Export data** for a

@@ -118,7 +118,7 @@ table.dips td:nth-child(-n+8) { white-space: nowrap; }
 {{if .Notes}}<div class="notes"><b>Notes</b>{{.Notes}}</div>{{end}}
 
 {{range .Sections}}<section class="prof">
-  <h2>{{.Label}} <small>· swept {{hms .Res.Time}}{{if gt .Res.AvgN 1}} · average of {{.Res.AvgN}}{{end}}</small></h2>
+  <h2>{{.Label}} <small>· {{if .Res.Source}}opened{{else}}swept{{end}} {{hms .Res.Time}}{{if gt .Res.AvgN 1}} · average of {{.Res.AvgN}}{{end}}</small></h2>
   <div class="card">{{.SWR}}</div>
   <div class="row2"><div><div class="card">{{.RL}}</div><div class="card zplot">{{.Z}}</div></div><div class="card">{{.Smith}}</div></div>
   <table class="kv kv4"><tbody>{{range .KeyRows}}<tr>{{range .}}<td>{{.K}}</td><td>{{.V}}</td>{{end}}</tr>{{end}}</tbody></table>

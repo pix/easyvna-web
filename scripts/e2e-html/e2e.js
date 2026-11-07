@@ -34,6 +34,8 @@ const PAGE_SHA = sha(fs.readFileSync(HTML));
 // A small PNG "photo" for the antenna sheet.
 const PHOTO = path.join(TMP, 'antenna.png');
 fs.writeFileSync(PHOTO, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAADAAAAAgCAIAAADbtmxLAAAAWElEQVR42mN8+OIDw2ACTAyDDAw6B7FQboS7gwWcvfPAidEoG3XQqINGHTTqoFEHjTpo1EGjDhp10KiDRh00qB3EiL/nalu0gRa2Hu4LGI2ykZKGRkOIAQC8qw5rNf7LwwAAAABJRU5ErkJggg==', 'base64'));
+// Hand-written measurement files (the Go parser tests use them too).
+const FIXTURES = path.resolve(__dirname, '..', '..', 'internal', 'rf', 'testdata');
 const pdfPages = (buf) => (buf.toString('latin1').match(/\/Type\s*\/Page[^s]/g) || []).length;
 function pdfShot(pdf, name) { // PNG of page 1 when pdftoppm is installed
   if (!SHOTS) return;
@@ -221,6 +223,7 @@ async function demoFlow(browser, base, label, shots) {
     await page.waitForFunction(() => !S.state.continuous, null, { timeout: 10000 });
     check(`${label}: COMPARE A + leaderboard`, true);
   });
+  let snapS1p = '';
   await step(`${label}: snapshots and exports`, async () => {
     await sweepDone(page, () => page.click('#aSweep'));
     await page.click('#snapsPanel summary');
@@ -229,8 +232,29 @@ async function demoFlow(browser, base, label, shots) {
     await page.waitForSelector('#snapList td:has-text("e2e snap")', { timeout: 10000 });
     const s1p = await download(page, () => page.click('#snapList a:has-text(".s1p")'));
     check(`${label}: snapshot .s1p download`, s1p.name === 'e2e_snap.s1p' && /^!/.test(s1p.body.toString()) && /# Hz S RI R 50/i.test(s1p.body.toString()), s1p.name);
+    snapS1p = s1p.file;
     const csv = await download(page, () => page.click('.exports a:has-text("CSV")'));
     check(`${label}: last sweep CSV download`, csv.name.endsWith('.csv') && csv.body.toString().split('\n').length > 100, csv.name);
+  });
+  await step(`${label}: open measurement files`, async () => {
+    // The .s1p just exported, opened again as a file measurement.
+    const named = path.join(TMP, 'whip 869.s1p');
+    fs.copyFileSync(snapS1p, named);
+    await page.setInputFiles('#fileInput', named);
+    await page.waitForFunction(() => S.res && S.res.source && S.res.source.file === 'whip 869.s1p', null, { timeout: 15000 });
+    const bar = await page.textContent('#filebar');
+    const s2 = await st(page);
+    check(`${label}: .s1p opens as a labelled file measurement (not live) with a verdict`, (await page.isVisible('#filebar')) && /NOT LIVE/.test(bar) && /whip 869\.s1p/.test(bar) &&
+      /869 MHz band/.test(await page.textContent('#verdict')) && /File whip 869\.s1p/.test(await page.textContent('#legend')) && !s2.continuous, bar);
+    check(`${label}: report dialog offers the file`, s2.reportChoices.some((c) => c.file && /whip 869/.test(c.label)));
+    const ex = await download(page, () => page.click('.exports a:has-text(".s1p")'));
+    check(`${label}: export of the file measurement`, ex.name === 'whip_869-easyvna.s1p' && /Opened from file whip 869\.s1p/.test(ex.body.toString()), ex.name);
+    if (shots) { await page.evaluate(() => scrollTo(0, 0)); await shot(page, 'html-file-open.png', false); }
+    await page.setInputFiles('#fileInput', path.join(FIXTURES, 'nanovna-saver.csv'));
+    await page.waitForFunction(() => S.res && S.res.source && S.res.source.file === 'nanovna-saver.csv', null, { timeout: 15000 });
+    check(`${label}: CSV with S21 opens`, await page.evaluate(() => S.res.freq.length === 4 && S.res.s21.length === 4 && !document.getElementById('expS2p').hidden));
+    await sweepDone(page, () => page.click('#fileLive'));
+    check(`${label}: "Back to live" sweeps and hides the file bar`, await page.evaluate(() => !S.res.source && document.getElementById('filebar').hidden));
   });
   await step(`${label}: Ctrl+P prints every graph`, async () => {
     await page.evaluate(() => window.dispatchEvent(new Event('beforeprint')));
@@ -461,6 +485,14 @@ async function noSerialFlow(browser, base, label, shots) {
   const n = (await page.isVisible('#hostNotice')) ? await page.textContent('#hostNotice') : '';
   check(`${label}: notice "USB needs Chrome or Edge…"`, /USB needs Chrome or Edge on a computer; the simulator works everywhere/.test(n), n);
   if (shots) await shot(page, 'html-no-webserial.png', false);
+  await step(`${label}: open a measurement file without Web Serial`, async () => {
+    const [fc] = await Promise.all([page.waitForEvent('filechooser', { timeout: 10000 }), page.click('#hostOpenFile')]);
+    await fc.setFiles(path.join(FIXTURES, 'whip-869.s1p'));
+    await page.waitForFunction(() => S.res && S.res.source && S.res.source.file === 'whip-869.s1p', null, { timeout: 15000 });
+    check(`${label}: file opens with no NanoVNA: verdict, plots, file bar`, (await page.isVisible('#filebar')) && /869 MHz band/.test(await page.textContent('#verdict')) &&
+      (await page.evaluate(() => !S.state.connected && S.res.summary.bands.length > 0)));
+    if (shots) await shot(page, 'html-no-webserial-file.png', true);
+  });
   await step(`${label}: notice links to the simulator`, async () => {
     ctx.allow(base + '?demo');
     await Promise.all([page.waitForURL(/\?demo$/), page.click('#hostNotice a')]);
@@ -519,11 +551,11 @@ async function phone(browser, base) {
     // A fresh copy for file:// keeps its IndexedDB origin apart from other runs.
     for (const [base, label] of [[fileBase, 'file'], [httpBase, 'http']]) {
       console.log(`\n== simulator over ${label}`);
-      await demoFlow(browser, base, label, label === 'http');
+      await demoFlow(browser, base, label, label === 'http' && !!SHOTS);
       console.log(`\n== Web Serial (fake port) over ${label}`);
-      await serialFlow(browser, base, label + ' usb', label === 'http');
+      await serialFlow(browser, base, label + ' usb', label === 'http' && !!SHOTS);
       console.log(`\n== no Web Serial over ${label}`);
-      await noSerialFlow(browser, base, label + ' no-serial', label === 'http');
+      await noSerialFlow(browser, base, label + ' no-serial', label === 'http' && !!SHOTS);
     }
     console.log('\n== offline download (http)');
     await offlineFlow(browser, httpBase, 'offline');

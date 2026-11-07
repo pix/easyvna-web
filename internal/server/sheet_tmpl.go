@@ -82,7 +82,7 @@ td.num, th.num { text-align: right; }
 
 <header class="sh">
   <div>
-    <div class="kicker">Antenna sheet{{if .Simulated}}<span class="sim">SIMULATED DATA</span>{{end}}</div>
+    <div class="kicker">Antenna sheet{{if .Simulated}}<span class="sim">SIMULATED DATA</span>{{end}}{{if .File}}<span class="sim">FROM FILE · NOT LIVE</span>{{end}}</div>
     <h1>{{.A.Name}}</h1>
     <div class="what">{{if .A.Type}}{{.A.Type}}{{else}}antenna{{end}}{{if .A.Band}} · {{.A.Band}}{{end}}</div>
     <dl class="meta">

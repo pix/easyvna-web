@@ -1,0 +1,5 @@
+! Written for a 75 ohm system, dB/angle, kHz
+# kHz S DB R 75
+868000 -300 0
+869000 -13.979400087 180
+870000 0 0

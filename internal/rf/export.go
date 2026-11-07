@@ -5,8 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math"
-	"math/cmplx"
 	"strconv"
 	"strings"
 )
@@ -69,100 +67,3 @@ func WriteCSV(w io.Writer, freq []float64, s11, s21 []complex128) error {
 
 func fmtFreq(f float64) string { return strconv.FormatFloat(f, 'f', 0, 64) }
 func fmtF(v float64) string    { return strconv.FormatFloat(v, 'g', 9, 64) }
-
-// ReadTouchstone parses a Touchstone v1 file in any of the RI/MA/DB formats
-// and Hz/kHz/MHz/GHz units, returning frequencies (Hz), S11 and (for 2-port
-// files) S21. It is used by the tests and for importing reference traces.
-func ReadTouchstone(r io.Reader) (freq []float64, s11, s21 []complex128, err error) {
-	sc := bufio.NewScanner(r)
-	mult, format, z0 := 1e9, "MA", 50.0
-	var nums []float64
-	for sc.Scan() {
-		line := sc.Text()
-		if i := strings.IndexByte(line, '!'); i >= 0 {
-			line = line[:i]
-		}
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		if strings.HasPrefix(line, "#") {
-			f := strings.Fields(strings.ToUpper(line[1:]))
-			for k := 0; k < len(f); k++ {
-				switch f[k] {
-				case "HZ":
-					mult = 1
-				case "KHZ":
-					mult = 1e3
-				case "MHZ":
-					mult = 1e6
-				case "GHZ":
-					mult = 1e9
-				case "RI", "MA", "DB":
-					format = f[k]
-				case "R":
-					if k+1 < len(f) {
-						z0, _ = strconv.ParseFloat(f[k+1], 64)
-						k++
-					}
-				}
-			}
-			continue
-		}
-		for _, fld := range strings.Fields(line) {
-			v, perr := strconv.ParseFloat(fld, 64)
-			if perr != nil {
-				return nil, nil, nil, fmt.Errorf("touchstone: %w", perr)
-			}
-			nums = append(nums, v)
-		}
-	}
-	if err := sc.Err(); err != nil {
-		return nil, nil, nil, err
-	}
-	if z0 != Z0 {
-		return nil, nil, nil, fmt.Errorf("touchstone: reference impedance %g not supported", z0)
-	}
-	pair := func(a, b float64) complex128 {
-		switch format {
-		case "RI":
-			return complex(a, b)
-		case "DB":
-			a = pow10(a / 20)
-		}
-		return complexPolar(a, b)
-	}
-	// Try 2-port (9 numbers per point) when divisible by 9 and not by 3
-	// alone ambiguously; callers should know their file type, so decide by
-	// the number of columns of the first data row instead.
-	stride := 3
-	if len(nums)%9 == 0 && len(nums) > 0 && !looksOnePort(nums) {
-		stride = 9
-	}
-	if len(nums)%stride != 0 {
-		return nil, nil, nil, errors.New("touchstone: ragged data")
-	}
-	for i := 0; i < len(nums); i += stride {
-		freq = append(freq, nums[i]*mult)
-		s11 = append(s11, pair(nums[i+1], nums[i+2]))
-		if stride == 9 {
-			s21 = append(s21, pair(nums[i+3], nums[i+4]))
-		}
-	}
-	return freq, s11, s21, nil
-}
-
-// looksOnePort checks whether interpreting the numbers with stride 3 gives
-// monotonically increasing frequencies (which a 9-stride file would not).
-func looksOnePort(nums []float64) bool {
-	for i := 3; i < len(nums); i += 3 {
-		if nums[i] <= nums[i-3] {
-			return false
-		}
-	}
-	return true
-}
-
-func pow10(x float64) float64 { return math.Pow(10, x) }
-
-func complexPolar(mag, deg float64) complex128 { return cmplx.Rect(mag, deg*math.Pi/180) }

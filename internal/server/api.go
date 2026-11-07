@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"net/http"
 	"os"
+	"path"
 	"strings"
 	"time"
 
@@ -63,6 +64,7 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/antennas", s.hAntennaList)
 	mux.HandleFunc("GET /api/antennas/{name}", s.hAntennaGet)
 	mux.HandleFunc("POST /api/sheet", s.hSheet)
+	mux.HandleFunc("POST /api/file", s.hFile)
 	if s.opt.Backup {
 		mux.HandleFunc("GET /api/backup", s.hBackupGet)
 		mux.HandleFunc("POST /api/backup", s.hBackupPost)
@@ -373,6 +375,13 @@ func (s *Server) hExport(w http.ResponseWriter, r *http.Request) {
 		fmt.Sprintf("Measured %s, profile %s, %d points", res.Time.Format(time.RFC3339), res.Config.Profile, len(res.Freq)),
 		fmt.Sprintf("Calibration applied: %v; port extension %.1f ps", res.CalApplied, res.Config.PortExtPs),
 	}
+	if res.Source != nil {
+		comments[1] = fmt.Sprintf("Opened from file %s (%s), %d points; not a live measurement", res.Source.File, res.Source.Format, len(res.Freq))
+		comments[2] = "Calibration: as in the original file"
+		for _, n := range res.Source.Notes {
+			comments = append(comments, "Note: "+n)
+		}
+	}
 	if res.Name != "" {
 		comments = append(comments, "Snapshot: "+res.Name)
 	}
@@ -398,6 +407,11 @@ func (s *Server) hExport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	base := "easyvna-" + res.Config.Profile + "-" + res.Time.Format("20060102-150405")
+	if res.Source != nil {
+		if f, err := SnapshotFile(strings.TrimSuffix(res.Source.File, path.Ext(res.Source.File)) + "-easyvna"); err == nil {
+			base = strings.TrimSuffix(f, ".json")
+		}
+	}
 	if res.Name != "" {
 		f, _ := SnapshotFile(res.Name)
 		base = strings.TrimSuffix(f, ".json")

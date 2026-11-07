@@ -89,6 +89,7 @@ func Detect(freq []float64, d Derived) []Warning {
 // RefDelta compares a sweep against a stored reference trace.
 type RefDelta struct {
 	RefTime     string   `json:"refTime,omitempty"`
+	RefFile     string   `json:"refFile,omitempty"`    // the REF was opened from this file
 	DipFreq     *float64 `json:"dipFreq,omitempty"`    // current resonance near the reference point
 	RefDipFreq  *float64 `json:"refDipFreq,omitempty"` // reference resonance
 	DF          *float64 `json:"df,omitempty"`         // Hz, current - reference

@@ -1,0 +1,5 @@
+! No option values given: Touchstone defaults are GHz, S, MA, R 50
+#
+0.433 0.5 90
+0.868 0.25 -90
+0.915 0.1 180

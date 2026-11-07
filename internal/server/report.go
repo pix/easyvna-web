@@ -139,6 +139,8 @@ var reportTmpl = template.Must(template.New("report").Funcs(reportFuncs).Parse(r
 func (s *Server) calNoteLocked(r *Result) (string, bool) {
 	a := s.cal.Active
 	switch {
+	case r.Source != nil:
+		return "not known: opened from the file " + r.Source.File + ", not measured here", false
 	case !r.CalApplied:
 		return "not calibrated", false
 	case a == nil:
@@ -230,6 +232,9 @@ func (s *Server) buildReport(id, name, notes string, profiles []string, trimName
 	var profNames []string
 	for _, r := range picked {
 		label := labels[r.Config.Profile]
+		if r.Source != nil {
+			label = fileLabel(r.Source) + " · " + mhzRange(r.Config.Start, r.Config.Stop)
+		}
 		if label == "" {
 			label = "Custom sweep · " + mhzRange(r.Config.Start, r.Config.Stop)
 		}
@@ -391,6 +396,7 @@ type ReportChoice struct {
 	Label   string    `json:"label"`
 	Time    time.Time `json:"time"`
 	Verdict string    `json:"verdict,omitempty"`
+	File    bool      `json:"file,omitempty"` // opened from a file, not live
 }
 
 func (s *Server) reportChoicesLocked() []ReportChoice {
@@ -406,6 +412,13 @@ func (s *Server) reportChoicesLocked() []ReportChoice {
 	}
 	if r := s.lastByProfile["custom"]; r != nil {
 		out = append(out, ReportChoice{Profile: "custom", Label: "Custom " + mhzRange(r.Config.Start, r.Config.Stop), Time: r.Time})
+	}
+	if r := s.lastByProfile["file"]; r != nil && r.Source != nil {
+		c := ReportChoice{Profile: "file", Label: "File " + r.Source.File, Time: r.Time, File: true}
+		if len(r.Summary.Bands) > 0 && !r.Config.Identify {
+			c.Verdict = r.Summary.Bands[0].Verdict
+		}
+		out = append(out, c)
 	}
 	return out
 }

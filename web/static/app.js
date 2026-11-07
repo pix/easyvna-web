@@ -257,10 +257,10 @@ function renderTiles() {
   const tgt = defaultTarget();
   tile('aTune', 'TUNE', st.tune.active ? 'open · ' + mhzR(st.tune.target) + ' MHz' : tgt ? 'to ' + mhzR(tgt) + ' MHz' : 'trim to target', st.tune.active ? 'on' : '');
   const ref = st.refs[prof];
-  let refSub = 'tap: store this trace';
+  let refSub = S.res && S.res.source ? 'tap: use this file as REF' : 'tap: store this trace';
   if (ref) {
     const d = S.res && S.res.ref;
-    refSub = `set ${hhmm(ref.time)}` + (d && d.df != null ? ` · Δf ${sgn(d.df / 1e6, 2)} MHz` : '') + ' · tap: replace';
+    refSub = (ref.file ? `from ${ref.file}` : `set ${hhmm(ref.time)}`) + (d && d.df != null ? ` · Δf ${sgn(d.df / 1e6, 2)} MHz` : '') + ' · tap: replace';
   }
   tile('aRef', ref ? 'REF ✓' : 'REF', refSub, ref ? 'set' : '');
   $('aRefClear').hidden = !ref;
@@ -322,7 +322,7 @@ async function syncRef() {
   if (key === S.refKey) return;
   S.refKey = key;
   if (!ref) { S.ref = null; S.refName = ''; drawAll(); return; }
-  try { S.ref = normalize(await api('GET', 'api/ref?profile=' + encodeURIComponent(st.config.profile))); S.refName = 'REF ' + hhmm(ref.time); } catch { S.ref = null; }
+  try { S.ref = normalize(await api('GET', 'api/ref?profile=' + encodeURIComponent(st.config.profile))); S.refName = 'REF ' + (ref.file || hhmm(ref.time)); } catch { S.ref = null; }
   drawAll();
 }
 
@@ -503,11 +503,39 @@ function setResult(r) {
   onHoldResult(r);
   if (first || S.cursorIdx == null || S.cursorIdx >= r.freq.length) S.cursorIdx = r.summary.minSWRIndex;
   $('expS2p').hidden = !(r.s21 && r.s21.length);
-  renderWarnings(); renderVerdict(); renderTiles();
+  renderFileBar(); renderWarnings(); renderVerdict(); renderTiles();
   if (!$('tuneView').hidden) renderTune();
   if (!$('cmpView').hidden) renderCompare();
   drawAll();
 }
+
+// A measurement opened from a file is shown like a sweep, but always
+// labelled: file name, format, and "not live".
+function renderFileBar() {
+  const r = S.res, src = r && r.source, box = $('filebar');
+  box.hidden = !src;
+  if (!src) { box.innerHTML = ''; return; }
+  const notes = (src.notes || []).join(' · ');
+  box.innerHTML = `<span class="ftag">FILE · NOT LIVE</span><span class="fname">${esc(src.file)}</span>
+    <span class="muted">${esc(src.format)} · ${r.freq.length} points · ${mhzR(r.freq[0])}–${mhzR(r.freq[r.freq.length - 1])} MHz · opened ${hhmm(src.loaded)}</span>
+    <span class="sp"></span><button type="button" class="ghost small" id="fileAnother">Open another file</button>
+    <button type="button" class="small" id="fileLive">Back to live: SWEEP</button>
+    <div class="fnote">This is the measurement stored in the file, not the NanoVNA. Verdict, plots, REF, report and sheet use it until the next sweep.${notes ? ' Read as: ' + esc(notes) + '.' : ''}</div>`;
+  $('fileAnother').onclick = openMeasurementFile;
+  $('fileLive').onclick = () => run(() => api('POST', 'api/sweep'));
+}
+// openMeasurementFile asks for a Touchstone or CSV file (works without a
+// NanoVNA, also in browsers without Web Serial).
+function openMeasurementFile() { const inp = $('fileInput'); inp.value = ''; inp.click(); }
+$('fileInput').onchange = (e) => run(async () => {
+  const f = e.target.files[0]; if (!f) return;
+  if (f.size > 30e6) throw new Error(f.name + ' is too large (over 30 MB)');
+  if (S.state && S.state.tune.active) { closeTuneUI(); await api('POST', 'api/tune', { on: false }); }
+  const r = await api('POST', 'api/file', { name: f.name, data: await f.text() });
+  toast(`Opened ${r.source.file}: ${r.freq.length} points`);
+});
+$('btnOpenFile').onclick = openMeasurementFile;
+$('btnOpenFile2').onclick = openMeasurementFile;
 
 function renderWarnings() {
   const r = S.res, box = $('warnings');
@@ -527,7 +555,11 @@ function bandTitle(b) { return ['433', '869', '915'].includes(b.name) ? `${b.nam
 
 function renderVerdict() {
   const r = S.res, box = $('verdict');
-  if (!r) { box.innerHTML = '<div class="empty">Pick a profile above. Each tap runs one sweep.</div>'; return; }
+  if (!r) {
+    box.innerHTML = '<div class="empty">Pick a profile above. Each tap runs one sweep.<br>No NanoVNA here? <button type="button" class="ghost small" id="emptyOpen">Open a measurement file</button> <span class="small">(.s1p, .s2p or CSV)</span></div>';
+    $('emptyOpen').onclick = openMeasurementFile;
+    return;
+  }
   if (r.tune) return; // TUNE results do not replace the profile verdict
   const sm = r.summary;
   let html;
@@ -542,7 +574,7 @@ function renderVerdict() {
 
 function refRow(r) {
   const d = r.ref; if (!d) return '';
-  const parts = [`<span class="muted">vs REF ${hhmm(d.refTime)}</span>`];
+  const parts = [`<span class="muted">vs REF ${d.refFile ? esc(d.refFile) : hhmm(d.refTime)}</span>`];
   if (d.df != null) parts.push(`<span>Δf <span class="big">${sgn(d.df / 1e6, 2)}</span> MHz <span class="muted">(${mhz(d.refDipFreq)} → ${mhz(d.dipFreq)})</span></span>`);
   parts.push(`<span>ΔSWR @ ${mhzR(d.at)} MHz <b>${sgn(d.dswr, 2)}</b> <span class="muted">(${swrText(d.refSWR)} → ${swrText(d.swr)})</span></span>`);
   if (d.dBandWorst != null) parts.push(`<span>band worst <b>${sgn(d.dBandWorst, 2)}</b></span>`);
@@ -739,7 +771,7 @@ function drawSWR() {
     hlines: [{ y: 1.5, label: 'SWR 1.5' }, { y: 2, label: 'SWR 2' }],
     ref: (rr) => rr.derived.swr, dips: (d) => d.swr, envelope: holdOK ? { min: hl.envMin, max: hl.envMax } : null,
   });
-  $('legend').innerHTML = `<span><i style="border-color:var(--series1)"></i>Live${r && r.avgN > 1 ? ` (avg ${r.avgN})` : ''}</span>` +
+  $('legend').innerHTML = `<span><i style="border-color:var(--series1)"></i>${r && r.source ? 'File ' + esc(r.source.file) : 'Live'}${r && r.avgN > 1 ? ` (avg ${r.avgN})` : ''}</span>` +
     (S.ref ? `<span><i class="dash" style="border-color:var(--series2)"></i>${esc(S.refName)}</span>` : '') +
     (holdOK ? `<span class="band"><i style="background:var(--band2)"></i>HOLD: ${hl.positions} steady position${hl.positions === 1 ? '' : 's'}</span>` : '') +
     (hiTrace ? `<span><i style="border-color:#1baf7a"></i>position #${S.hold.highlight}</span>` : '') +
@@ -861,7 +893,8 @@ function printInfo() {
   if (!st) return '';
   const cal = st.cal.status, parts = [];
   parts.push(`<b>${esc(p ? p.label + (p.identify ? '' : ' MHz') : st.config.profile)}</b> ${mhzR(st.config.start)}–${mhzR(st.config.stop)} MHz`);
-  if (r) parts.push(`${r.freq.length} points, swept ${new Date(r.time).toLocaleString()}${r.avgN > 1 ? `, average of ${r.avgN}` : ''}`);
+  if (r && r.source) parts.push(`<b>file ${esc(r.source.file)} (not live)</b>, ${r.freq.length} points, ${mhzR(r.freq[0])}–${mhzR(r.freq[r.freq.length - 1])} MHz`);
+  else if (r) parts.push(`${r.freq.length} points, swept ${new Date(r.time).toLocaleString()}${r.avgN > 1 ? `, average of ${r.avgN}` : ''}`);
   parts.push('calibration ' + (!st.connected ? 'unknown' : !cal.known ? 'not reported' : cal.applied ? 'ON' : 'OFF') +
     (st.cal.active ? ` (${esc(st.cal.active.source)})` : ''));
   if (st.info) parts.push(`${esc(st.info.model)} fw ${esc(st.info.version)}${st.info.mock ? ' (simulated)' : ''}`);
@@ -1252,7 +1285,7 @@ async function openReport() {
     <div class="stepsub">It opens in a new tab (Print → Save as PDF) and is saved ${HOST ? 'in this browser' : 'in the data directory'}.</div>
     <label class="stepsub">Antenna name<br><input id="repName" class="wide" style="font-size:18px;padding:8px 10px;width:100%;max-width:420px" value="${esc(name)}" maxlength="80"></label>
     <div class="stepsub"><b>Include these sweeps</b> (latest of each profile):</div>
-    <div class="choices">${ch.length ? ch.map((c) => `<label><input type="checkbox" checked value="${esc(c.profile)}"> <b>${esc(c.label)}</b> <span class="muted">swept ${hhmm(c.time)}</span> ${c.verdict ? badge(c.verdict) : ''}</label>`).join('')
+    <div class="choices">${ch.length ? ch.map((c) => `<label><input type="checkbox" checked value="${esc(c.profile)}"> <b>${esc(c.label)}</b> <span class="muted">${c.file ? 'opened' : 'swept'} ${hhmm(c.time)}${c.file ? ' · not live' : ''}</span> ${c.verdict ? badge(c.verdict) : ''}</label>`).join('')
       : '<span class="muted">No profile sweeps yet: tap a profile first.</span>'}</div>
     <label class="stepsub">Trim log <select id="repTrim"><option value="">none</option>${S.trimList.map((t) => `<option ${t.name === st.trimActive ? 'selected' : ''}>${esc(t.name)}</option>`).join('')}</select></label>
     <div class="stepsub">${st.compare.leaderboard.length > 1 ? `S21 compare results (${st.compare.leaderboard.length - 1} vs ${esc(st.compare.aName)}) are included.` : 'No S21 compare results yet.'}</div>

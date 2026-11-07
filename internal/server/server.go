@@ -109,6 +109,8 @@ type Result struct {
 	Tune       *rf.TuneInfo `json:"tune,omitempty"`    // TUNE view readout
 	Compare    *CompareLive `json:"compare,omitempty"` // S21 compare against stored antenna A
 	Hold       *HoldLive    `json:"hold,omitempty"`    // stable-positions HOLD
+	// Source is set for a measurement opened from a file (not live).
+	Source *FileSource `json:"source,omitempty"`
 }
 
 func (r *Result) complexS11() []complex128 { return toComplex(r.S11) }
@@ -451,6 +453,11 @@ func (s *Server) state() State {
 	st.Refs = map[string]RefInfo{}
 	for k, r := range s.refs {
 		st.Refs[k] = RefInfo{Time: r.Time, Points: len(r.Freq), Start: r.Config.Start, Stop: r.Config.Stop, HasUndo: s.store.HasRefPrev(k)}
+		if r.Source != nil {
+			ri := st.Refs[k]
+			ri.File = r.Source.File
+			st.Refs[k] = ri
+		}
 	}
 	if s.tune != nil {
 		st.Tune = TuneView{Active: true, Target: s.tune.Target, Start: s.cfg.Start, Stop: s.cfg.Stop}

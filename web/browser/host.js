@@ -323,9 +323,12 @@
     if (!demo && !hasSerial) {
       const n = document.createElement('div');
       n.className = 'hostnotice'; n.id = 'hostNotice'; n.setAttribute('role', 'note');
-      n.innerHTML = `<b>${NO_SERIAL}</b> <span>This browser has no Web Serial, so it cannot talk to a NanoVNA over USB.</span>
-        <a class="btn primary small" href="${here}?demo">Try the simulator</a>`;
+      n.innerHTML = `<b>${NO_SERIAL}</b> <span>This browser has no Web Serial, so it cannot talk to a NanoVNA over USB.
+        You can still open a measurement file (.s1p, .s2p or CSV, e.g. saved by another VNA program) and get the full analysis.</span>
+        <button class="primary small" type="button" id="hostOpenFile">Open a measurement file</button>
+        <a class="btn ghost small" href="${here}?demo">Try the simulator</a>`;
       bar.after(n);
+      $('hostOpenFile').onclick = () => { if (typeof window.openMeasurementFile === 'function') window.openMeasurementFile(); };
     }
     if (storage.error) {
       const n = document.createElement('div');

@@ -94,8 +94,10 @@ server:
 * Web Serial through a fake `navigator.serial` whose port is backed by the
   Go simulator (`goMockShell`): request, open, driver, unplug, replug,
   reconnect after reload;
-* the no-Web-Serial notice, and the offline copy (byte-identical, runs from
-  disk).
+* opening measurement files (an exported `.s1p` again, a CSV with S21),
+  their export, and "Back to live";
+* the no-Web-Serial notice and opening a file from it, and the offline copy
+  (byte-identical, runs from disk).
 
 It fails on any console error, and on any request other than the page itself.
 
@@ -116,6 +118,7 @@ workflow also attaches `easyvna-web.html` to each release.
 | `POST /api/continuous` `{"on":true}` | continuous sweeping (results via SSE) |
 | `GET /api/last` | last result |
 | `GET /api/export?format=s1p\|s2p\|csv[&snapshot=name]` | download |
+| `POST /api/file {"name","data"}` | open a measurement file (`.s1p`, `.s2p`, CSV) as the current result, `source` set, LIVE stopped |
 | `POST /api/avg {"n":4}` | averaging (1, 2, 4, 8, 16) |
 | `POST /api/tune {"on":true,"target":869000000}` / `{"on":false}` | TUNE mode |
 | `POST /api/ref`, `DELETE /api/ref`, `POST /api/ref/undo`, `GET /api/ref?profile=` | REF trace per profile |
@@ -193,7 +196,10 @@ EasyVNA Web already detects it and reports that it is not supported. To add it:
 
 They cover the RF math (analytic series-RLC checks, bandwidth interpolation,
 band-edge interpolation, dip and harmonic classification, Touchstone
-round-trips) and the shell parser (recorded and synthetic transcripts: echo,
+round-trips, Touchstone and CSV import from hand-written fixtures in
+`internal/rf/testdata`: units, RI/MA/DB, 75 Ω renormalisation of one- and
+two-port data, Touchstone 2.0, noise data, decimal commas, R/X columns, and
+the refusals) and the shell parser (recorded and synthetic transcripts: echo,
 stale prompts, unknown or usage errors, trailing spaces, nan). They also run
 the driver against a scripted transport and the byte-level simulator
 (segmentation, learning the point limit, legacy fallback, cal flow, device
