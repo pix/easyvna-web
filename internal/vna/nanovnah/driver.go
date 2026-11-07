@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"vnaview/internal/vna"
+	"github.com/pix/easyvna-web/internal/vna"
 )
 
 // Options tune the driver.

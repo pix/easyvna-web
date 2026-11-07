@@ -229,7 +229,7 @@ func (s *Sim) execute(line string) string {
 	switch args[0] {
 	case "version":
 		if s.opt.Profiles {
-			return s.version() + nl + "Fork: EasyVNA by PiX (vnaview mock)" + nl
+			return s.version() + nl + "Fork: EasyVNA by PiX (EasyVNA Web mock)" + nl
 		}
 		return s.version() + nl
 	case "info":
@@ -241,8 +241,8 @@ func (s *Sim) execute(line string) string {
 			"Licensed under GPL.",
 			"  https://github.com/DiSlord/NanoVNA-D",
 			"Version: " + s.version() + " [p:" + strconv.Itoa(s.opt.MaxPoints) + ", IF:12k, ADC:384k, Lcd:480x320]",
-			"Build Time: simulated by vnaview -mock",
-			"Platform: vnaview simulator",
+			"Build Time: simulated by easyvna-web -mock",
+			"Platform: EasyVNA Web simulator",
 		}, nl) + nl
 	case "pause":
 		s.mu.Lock()
@@ -376,7 +376,7 @@ func (s *Sim) version() string {
 
 func (s *Sim) forkLine() string {
 	if s.opt.Profiles {
-		return "Fork: EasyVNA by PiX (vnaview mock)"
+		return "Fork: EasyVNA by PiX (EasyVNA Web mock)"
 	}
 	return "Licensed under GPL."
 }

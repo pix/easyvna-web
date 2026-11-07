@@ -1,0 +1,29 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4.2.2
+      - uses: actions/setup-go@v5.0.2
+        with:
+          go-version-file: go.mod
+      - name: test
+        run: go test ./...
+      - name: build archives
+        run: scripts/dist.sh "${GITHUB_REF_NAME}"
+      - name: create release
+        uses: softprops/action-gh-release@v2.0.8
+        with:
+          files: |
+            dist/*.zip
+            dist/*.tar.gz
+            dist/SHA256SUMS
+          generate_release_notes: true

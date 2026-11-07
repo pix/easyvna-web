@@ -3,7 +3,7 @@ package server
 import (
 	"strconv"
 
-	"vnaview/internal/rf"
+	"github.com/pix/easyvna-web/internal/rf"
 )
 
 // Profile is a one-tap sweep setup.

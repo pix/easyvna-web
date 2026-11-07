@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-// SlotMeta records what vnaview saved into a firmware calibration slot.
+// SlotMeta records what EasyVNA Web saved into a firmware calibration slot.
 // (The shell cannot report a slot's frequency range without recalling it.)
 type SlotMeta struct {
 	Profile string    `json:"profile"`

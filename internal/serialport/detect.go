@@ -1,11 +1,9 @@
 // Package serialport opens USB CDC serial ports in raw mode and finds
-// NanoVNA devices by USB VID:PID via sysfs (Linux).
+// NanoVNA devices by USB VID:PID: via sysfs on Linux, via the registry on
+// Windows, by /dev/cu.usbmodem* name on macOS (no VID:PID without cgo).
 package serialport
 
 import (
-	"os"
-	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
 )
@@ -25,37 +23,10 @@ var (
 
 // Candidate is a serial device with its USB identity.
 type Candidate struct {
-	Path    string // /dev/ttyACM0
+	Path    string // /dev/ttyACM0, COM5, /dev/cu.usbmodem401
 	ID      USBID
-	Product string // sysfs "product" string, if any
+	Product string // product / friendly name, if known
 	Serial  string
-}
-
-// SysfsRoot can be overridden by tests.
-var SysfsRoot = "/sys"
-
-// DevRoot can be overridden by tests.
-var DevRoot = "/dev"
-
-// List returns all ttyACM* devices with their USB IDs, sorted by path.
-func List() []Candidate {
-	matches, _ := filepath.Glob(filepath.Join(SysfsRoot, "class", "tty", "ttyACM*"))
-	var out []Candidate
-	for _, m := range matches {
-		name := filepath.Base(m)
-		c := Candidate{Path: filepath.Join(DevRoot, name)}
-		// .../ttyACM0/device -> USB interface dir; its parent is the USB device.
-		ifDir, err := filepath.EvalSymlinks(filepath.Join(m, "device"))
-		if err == nil {
-			usb := filepath.Dir(ifDir)
-			c.ID = USBID{readAttr(usb, "idVendor"), readAttr(usb, "idProduct")}
-			c.Product = readAttr(usb, "product")
-			c.Serial = readAttr(usb, "serial")
-		}
-		out = append(out, c)
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Path < out[j].Path })
-	return out
 }
 
 // Find returns the first candidate matching one of ids.
@@ -70,24 +41,16 @@ func Find(ids ...USBID) (Candidate, bool) {
 	return Candidate{}, false
 }
 
-func readAttr(dir, name string) string {
-	b, err := os.ReadFile(filepath.Join(dir, name))
-	if err != nil {
-		return ""
-	}
-	return strings.ToLower(strings.TrimSpace(string(b)))
-}
-
-// BusyError means another program has the port open; vnaview backs off
+// BusyError means another program has the port open; EasyVNA Web backs off
 // instead of fighting over it.
 type BusyError struct {
 	Path    string
-	Holders []Holder
+	Holders []Holder // known holders (Linux only)
 }
 
 func (e *BusyError) Error() string {
 	if len(e.Holders) == 0 {
-		return e.Path + " is busy (opened exclusively by another program)"
+		return e.Path + " is busy: another program (NanoVNA-Saver, a terminal, ...) has it open. Close it, then press Reconnect"
 	}
 	var b strings.Builder
 	for i, h := range e.Holders {

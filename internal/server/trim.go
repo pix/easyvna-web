@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"vnaview/internal/rf"
+	"github.com/pix/easyvna-web/internal/rf"
 )
 
 // TrimEntry is one logged (length, resonance) point.

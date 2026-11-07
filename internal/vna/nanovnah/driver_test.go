@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"vnaview/internal/vna"
-	"vnaview/internal/vna/mock"
+	"github.com/pix/easyvna-web/internal/vna"
+	"github.com/pix/easyvna-web/internal/vna/mock"
 )
 
 // scripted is a Transport that answers commands from a table, echoing like

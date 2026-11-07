@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"vnaview/internal/rf"
+	"github.com/pix/easyvna-web/internal/rf"
 )
 
 // CompareSession is the S21 COMPARE state: a fixed reference antenna on

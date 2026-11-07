@@ -1,4 +1,4 @@
-// Package vna defines the device-independent interface that vnaview uses to
+// Package vna defines the device-independent interface that EasyVNA Web uses to
 // talk to a vector network analyser. Each hardware family (NanoVNA-H/H4 text
 // shell, NanoVNA V2 binary protocol, ...) implements Device in its own
 // sub-package.

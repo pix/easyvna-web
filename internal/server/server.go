@@ -1,4 +1,4 @@
-// Package server implements the vnaview HTTP API, the sweep loop and the
+// Package server implements the EasyVNA Web HTTP API, the sweep loop and the
 // server-sent event stream that feeds the embedded web UI.
 package server
 
@@ -13,9 +13,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"vnaview/internal/rf"
-	"vnaview/internal/vna"
-	"vnaview/internal/vna/nanovnah"
+	"github.com/pix/easyvna-web/internal/rf"
+	"github.com/pix/easyvna-web/internal/vna"
+	"github.com/pix/easyvna-web/internal/vna/nanovnah"
 )
 
 // Opener connects to a device (real or mock).
@@ -145,7 +145,7 @@ type Options struct {
 	MockScenarios []string
 }
 
-// Server is the vnaview application.
+// Server is the EasyVNA Web application.
 type Server struct {
 	opt   Options
 	hub   *hub

@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"time"
 
-	"vnaview/internal/rf"
+	"github.com/pix/easyvna-web/internal/rf"
 )
 
 // ---------- averaging ----------

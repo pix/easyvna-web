@@ -14,9 +14,9 @@ import (
 	"testing/fstest"
 	"time"
 
-	"vnaview/internal/vna"
-	"vnaview/internal/vna/mock"
-	"vnaview/internal/vna/nanovnah"
+	"github.com/pix/easyvna-web/internal/vna"
+	"github.com/pix/easyvna-web/internal/vna/mock"
+	"github.com/pix/easyvna-web/internal/vna/nanovnah"
 )
 
 func newTestServer(t *testing.T, profiles bool) (*httptest.Server, *Server) {

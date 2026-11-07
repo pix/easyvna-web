@@ -1,4 +1,4 @@
-// Command vnaview serves a web UI for measuring antennas with a NanoVNA.
+// Command easyvna-web (EasyVNA Web) serves a web UI for measuring antennas with a NanoVNA.
 package main
 
 import (
@@ -7,42 +7,56 @@ import (
 	"flag"
 	"fmt"
 	"log"
-	"net"
 	"net/http"
 	"os"
 	"os/signal"
-	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
 
-	"vnaview/internal/serialport"
-	"vnaview/internal/server"
-	"vnaview/internal/vna"
-	"vnaview/internal/vna/mock"
-	"vnaview/internal/vna/nanovnah"
-	"vnaview/web"
+	"github.com/pix/easyvna-web/internal/serialport"
+	"github.com/pix/easyvna-web/internal/server"
+	"github.com/pix/easyvna-web/internal/vna"
+	"github.com/pix/easyvna-web/internal/vna/mock"
+	"github.com/pix/easyvna-web/internal/vna/nanovnah"
+	"github.com/pix/easyvna-web/web"
 )
+
+// version is set at build time: -ldflags "-X main.version=v0.1.0".
+var version = "dev"
 
 func main() {
 	listen := flag.String("listen", "127.0.0.1:8080", "HTTP listen address")
-	port := flag.String("port", "", "serial device (default: auto-detect NanoVNA-H/H4 by USB ID 0483:5740 on /dev/ttyACM*)")
+	port := flag.String("port", "", "serial device, e.g. COM5 or /dev/ttyACM0 (default: auto-detect NanoVNA-H/H4 by USB ID 0483:5740)")
+	noBrowser := flag.Bool("no-browser", false, "do not open the web browser at start-up")
 	useMock := flag.Bool("mock", false, "simulate a NanoVNA-H4 with a test antenna (no hardware needed)")
 	mockFW := flag.String("mock-firmware", "custom", "mock firmware: custom (EasyVNA/PiX fork: `profile` command, Fork: line) or stock (plain NanoVNA-D)")
 	mockAnt := flag.String("mock-antenna", "dual", "mock antenna scenario: "+strings.Join(scenarioNames(), ", "))
-	dataDir := flag.String("data", defaultDataDir(), "directory for snapshots and settings")
+	dataDir := flag.String("data", defaultDataDir(runtime.GOOS, os.Getenv, os.UserHomeDir, dirExists), "directory for settings, REF traces, trim logs, reports and snapshots")
 	maxPoints := flag.Int("maxpoints", 0, "override points per device scan (0 = auto: 401 on H4, 101 on H)")
 	calSettle := flag.Duration("cal-settle", 1500*time.Millisecond, "time the device sweeps with a standard attached before `cal <std>`")
 	trace := flag.Bool("trace", false, "log every shell exchange (debugging)")
 	readOnly := flag.Bool("readonly", false, "never change stored device state: no cal/save/recall/profile switching (sweeps only)")
+	showVersion := flag.Bool("version", false, "print the version and exit")
 	flag.Parse()
+	if *showVersion {
+		fmt.Println("easyvna-web", version)
+		return
+	}
 
-	logger := log.New(os.Stderr, "vnaview: ", log.LstdFlags)
+	logger := log.New(os.Stderr, "easyvna-web: ", log.LstdFlags)
+	listenSet := false
+	flag.Visit(func(f *flag.Flag) {
+		if f.Name == "listen" {
+			listenSet = true
+		}
+	})
 	store, err := server.NewStore(*dataDir)
 	if err != nil {
-		logger.Fatalf("data dir: %v", err)
+		fatal(logger, "data dir: %v", err)
 	}
 
 	var open server.Opener
@@ -52,10 +66,10 @@ func main() {
 	if *useMock {
 		_, ok := mock.Scenarios[*mockAnt]
 		if !ok {
-			logger.Fatalf("unknown -mock-antenna %q (have %s)", *mockAnt, strings.Join(scenarioNames(), ", "))
+			fatal(logger, "unknown -mock-antenna %q (have %s)", *mockAnt, strings.Join(scenarioNames(), ", "))
 		}
 		if *mockFW != "custom" && *mockFW != "stock" {
-			logger.Fatalf("-mock-firmware must be custom or stock")
+			fatal(logger, "-mock-firmware must be custom or stock")
 		}
 		antennaName = *mockAnt
 		var mu sync.Mutex
@@ -131,9 +145,9 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	ln, err := net.Listen("tcp", *listen)
+	ln, err := listenFallback(*listen, !listenSet, 20)
 	if err != nil {
-		logger.Fatalf("listen: %v", err)
+		fatal(logger, "listen: %v (another copy already running? use -listen 127.0.0.1:9090)", err)
 	}
 	hs := &http.Server{Handler: srv.Handler(), ReadHeaderTimeout: 10 * time.Second}
 	done := make(chan struct{})
@@ -151,9 +165,16 @@ func main() {
 	if *useMock {
 		mode = "mock (" + antennaName + ")"
 	}
-	logger.Printf("serving http://%s  [%s]  data: %s", ln.Addr(), mode, *dataDir)
+	url := "http://" + browserHost(ln.Addr().String())
+	logger.Printf("EasyVNA Web %s serving %s  [%s]  data: %s", version, url, mode, *dataDir)
+	fmt.Fprintf(os.Stderr, "\n  EasyVNA Web running at %s\n  %s\n\n", url, quitHint(runtime.GOOS))
+	if !*noBrowser {
+		if err := openBrowser(runtime.GOOS, url); err != nil {
+			logger.Printf("could not open a browser (%v): open %s yourself", err, url)
+		}
+	}
 	if err := hs.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		logger.Fatal(err)
+		fatal(logger, "%v", err)
 	}
 	<-done
 }
@@ -171,30 +192,7 @@ func openDriver(ctx context.Context, t nanovnah.Transport, opt nanovnah.Options,
 }
 
 func detect() (string, error) {
-	if c, ok := serialport.Find(serialport.IDNanoVNAH); ok {
-		return c.Path, nil
-	}
-	if c, ok := serialport.Find(serialport.IDNanoVNAV2); ok {
-		return "", fmt.Errorf("found a NanoVNA V2 (%s, %s): its binary protocol is not implemented yet", c.Path, c.ID)
-	}
-	var seen []string
-	for _, c := range serialport.List() {
-		seen = append(seen, fmt.Sprintf("%s (%s)", c.Path, c.ID))
-	}
-	if len(seen) == 0 {
-		return "", errors.New("no NanoVNA found: no /dev/ttyACM* devices (is it plugged in and switched on?)")
-	}
-	return "", fmt.Errorf("no NanoVNA (USB %s) found among %s; use -port", serialport.IDNanoVNAH, strings.Join(seen, ", "))
-}
-
-func defaultDataDir() string {
-	if d := os.Getenv("XDG_DATA_HOME"); d != "" {
-		return filepath.Join(d, "vnaview")
-	}
-	if h, err := os.UserHomeDir(); err == nil {
-		return filepath.Join(h, ".local", "share", "vnaview")
-	}
-	return "vnaview-data"
+	return pickPort(runtime.GOOS, serialport.List())
 }
 
 func scenarioNames() []string {

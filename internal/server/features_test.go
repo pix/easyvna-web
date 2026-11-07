@@ -14,9 +14,9 @@ import (
 	"testing/fstest"
 	"time"
 
-	"vnaview/internal/vna"
-	"vnaview/internal/vna/mock"
-	"vnaview/internal/vna/nanovnah"
+	"github.com/pix/easyvna-web/internal/vna"
+	"github.com/pix/easyvna-web/internal/vna/mock"
+	"github.com/pix/easyvna-web/internal/vna/nanovnah"
 )
 
 type rig struct {
@@ -84,7 +84,7 @@ func TestSurveyProfileAndWarnings(t *testing.T) {
 	if c := call(t, g.ts, "POST", "/api/profile", `{"id":"survey"}`, &pr); c != 200 {
 		t.Fatalf("survey: %d", c)
 	}
-	// Current PiX firmware has no `survey` profile: vnaview must not send it.
+	// Current PiX firmware has no `survey` profile: EasyVNA Web must not send it.
 	if pr.State.Config.Start != 50e6 || pr.State.Config.Stop != 1500e6 || strings.Contains(pr.Message, "device profile") {
 		t.Errorf("survey: %q %+v", pr.Message, pr.State.Config)
 	}

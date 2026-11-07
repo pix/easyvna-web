@@ -1,4 +1,4 @@
-//go:build !linux
+//go:build !linux && !windows && !darwin
 
 package serialport
 
@@ -9,7 +9,7 @@ type Port struct{}
 
 // Open is only implemented on Linux.
 func Open(path string) (*Port, error) {
-	return nil, errors.New("serial ports are only supported on Linux")
+	return nil, errors.New("serial ports are not supported on this platform")
 }
 
 func (p *Port) Read(b []byte) (int, error)  { return 0, errors.New("unsupported") }

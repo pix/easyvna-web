@@ -21,7 +21,7 @@ import (
 	"strconv"
 	"strings"
 
-	"vnaview/internal/vna"
+	"github.com/pix/easyvna-web/internal/vna"
 )
 
 // Prompt is the ChibiOS shell prompt printed by NanoVNA firmware.

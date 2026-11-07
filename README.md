@@ -1,184 +1,243 @@
-# vnaview
+# EasyVNA Web
 
-A small Go program with an embedded web UI for checking LoRa antennas
-(433 / 869 / 915 MHz) on a NanoVNA. It sweeps S11, grades the match per band,
-finds resonances, and calibrates from the browser. It is a single binary with
-no CDN or network dependencies, so it works offline.
+**Check LoRa antennas with a NanoVNA, in your browser.** EasyVNA Web is a
+single program (one `.exe` on Windows) that drives a NanoVNA-H / H4 over USB
+and gives you a clear verdict per LoRa band (433 / 869 / 915 MHz). It also
+has a trimming assistant, a stable-positions HOLD, S21 antenna comparison and
+a printable report card. It works offline and on a phone at the bench.
 
-Target hardware: **NanoVNA-H4 / NanoVNA-H** running NanoVNA-D (DiSlord) based
-firmware, over the USB CDC text shell (USB `0483:5740`).
+> [!WARNING]
+> **Developed with Claude (Anthropic's AI assistant, via Claude Code) under
+> the direction of PiX.** It is largely AI-generated. It has been tested in
+> simulation and on one NanoVNA-H4 under Linux. The Windows build is
+> untested on real hardware unless stated. Use at your own risk.
 
-## Run
+![EasyVNA Web: 869 MHz profile with verdict, REF overlay and SWR plot](doc/screenshots/hero.png)
+
+## Why EasyVNA Web
+
+- **One-click LoRa band profiles.** Tap *433*, *869* or *915* and get a
+  sweep centred on the band. *Wide* (300–1000 MHz) and *Survey*
+  (50–1500 MHz) identify an unknown antenna.
+- **Verdict at a glance.** Each band is graded GOOD, OK or BAD from its worst
+  in-band SWR. You also see the resonance and its offset, mismatch loss,
+  return loss and Q.
+- **TUNE with a trim calculator.** A full-screen live view shows the
+  resonance and a big SHORTEN or LENGTHEN arrow. The calculator learns your
+  antenna's MHz/mm from each cut. An optional tone lets you trim without
+  looking.
+- **HOLD stable positions.** Bend the antenna, hold it, bend again. Only
+  steady positions count, and you get the resonance spread: how robust is
+  the match?
+- **S21 COMPARE.** Rank antennas against a reference antenna, with no THRU
+  calibration needed.
+- **Report card.** One button produces a printable page (print to PDF) with
+  verdicts, plots, the trim log and compare results.
+- **Works on a phone.** The layout adapts to a phone, so you can keep it in
+  your hand at the bench.
+- **Runs as a single .exe on Windows.** Double-click it and the browser
+  opens. There is nothing to install and no internet is needed. The same
+  holds on Linux and macOS.
+
+## Screenshots
+
+| | |
+|---|---|
+| ![Antenna identification on the Survey sweep](doc/screenshots/survey-identify.png) | ![TUNE view with trim calculator](doc/screenshots/tune-trim.png) |
+| *Survey: every resonance, its nearest LoRa band and a trim hint* | *TUNE: live resonance, SHORTEN/LENGTHEN, learnt MHz/mm* |
+| ![HOLD stable positions](doc/screenshots/hold.png) | ![S21 compare leaderboard](doc/screenshots/compare.png) |
+| *HOLD: only steady positions, plus the resonance spread* | *S21 COMPARE: Δ dB vs antenna A and a leaderboard* |
+| ![Printable report](doc/screenshots/report.png) | ![Fake antenna warning](doc/screenshots/fake-antenna-warning.png) |
+| *Report card (print → PDF)* | *Automatic warnings: no antenna, bad calibration, lossy "fake" antenna* |
+| ![Phone](doc/screenshots/phone.png) | ![Phone TUNE](doc/screenshots/phone-tune.png) |
+| *On a phone* | *TUNE on a phone* |
+
+## Quick start
+
+### Windows
+
+1. Download `easyvna-web-<version>-windows-amd64.zip` from
+   [Releases](https://github.com/pix/easyvna-web/releases). Pick `arm64` for
+   Windows on ARM.
+2. Unzip it anywhere and **double-click `easyvna-web.exe`**. A console window
+   says *"EasyVNA Web running at http://127.0.0.1:8080. Close this window
+   to quit"*, and your browser opens on that page.
+3. Plug in the NanoVNA-H4 by USB and switch it on, then press **Reconnect**
+   if it was not found at start. Windows 10/11 needs no driver; the NanoVNA
+   shows up as a COM port (USB ID `0483:5740`) and is found automatically.
+
+The program is not code-signed, so SmartScreen may warn about it the first
+time (*More info → Run anyway*). Settings, REF traces, trim logs and reports
+are stored in `%LOCALAPPDATA%\easyvna-web`. If another program such as
+NanoVNA-Saver has the COM port open, EasyVNA Web says the port is busy.
+Close the other program and press Reconnect.
+
+### Linux
 
 ```sh
-go build -o vnaview .
-./vnaview                 # auto-detect the NanoVNA, serve http://127.0.0.1:8080
-./vnaview -mock           # no hardware: simulated H4 + test antenna
+tar xzf easyvna-web-<version>-linux-amd64.tar.gz
+./easyvna-web-<version>-linux-amd64/easyvna-web
 ```
 
-Then open http://127.0.0.1:8080.
+Your user needs access to the serial device: group `uucp` on Arch, `dialout`
+on Debian/Ubuntu. Data lives in `~/.local/share/easyvna-web`.
+
+### macOS
+
+```sh
+tar xzf easyvna-web-<version>-darwin-arm64.tar.gz
+./easyvna-web-<version>-darwin-arm64/easyvna-web
+```
+
+macOS builds are provided but untested. The NanoVNA is picked automatically
+when it is the only `/dev/cu.usbmodem*` device; otherwise use
+`-port /dev/cu.usbmodemXXXX`.
+
+### Try it without hardware
+
+```sh
+easyvna-web -mock
+```
+
+`-mock` simulates a NanoVNA-H4 with a test antenna. Under *Device* in the UI
+you can swap the simulated antenna: tuned, detuned, helical, a fake dummy
+load, an open cable, or a whip being bent.
+
+## Options
 
 | flag | default | meaning |
 |---|---|---|
-| `-listen` | `127.0.0.1:8080` | HTTP address |
-| `-port` | auto | serial device, e.g. `/dev/serial/by-id/usb-nanovna.com_NanoVNA-H4_400-if00`; auto-detect looks for USB `0483:5740` on `/dev/ttyACM*` (sysfs only, other ports are never opened) |
-| `-readonly` | off | never change stored device state: cal, save, recall and on-device profile switching are refused (in the server and the driver); sweeps still work |
-| `-mock` | off | simulate a NanoVNA-H4 (the real shell protocol is spoken by the simulator) |
-| `-mock-antenna` | `dual` | `dual` (433 whip, slightly long, with a 2nd mode near 850 MHz), `869` (whip slightly long), `869tuned`, `915` (tuned), `dummy` (lossy resistor posing as an antenna), `open` (no antenna), `bend` (whip being bent by hand: a new still position every 6 s with a motion burst in between). Switch live under *Device* in the UI |
-| `-mock-firmware` | `custom` | `custom` simulates the EasyVNA (PiX) fork (`profile` command, `Fork: PiX` line), `stock` plain NanoVNA-D |
-| `-data` | `$XDG_DATA_HOME/vnaview` or `~/.local/share/vnaview` | settings, REF traces, trim logs, compare session, reports, snapshots |
-| `-maxpoints` | auto | points per device scan (auto: 401 on H4, 101 on H, learnt from the firmware's error otherwise) |
-| `-cal-settle` | `1.5s` | time the device sweeps with a standard attached before `cal <std>` (older firmware copies the last live sweep) |
+| `-listen` | `127.0.0.1:8080` | HTTP address. If 8080 is taken and `-listen` was not given, the next free port is used |
+| `-no-browser` | off | do not open the browser at start-up |
+| `-port` | auto | serial device, e.g. `COM5`, `/dev/ttyACM0`, `/dev/serial/by-id/usb-nanovna.com_NanoVNA-H4_400-if00`. Auto-detect looks for USB `0483:5740` |
+| `-readonly` | off | never change stored device state: calibration, save, recall and on-device profile switching are refused. Sweeps still work. Use this when someone else's calibration must not be touched |
+| `-data` | per OS (see above) | settings, REF traces, trim logs, compare session, reports, snapshots |
+| `-mock` | off | simulate a NanoVNA-H4 (no hardware needed) |
+| `-mock-antenna` | `dual` | `dual`, `869`, `869tuned`, `915`, `dummy`, `open`, `bend` |
+| `-mock-firmware` | `custom` | `custom` simulates the EasyVNA firmware (`profile` command), `stock` plain NanoVNA-D |
+| `-maxpoints` | auto | points per device scan (401 on H4, 101 on H) |
+| `-cal-settle` | `1.5s` | time with a standard attached before `cal <std>` (older firmware) |
 | `-trace` | off | log every shell exchange |
+| `-version` | | print the version and exit |
 
-Linux only for serial access (raw termios via `syscall`). Your user needs
-access to the tty (group `uucp` on Arch, `dialout` on Debian/Ubuntu).
+## Firmware
+
+EasyVNA Web works with **stock NanoVNA-H / H4 firmware** (NanoVNA-D by
+DiSlord and compatible), and best with the **EasyVNA firmware**
+(https://github.com/pix/easyvna). The EasyVNA firmware adds the same LoRa
+profiles on the device and a `profile` shell command, which keeps the device
+and the browser in sync. EasyVNA Web recognises it from the
+`Fork: EasyVNA by PiX (...)` line (older builds print `Fork: PiX (...)`), or
+from `help` listing `profile`. The device badge then shows **EasyVNA**.
+
+Profiles and calibration slots are the same with both firmwares, so a
+calibration saved from either side is found by the other:
+
+| profile | range (MHz) | points | slot |
+|---|---|---|---|
+| survey | 50–1500 | 401 | 1 |
+| wide | 300–1000 | 401 | 3 |
+| 433 | 388.92–478.92 | 401 | 4 |
+| 869 | 779–959 | 401 | 5 |
+| 915 | 825–1005 | 401 | 6 |
+| custom | as saved | as saved | 2 |
+
+Slot 0 is left to you; stock firmware loads it at power-on. Offsets are
+measured from 433.92, 869 and 915 MHz. With the EasyVNA firmware, tapping a
+profile also makes the device remember it as the last-used profile, which
+is a small flash write. `-readonly` avoids that.
 
 ## Using it
 
-The page reads top to bottom. Profile → calibration (only shown when
-needed) → big action tiles → verdict → SWR plot. Every tile shows its state.
-Overwrites ask first and say what they replace, and cheap actions offer
-**Undo** in the toast.
+The page reads top to bottom. Pick a profile, calibrate if the strip asks
+for it, then use the big action tiles. Every tile shows its state. Anything
+that overwrites data says so first, and cheap actions offer **Undo**.
 
-1. **Profiles** (one tap sweeps once): **Wide** 300–1000 MHz and **Survey**
-   50–1500 MHz identify an antenna. They list every dip with SWR, mismatch
-   loss, RL, R+jX, SWR<2 bandwidth and Q, plus the nearest LoRa band and a
-   trim hint. Higher-order modes are flagged. **433 / 869 / 915** grade the
-   band.
-
-   | profile | range (MHz) | points | slot |
-   |---|---|---|---|
-   | survey | 50–1500 | 401 | 1 |
-   | wide | 300–1000 | 401 | 3 |
-   | 433 | 388.92–478.92 | 401 | 4 |
-   | 869 | 779–959 | 401 | 5 |
-   | 915 | 825–1005 | 401 | 6 |
-   | custom | as saved | as saved | 2 |
-
-   Slot 0 is left for the user, because stock firmware loads it at power-on.
-   The same slots are used with stock firmware, so a cal saved from either
-   side is found by the other. Offsets are measured from 433.92, 869 and
-   915 MHz.
-2. **Calibration strip:** a green one-liner when the active calibration
-   matches this profile. Otherwise it opens the one-tap
+1. **Profiles.** One tap sweeps once.
+2. **Calibration strip.** It is a green one-liner when the active
+   calibration matches the profile. Otherwise it opens a one-tap
    **OPEN → SHORT → LOAD → DONE → SAVE** flow. Fit the standards at the end
-   of the pigtail.
+   of the pigtail, where the antenna goes. Each profile needs its own
+   calibration.
 3. **Tiles:**
    * **SWEEP**: one sweep.
    * **LIVE**: continuous sweeping.
    * **TUNE**: full-screen trimming (below).
-   * **REF**: one tap stores the trace as a dashed reference (tap again to
-     replace, × to clear, both undoable). A row then shows **Δf** of the
-     resonance, **ΔSWR** at the band reference and the change in band worst
-     SWR. Detuning test: REF in free air, then hand or enclosure, then
-     read Δf.
-   * **HOLD**: a *stable positions* envelope for bend and hand-effect tests.
-     * A sweep whose RMS |ΔΓ| to the previous one exceeds the motion
-       threshold is shown as "moving…" and rejected. Sensitivity low, normal
-       or high is 0.010, 0.006 or 0.004. A static antenna on the real H4
-       measures about 0.0016 between sweeps; a 1-point (450 kHz at 869)
-       resonance shift is about 0.004.
-     * When N consecutive sweeps agree (default 3, adjustable 2–5), their
-       complex average, lightly smoothed, is captured as one position, and a
-       toast says "position 4 captured".
-     * A stable run that matches an existing position is not added again.
-       Slow creep is caught by also comparing against the start of the run.
-     * The envelope is min/max over positions only. The panel shows the
-       number of positions, the **resonance spread** (min–max and Δ MHz)
-       and the worst in-band SWR across positions.
-     * Tap a position to highlight its trace, or × to remove it. Clear and
-       remove can be undone.
-   * **AVG**: tap to cycle the complex average over ×1/2/4/8/16 sweeps.
-   * **COMPARE** and **REPORT**: below.
-4. **Automatic warnings:** "No antenna?" when |Γ| ≈ 1 everywhere, "Reflection
-   above 1" when the calibration does not fit, and "Looks lossy / resistive
-   (fake?)" when SWR is low and flat across a wide sweep with little
-   reactance swing. While a warning is up, verdicts show **CHECK** instead of
-   GOOD.
-5. **Verdict:** GOOD (worst in-band SWR < 1.5), OK (< 2) or BAD. Each card
-   shows worst SWR, its **mismatch loss**, RL, best SWR, % of the band under
-   SWR 2, and the resonance with its offset and Q. Mismatch loss
-   (−10·log10(1−|Γ|²)) is also in the cursor readout, the dip tables, TUNE
-   and the report.
-6. **Plots:** SWR with band shading, REF and HOLD. Smith, return loss, R/X
-   and S21 are in tabs.
+   * **REF**: one tap stores the trace as a dashed overlay, and the page
+     then shows Δf and ΔSWR against it. For a detuning test, take a REF in
+     free air, then hold the antenna or put it in its enclosure and read Δf.
+   * **HOLD**: stable positions (below).
+   * **AVG**: average ×1, 2, 4, 8 or 16 sweeps.
+   * **COMPARE**: S21 comparison (below).
+   * **REPORT**: the report card (below).
+4. **Automatic warnings.** *No antenna?* means |Γ| ≈ 1 everywhere.
+   *Reflection above 1* means the calibration does not fit. *Looks lossy /
+   resistive (fake?)* means SWR is low and flat across a wide sweep. While
+   a warning is shown, the verdicts read **CHECK** instead of GOOD.
+5. **Verdict.** GOOD means the worst in-band SWR is below 1.5, OK below 2,
+   BAD otherwise. Band edges are interpolated, so a coarse sweep cannot hide
+   a bad edge. Trim hints assume a length-tuned monopole, dipole or whip:
+   resonance below the band means the radiator is too long.
+6. **Plots.** The SWR plot shows the band, REF and HOLD. The Smith chart,
+   return loss, R/X and S21 are in tabs.
 
-### TUNE and the trim calculator
+**TUNE and the trim calculator.** TUNE runs a fast, narrow sweep that
+follows the resonance. It shows the offset to the target, SWR, RL and
+mismatch loss at the target, and an optional tone whose pitch rises as SWR
+falls.
+* Enter the element length once. The first prediction is
+  `L × f_res / f_target`.
+* After each cut, enter how much you cut (prefilled at 80 % of the
+  suggestion) and tap *Measure & log*.
+* The calculator learns your antenna's MHz/mm. It starts from the textbook
+  value, and your logged cuts take over once they move the resonance clearly
+  beyond the measurement noise.
+* Logs are stored per antenna.
 
-TUNE opens a full-screen view that runs a fast, narrow live sweep (101
-points, inside the profile's calibrated range, re-centred automatically).
-It shows the resonance, the offset to the target with **▼ SHORTEN / ▲
-LENGTHEN / ✓ ON TARGET** (resonance below target = too long), SWR at target
-(colour-graded), RL and mismatch loss. **Tone** (off by default) plays a
-pitch that rises as SWR at the target falls, so you can trim without
-looking.
+**HOLD: stable positions.** Use it for bend and hand-effect tests.
+* A sweep that differs from the previous one by more than the motion
+  threshold is shown as *moving…* and rejected.
+* When N sweeps in a row agree (default 3), they are averaged and captured
+  as one position.
+* The envelope covers captured positions only. The panel shows the
+  **resonance spread** and the worst in-band SWR across all positions.
+* Motion sensitivity is low, normal or high: 0.010, 0.006 or 0.004 RMS
+  |ΔΓ|. A static antenna on an H4 measures about 0.0016.
 
-Trim calculator: enter the element length once and tap **Start**. The first
-prediction is L_new = L × f_res / f_target. After each cut, enter the cut
-(prefilled at 80 % of the suggestion) and tap **Measure & log**, which takes
-a fresh sweep. vnaview learns this antenna's MHz/mm with a regularised fit:
-the textbook slope f/L is the prior, and logged cuts take over once they
-move the resonance clearly beyond the measurement scatter. The big CUT
-number always uses the live resonance, so it agrees with the readout above
-it. Logs are stored per antenna in `<data>/trim/`, with undo of the last
-entry and a sparkline and table. In `-mock`, logging a cut also shortens the
-simulated element (f = k/(L+δ), δ = 6 mm), so the learning can be watched
-without hardware.
+**S21 COMPARE.** Port 1 goes to a fixed reference antenna and port 2 to the
+antenna under test. Store antenna A, then swap in the others: you see the
+in-band Δ dB against A live, and can add each antenna to a leaderboard. The
+numbers are relative only, so no THRU calibration is needed. Keep the
+geometry fixed between antennas.
 
-### S21 COMPARE
+**REPORT.** Pick a name and the sweeps to include. You get a printable HTML
+page (Print → Save as PDF) with:
+* the verdict per band;
+* SWR, RL and Smith plots;
+* resonances with bandwidth and Q;
+* the trim log and compare results.
 
-A two-step wizard with large step text. Port 1 goes to a fixed reference
-antenna and port 2 to antenna A; tap **Store A**. Then swap port 2 to each
-candidate. It shows the live in-band **Δ dB vs A** (power average) in large
-type, worst and best Δ, and a Δ trace, and **Add to leaderboard** records
-each antenna. The measurement is relative only, so no THRU calibration is
-needed; keep the geometry fixed. Replacing A or starting over asks first and
-can be undone. The session is stored in `<data>/compare.json`.
+Reports are saved in the data directory.
 
-### REPORT
+## Developer notes
 
-Pick a name, the profile sweeps to include (the latest of each), the trim
-log and optional notes. You get a printable HTML page, which prints to PDF
-with A4 margins and needs no JavaScript. It contains:
-* the verdict per band with mismatch loss;
-* SWR, RL and Smith plots for each sweep, as inline SVG;
-* resonances with BW and Q;
-* the trim log;
-* the S21 compare leaderboard.
-
-Reports are saved in `<data>/reports/` and listed in the dialog for
-download.
-
-### Advanced, snapshots, device
-
-* *Advanced*: manual start, stop and points; S21; port extension; restore
-  the custom range saved in slot 2.
-* *Snapshots & export*: named snapshots and .s1p/.s2p/CSV export.
-* *Device*: device info and profiles. In mock mode it also has the mock
-  antenna switch.
-
-### On-device profiles (PiX firmware fork)
-
-vnaview treats the device as the EasyVNA fork when version/info prints a
-`Fork:` line mentioning EasyVNA or PiX (`Fork: EasyVNA by PiX (...)`, older
-builds `Fork: PiX (...)`), or when `help` lists `profile`. The device badge
-then shows "EasyVNA". `profile` with no argument prints:
-
-```
-wide 300000000 1000000000 401 3 1 0      name start stop points slot cal active
-...
-custom 850000000 950000000 201 2 1 0     custom start stop points slot saved active
-boot 869 ask=1
+```sh
+go build -o easyvna-web .          # build (Go 1.27+)
+go test -race ./... && go vet ./...
+./easyvna-web -mock                # simulated NanoVNA-H4, no hardware
+scripts/dist.sh v0.1.0             # release archives + SHA256SUMS into dist/
 ```
 
-On connect, vnaview adopts the device's ranges, points and slots. Tapping a
-profile runs `profile <wide|433|869|915|custom>`, so the device and the
-browser agree. Stock firmware falls back to `scan` with explicit ranges plus
-`recall N`, using the same slots. Calibration always uses stock commands:
-`cal reset|open|short|load|done`, then `save N`.
+Everything builds with `CGO_ENABLED=0` for Windows (amd64/arm64), Linux and
+macOS. The only dependency is `golang.org/x/sys`. Serial ports use raw
+termios on Linux and macOS, and the Win32 comm API on Windows. Port
+detection uses sysfs on Linux, the registry on Windows (USB VID:PID, cross-
+checked with `HARDWARE\DEVICEMAP\SERIALCOMM` to skip unplugged devices),
+and `/dev/cu.usbmodem*` on macOS. CI runs vet and tests on Linux, plus tests
+and a mock smoke test on Windows. Pushing a `v*` tag builds the release
+archives.
 
-## HTTP API
+### HTTP API
 
 | | |
 |---|---|
@@ -205,10 +264,10 @@ browser agree. Stock firmware falls back to `scan` with explicit ranges plus
 
 Example: `curl -s -XPOST localhost:8080/api/sweep | jq .summary.bands`
 
-## Layout
+### Code layout
 
 ```
-main.go                      flags, device auto-detect, wiring
+main.go, platform.go         flags, data dir per OS, port choice, browser, wiring
 web/                         embedded UI (index.html, app.js, style.css; vanilla JS + canvas)
 internal/rf/                 RF math: SWR, RL, mismatch loss, Z, Q, port extension,
                              bandwidth, dips, band verdicts, warnings, REF deltas,
@@ -216,13 +275,13 @@ internal/rf/                 RF math: SWR, RL, mismatch loss, Z, Q, port extensi
 internal/vna/                Device interface (+ optional Profiler)
 internal/vna/nanovnah/       NanoVNA-H/H4 shell driver: shell I/O, parser, driver
 internal/vna/mock/           byte-level shell simulator + multi-mode antenna model
-internal/serialport/         raw termios port (TIOCEXCL), sysfs VID:PID detection,
-                             refuses ports held by another process
+internal/serialport/         serial ports: termios (Linux/macOS), Win32 comm API (Windows);
+                             detection via sysfs / registry / cu.usbmodem; busy-port check
 internal/server/             HTTP API, SSE hub, sweep loop, profiles, averaging, TUNE,
                              REF, trim, compare, report (SVG), store
 ```
 
-## Shell protocol notes (NanoVNA-D `main.c`)
+### Shell protocol notes (NanoVNA-D `main.c`)
 
 * Commands end with `\r` (`\n` is ignored), the line limit is 64 characters
   and the shell takes at most 4 arguments. Every character is echoed, Enter
@@ -232,17 +291,17 @@ internal/server/             HTTP API, SSE hub, sweep loop, profiles, averaging,
 * `scan start stop points outmask` takes mask bits 1 = freq, 2 = S11,
   4 = S21, 8 = no cal, 16 = no e-delay, 32 = no S21 offset, 128 = binary.
   Text output is one `freq re im [re im] ` line per point. `scan` pauses the
-  on-device sweep; vnaview sends `resume` when it disconnects.
+  on-device sweep; EasyVNA Web sends `resume` when it disconnects.
 * `cal` with no arguments prints the set status bits by name:
   `load open short thru isoln Es Er Et cal'ed`, where `cal'ed` means the
   correction is applied.
 * If `scan` prints nothing (firmware without outmask), the driver falls back
   to `sweep` + `resume` + `pause` + `frequencies` + `data 0/1`.
 
-## Adding the NanoVNA V2 driver
+### Adding the NanoVNA V2 driver
 
 The V2 (`04b4:0008`) uses a binary register protocol, not a text shell.
-vnaview already detects it and reports that it is not supported. To add it:
+EasyVNA Web already detects it and reports that it is not supported. To add it:
 
 1. Create `internal/vna/nanovnav2/` with a type that implements `vna.Device`
    (`internal/vna/vna.go`): `Info`, `Scan`, `CalStatus`, `Calibrate`, `SaveCal`,
@@ -253,16 +312,12 @@ vnaview already detects it and reports that it is not supported. To add it:
 3. The V2 has no on-device SOL calibration over USB. Return a `CalStatus`
    with `Known: false`, and either return an error from `Calibrate` or
    implement host-side SOL error correction inside the driver.
-4. In `main.go`, change `detect()` to return the V2 device and open it with
-   the new driver.
+4. In `platform.go`, change `pickPort()` to return the V2 device, and in
+   `main.go` open it with the new driver.
 5. Test it the same way as the H driver: a scripted transport for the parser
    and a simulator for the driver.
 
-## Tests
-
-```sh
-go vet ./... && go test -race ./...
-```
+### Tests
 
 They cover the RF math (analytic series-RLC checks, bandwidth interpolation,
 band-edge interpolation, dip and harmonic classification, Touchstone
@@ -270,5 +325,14 @@ round-trips) and the shell parser (recorded and synthetic transcripts: echo,
 stale prompts, unknown or usage errors, trailing spaces, nan). They also run
 the driver against a scripted transport and the byte-level simulator
 (segmentation, learning the point limit, legacy fallback, cal flow, device
-profiles), sysfs detection with a fake tree, and the HTTP API end to end
-(profiles, cal save/auto-recall, device profiles, snapshots, export, SSE).
+profiles), sysfs detection with a fake tree, Windows registry detection
+with a fake registry (phantom ports, composite devices, COM10+), the
+per-OS data dir, port choice and port fallback, and the HTTP API end to end
+(profiles, cal, REF, TUNE/trim, HOLD, compare, report, snapshots, export,
+SSE). Simulations of a trim session and of a hand-bent antenna check that
+the trim fit and the HOLD motion rejection work.
+
+## License
+
+GPL-3.0, see [LICENSE](LICENSE). It matches the EasyVNA firmware, which
+is based on NanoVNA-D (GPL-3.0).

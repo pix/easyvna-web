@@ -12,8 +12,8 @@ import (
 	"strings"
 	"time"
 
-	"vnaview/internal/rf"
-	"vnaview/internal/vna"
+	"github.com/pix/easyvna-web/internal/rf"
+	"github.com/pix/easyvna-web/internal/vna"
 )
 
 func (s *Server) routes(mux *http.ServeMux) {
@@ -352,7 +352,7 @@ func (s *Server) hExport(w http.ResponseWriter, r *http.Request) {
 	format := strings.ToLower(q.Get("format"))
 	var buf bytes.Buffer
 	comments := []string{
-		"Exported by vnaview " + time.Now().Format(time.RFC3339),
+		"Exported by EasyVNA Web " + time.Now().Format(time.RFC3339),
 		fmt.Sprintf("Measured %s, profile %s, %d points", res.Time.Format(time.RFC3339), res.Config.Profile, len(res.Freq)),
 		fmt.Sprintf("Calibration applied: %v; port extension %.1f ps", res.CalApplied, res.Config.PortExtPs),
 	}
@@ -380,7 +380,7 @@ func (s *Server) hExport(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 500, err)
 		return
 	}
-	base := "vnaview-" + res.Config.Profile + "-" + res.Time.Format("20060102-150405")
+	base := "easyvna-" + res.Config.Profile + "-" + res.Time.Format("20060102-150405")
 	if res.Name != "" {
 		f, _ := SnapshotFile(res.Name)
 		base = strings.TrimSuffix(f, ".json")
@@ -658,7 +658,7 @@ func (s *Server) deviceHasProfileLocked(id string) bool {
 }
 
 // hCustomProfile restores the custom range saved with the custom slot: on
-// PiX firmware via `profile custom`, otherwise from what vnaview recorded
+// PiX firmware via `profile custom`, otherwise from what EasyVNA Web recorded
 // when it saved that slot (then recalled if auto-recall is on).
 func (s *Server) hCustomProfile(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
@@ -755,7 +755,7 @@ func (s *Server) applyDeviceProfile(ctx context.Context, p Profile) string {
 	return fmt.Sprintf("device profile %s applied; slot %d has no calibration yet", dp.Name, dp.Slot)
 }
 
-// recall loads a slot and records its range (if vnaview saved it).
+// recall loads a slot and records its range (if EasyVNA Web saved it).
 func (s *Server) recall(ctx context.Context, slot int) error {
 	s.opMu.Lock()
 	defer s.opMu.Unlock()
@@ -774,7 +774,7 @@ func (s *Server) recall(ctx context.Context, slot int) error {
 	if m, ok := s.settings.Slots[slot]; ok {
 		s.cal.Active = &CalRange{Start: m.Start, Stop: m.Stop, Points: m.Points, Source: fmt.Sprintf("slot %d", slot), Slot: &sl}
 	} else {
-		s.cal.Active = nil // range unknown: not saved by vnaview
+		s.cal.Active = nil // range unknown: not saved by EasyVNA Web
 	}
 	s.cal.Flow.Message = fmt.Sprintf("recalled slot %d", slot)
 	return nil

@@ -1,5 +1,5 @@
 'use strict';
-// vnaview browser UI: vanilla JS + canvas, no external dependencies.
+// EasyVNA Web browser UI: vanilla JS + canvas, no external dependencies.
 
 const $ = (id) => document.getElementById(id);
 const S = {
@@ -67,11 +67,11 @@ function ask(title, text, ok = 'OK') {
 
 // ---------- theme ----------
 function applyTheme(t) { if (t) document.documentElement.dataset.theme = t; }
-applyTheme(store('vnaview-theme'));
+applyTheme(store('easyvna-theme'));
 $('btnTheme').onclick = () => {
   const cur = document.documentElement.dataset.theme || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
   const next = cur === 'dark' ? 'light' : 'dark';
-  applyTheme(next); store('vnaview-theme', next); drawAll();
+  applyTheme(next); store('easyvna-theme', next); drawAll();
 };
 matchMedia('(prefers-color-scheme: dark)').addEventListener('change', drawAll);
 
@@ -81,7 +81,7 @@ function connectEvents() {
   es.addEventListener('state', (e) => { S.state = JSON.parse(e.data); renderState(); });
   es.addEventListener('sweep', (e) => { setResult(JSON.parse(e.data)); });
   es.addEventListener('snapshots', (e) => { S.snapshots = JSON.parse(e.data); renderSnaps(); });
-  es.onerror = () => { showBanner('Lost connection to the vnaview server, retrying…'); };
+  es.onerror = () => { showBanner('Lost connection to the EasyVNA Web server, retrying…'); };
   es.onopen = () => { showBanner(''); };
 }
 function showBanner(msg) { const b = $('banner'); b.textContent = msg; b.hidden = !msg; }
@@ -1002,7 +1002,7 @@ function renderTrim(force) {
   if (!t || !t.entries.length) {
     const defName = t ? t.name : 'antenna-' + new Date().toISOString().slice(5, 10);
     box.innerHTML = `<h3>Trim calculator</h3>
-      <div class="cutnote">Measure the radiating element once, enter its length and tap <b>Start</b>. vnaview predicts the cut and learns this antenna's MHz/mm from every cut you log.</div>
+      <div class="cutnote">Measure the radiating element once, enter its length and tap <b>Start</b>. EasyVNA Web predicts the cut and learns this antenna's MHz/mm from every cut you log.</div>
       <div class="row"><input id="trimName" class="wide" value="${esc(defName)}" maxlength="80" aria-label="Antenna name">
       <input id="trimLen" type="number" step="0.1" min="1" placeholder="length mm" aria-label="Element length in mm">
       <button id="trimStart" class="primary bigbtn" type="button">Start</button></div><div class="row" style="margin-top:8px">${switcher}</div>`;

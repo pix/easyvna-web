@@ -1,3 +1,12 @@
+# binaries
 /vnaview
+/easyvna-web
+*.exe
+# release archives (built by scripts/dist.sh)
+/dist/
+# local data directories (never commit measurements or settings)
+/easyvna-web-data/
+/vnaview-data/
+/smoke-data/
 *.test
 *.out
