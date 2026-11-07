@@ -1,0 +1,104 @@
+package mock
+
+import (
+	"math"
+	"math/cmplx"
+)
+
+// Mode is one series-resonant branch of the antenna model (Foster form):
+// a series RLC with resonance F0 (Hz), resistance R (Ω) at resonance and
+// loaded quality factor Q.
+type Mode struct {
+	F0 float64
+	R  float64
+	Q  float64
+}
+
+// Antenna is a multi-mode antenna behind a coax pigtail. The modes are
+// connected in parallel (their admittances add), which produces one
+// series resonance per mode with anti-resonances in between, like a real
+// whip with a fundamental and a higher-order mode.
+type Antenna struct {
+	Name  string
+	Modes []Mode
+	// Pigtail between VNA port and antenna.
+	CableLen float64 // m
+	CableVF  float64
+	// CableLossDB is the one-way loss at 1 GHz (scales with sqrt(f)).
+	CableLossDB float64
+	// Drift slowly moves all resonances by up to ±Drift (relative), so a
+	// continuous sweep visibly changes (hand effect, temperature, ...).
+	Drift float64
+	// S21Coupling is the peak |S21| of the simulated two-antenna link.
+	S21Coupling float64
+}
+
+// Scenarios selectable with -mock-antenna.
+var Scenarios = map[string]func() Antenna{
+	// A coil-loaded 433 MHz whip cut slightly long, whose second mode lands
+	// just below the 863-870 MHz band (a common sight on cheap helicals).
+	"dual": func() Antenna {
+		return Antenna{
+			Name:     "helical 433 whip, slightly long (2nd mode near 850 MHz)",
+			Modes:    []Mode{{F0: 429.5e6, R: 41, Q: 28}, {F0: 851e6, R: 58, Q: 16}},
+			CableLen: 0.10, CableVF: 0.695, CableLossDB: 0.08, Drift: 0.0015, S21Coupling: 0.03,
+		}
+	},
+	// A quarter-wave 868 MHz whip that is slightly long (resonance below band).
+	"869": func() Antenna {
+		return Antenna{
+			Name:     "quarter-wave 868 whip, slightly long",
+			Modes:    []Mode{{F0: 856e6, R: 38, Q: 14}, {F0: 2.6e9, R: 90, Q: 10}},
+			CableLen: 0.10, CableVF: 0.695, CableLossDB: 0.08, Drift: 0.0015, S21Coupling: 0.03,
+		}
+	},
+	// A well-tuned 915 MHz antenna.
+	"915": func() Antenna {
+		return Antenna{
+			Name:     "915 MHz whip, tuned",
+			Modes:    []Mode{{F0: 914e6, R: 47, Q: 12}, {F0: 2.75e9, R: 90, Q: 10}},
+			CableLen: 0.10, CableVF: 0.695, CableLossDB: 0.08, Drift: 0.0015, S21Coupling: 0.03,
+		}
+	},
+}
+
+// DefaultAntenna is the "dual" scenario.
+func DefaultAntenna() Antenna { return Scenarios["dual"]() }
+
+// Impedance of the bare antenna at frequency f, t seconds after start.
+func (a Antenna) Impedance(f, t float64) complex128 {
+	scale := 1 + a.Drift*math.Sin(2*math.Pi*t/23)
+	w := 2 * math.Pi * f
+	var y complex128
+	for _, m := range a.Modes {
+		w0 := 2 * math.Pi * m.F0 * scale
+		l := m.Q * m.R / w0
+		c := 1 / (w0 * w0 * l)
+		// Radiation resistance grows roughly with f^2 around resonance.
+		r := m.R * (0.2 + 0.8*(f/(m.F0*scale))*(f/(m.F0*scale)))
+		z := complex(r, w*l-1/(w*c))
+		y += 1 / z
+	}
+	if y == 0 {
+		return complex(1e6, 0)
+	}
+	return 1 / y
+}
+
+// Measure returns S11 seen at the VNA port (through the pigtail) and the
+// simulated S21 of a link to a second identical antenna.
+func (a Antenna) Measure(f, t float64) (s11, s21 complex128) {
+	z := a.Impedance(f, t)
+	g := (z - 50) / (z + 50)
+	tau := 0.0
+	if a.CableVF > 0 {
+		tau = a.CableLen / (a.CableVF * 299792458.0)
+	}
+	lossDB := a.CableLossDB * math.Sqrt(f/1e9)
+	att := math.Pow(10, -lossDB/20)
+	w := 2 * math.Pi * f
+	s11 = g * cmplx.Rect(att*att, -2*w*tau)
+	mg := cmplx.Abs(g)
+	s21 = cmplx.Rect(a.S21Coupling*(1-mg*mg)*att, -w*(tau+3e-9))
+	return s11, s21
+}

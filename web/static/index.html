@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>vnaview</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M1 4 C5 4 6 13 8 13 S11 4 15 4' fill='none' stroke='%232a78d6' stroke-width='2'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand">vnaview</div>
+  <div id="devpill" class="pill" title="Device"><span class="dot"></span><span id="devtext">connecting…</span></div>
+  <div id="calpill" class="pill" title="Calibration as reported by the firmware">CAL ?</div>
+  <div class="spacer"></div>
+  <button id="btnConnect" class="ghost" type="button">Reconnect</button>
+  <button id="btnTheme" class="ghost" type="button" aria-label="Toggle light/dark theme">Theme</button>
+</header>
+
+<main>
+  <div id="banner" class="banner" hidden></div>
+
+  <!-- 1. Profiles + sweep -->
+  <section class="profiles-row">
+    <div id="profiles" class="profiles" role="group" aria-label="Sweep profiles"></div>
+    <div class="sweepbtns">
+      <button id="btnSingle" class="primary" type="button">Single sweep</button>
+      <button id="btnCont" class="toggle" type="button" aria-pressed="false"><span class="led"></span>Continuous</button>
+      <div id="sweepinfo" class="muted small"></div>
+    </div>
+  </section>
+
+  <!-- 2. Calibration strip -->
+  <section class="calstrip panel" aria-label="Calibration">
+    <div class="calhead">
+      <div><strong>Calibrate</strong> <span id="calfor" class="muted"></span></div>
+      <div id="calactive" class="small"></div>
+    </div>
+    <div class="calsteps">
+      <button class="calstep" data-step="open" type="button"><span class="n">1</span>OPEN</button>
+      <span class="arrow" aria-hidden="true">›</span>
+      <button class="calstep" data-step="short" type="button"><span class="n">2</span>SHORT</button>
+      <span class="arrow" aria-hidden="true">›</span>
+      <button class="calstep" data-step="load" type="button"><span class="n">3</span>LOAD</button>
+      <span class="arrow" aria-hidden="true">›</span>
+      <button class="calstep" data-step="done" type="button"><span class="n">4</span>DONE</button>
+      <span class="arrow" aria-hidden="true">›</span>
+      <button class="calstep" data-step="save" type="button"><span class="n">5</span>SAVE <span id="slotlbl"></span></button>
+      <div class="calside">
+        <label class="small">slot <select id="slotSel"></select></label>
+        <button id="btnRecall" class="ghost small" type="button">Recall</button>
+        <label class="small check"><input id="autoRecall" type="checkbox"> auto-recall per profile</label>
+      </div>
+    </div>
+    <div id="calmsg" class="calmsg small"></div>
+  </section>
+
+  <!-- 3. Verdict -->
+  <section id="verdict" class="verdict" aria-live="polite"></section>
+
+  <!-- 4. Main SWR plot -->
+  <section class="panel plotpanel">
+    <div class="plothead">
+      <h2>SWR</h2>
+      <div id="legend" class="legend"></div>
+      <div class="spacer"></div>
+      <div class="seg" id="swrScale" role="group" aria-label="SWR scale">
+        <button type="button" data-max="3">1–3</button><button type="button" data-max="5">1–5</button><button type="button" data-max="10">1–10</button>
+      </div>
+      <button id="btnBest" class="ghost small" type="button" title="Move cursor to the lowest SWR">Cursor → best</button>
+    </div>
+    <canvas id="swrPlot" class="plot main" tabindex="0" aria-label="SWR versus frequency. Use arrow keys to move the cursor."></canvas>
+    <div id="readout" class="readout"></div>
+  </section>
+
+  <!-- 5. Secondary views -->
+  <section class="panel">
+    <div class="tabs" role="tablist">
+      <button role="tab" data-tab="smith" type="button">Smith chart</button>
+      <button role="tab" data-tab="rl" type="button">Return loss</button>
+      <button role="tab" data-tab="z" type="button">Impedance R / X</button>
+      <button role="tab" data-tab="s21" type="button" id="tabS21" hidden>S21</button>
+    </div>
+    <div class="tabbody">
+      <canvas id="smith" class="plot smith" data-pane="smith"></canvas>
+      <canvas id="rlPlot" class="plot" data-pane="rl" hidden></canvas>
+      <canvas id="zPlot" class="plot" data-pane="z" hidden></canvas>
+      <canvas id="s21Plot" class="plot" data-pane="s21" hidden></canvas>
+    </div>
+  </section>
+
+  <!-- 6. Collapsed extras -->
+  <details class="panel" id="advanced">
+    <summary>Advanced sweep</summary>
+    <form id="advForm" class="grid">
+      <label>Start (MHz)<input id="advStart" type="number" step="0.001" min="0.01" required></label>
+      <label>Stop (MHz)<input id="advStop" type="number" step="0.001" min="0.01" required></label>
+      <label>Points<select id="advPoints"></select></label>
+      <label class="check"><input id="advS21" type="checkbox"> Also measure S21 (2-port check)</label>
+      <fieldset class="portext">
+        <legend>Port extension (de-embed a cable after calibration)</legend>
+        <label>Length (cm)<input id="peLen" type="number" step="0.1" min="0" value="0"></label>
+        <label>Velocity factor<input id="peVF" type="number" step="0.01" min="0.1" max="1" value="0.695"></label>
+        <span class="muted small" id="pePs"></span>
+      </fieldset>
+      <div class="formbtns"><button class="primary" type="submit">Apply</button>
+        <span class="muted small">Setting a custom range switches to a custom profile. Calibrate at the end of the pigtail and leave port extension at 0 when you can.</span></div>
+    </form>
+  </details>
+
+  <details class="panel" id="snapsPanel">
+    <summary>Snapshots &amp; export</summary>
+    <div class="snapbar">
+      <form id="snapForm" class="inline">
+        <input id="snapName" placeholder="Snapshot name, e.g. whip-trimmed-2mm" maxlength="80" required>
+        <button class="primary" type="submit">Save snapshot</button>
+      </form>
+      <div class="exports">
+        Export last sweep:
+        <a class="btn ghost small" href="api/export?format=s1p" download>.s1p</a>
+        <a class="btn ghost small" href="api/export?format=csv" download>CSV</a>
+        <a class="btn ghost small" id="expS2p" href="api/export?format=s2p" download hidden>.s2p</a>
+      </div>
+    </div>
+    <table class="snaps"><thead><tr><th>Name</th><th>Taken</th><th>Profile</th><th>Pts</th><th></th></tr></thead><tbody id="snapList"></tbody></table>
+  </details>
+
+  <details class="panel" id="devPanel">
+    <summary>Device</summary>
+    <pre id="devinfo" class="devinfo"></pre>
+  </details>
+</main>
+<div id="toast" class="toast" role="status" hidden></div>
+<script src="app.js"></script>
+</body>
+</html>
