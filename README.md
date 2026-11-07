@@ -26,7 +26,7 @@
   positions count, so you see how robust the match really is.
 - **S21 COMPARE.** Rank antennas against a reference antenna, with no THRU
   calibration needed.
-- **Report card.** One button produces a clean A4 PDF with the verdicts,
+- **Report card.** One button produces a clean A4 or Letter PDF with the verdicts,
   plots, trim log and comparison.
 - **Works on a phone** at the bench, in light or dark mode.
 - **Runs as a single `.exe` on Windows.** Double-click it and the browser
@@ -154,7 +154,10 @@ It contains:
   there is data;
 * your notes, and *page X of Y* on every page.
 
-A typical antenna fits on two A4 pages. See the sample:
+Pick **A4** or **Letter** in the report toolbar. The default follows your
+browser's language (Letter for the US, Canada, Mexico…) and your last choice
+is remembered; `?paper=letter` in the report URL forces it. A typical
+antenna fits on two pages. See the A4 sample:
 **[doc/sample-report.pdf](doc/sample-report.pdf)**.
 
 <p align="center"><img src="doc/screenshots/report-print.png" alt="First page of the printed report" width="520"></p>
@@ -182,7 +185,7 @@ A typical antenna fits on two A4 pages. See the sample:
 | **AVG** | averaging over ×1 / 2 / 4 / 8 / 16 sweeps |
 | **COMPARE** | S21 against antenna A, live Δ dB in band, leaderboard |
 | **Warnings** | no antenna or open cable, reflection above 1 (bad calibration), lossy / fake antenna |
-| **Report** | printable A4 report with vector plots and tables, saved in the data folder |
+| **Report** | printable A4 / Letter report with vector plots and tables, saved in the data folder |
 | **Export** | Touchstone `.s1p` / `.s2p`, CSV, named snapshots |
 | **Plots** | SWR, return loss, Smith chart, R/X, S21, with a cursor readout |
 | **Anywhere** | phone layout, light and dark mode, works offline |

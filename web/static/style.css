@@ -414,7 +414,7 @@ body.locked { overflow: hidden; }
 /* ---- printing the main page (Ctrl+P): clean, light, no controls ----
    For a full antenna document use REPORT, which is designed for print. */
 @media print {
-  @page { size: A4 portrait; margin: 12mm; }
+  @page { size: portrait; margin: 12mm; } /* printer's paper: A4 or Letter */
   :root, :root[data-theme="dark"] {
     color-scheme: light; --page: #fff; --surface: #fff; --raised: #fff; --ink: #111; --ink2: #333; --muted: #555;
     --border: #ccc; --grid: #e0e0e0;

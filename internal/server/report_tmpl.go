@@ -1,7 +1,7 @@
 package server
 
 // reportHTML is a print-first document: on screen it looks like a sheet of
-// paper, and Print → Save as PDF gives a clean A4 (or Letter) report with a
+// paper, and Print → Save as PDF gives a clean A4 or US Letter report with a
 // running footer "page X of Y" (CSS @page margin boxes, Chromium-based
 // browsers; other browsers print without the page numbers).
 const reportHTML = `<!doctype html>
@@ -9,7 +9,6 @@ const reportHTML = `<!doctype html>
 <title>{{.Name}}: EasyVNA antenna report</title>
 <style>
 @page {
-  size: A4 portrait;
   margin: 12mm 13mm 15mm 13mm;
   @bottom-left { content: "EasyVNA Web · report {{.ReportID}} · generated {{time .Generated}}"; font: 7.5pt Helvetica, Arial, sans-serif; color: #666; }
   @bottom-right { content: "page " counter(page) " of " counter(pages); font: 7.5pt Helvetica, Arial, sans-serif; color: #666; }
@@ -21,6 +20,11 @@ html { background: #e6e6e2; }
 body { margin: 0; color: var(--ink); font: 9.5pt/1.4 Helvetica, Arial, "Segoe UI", sans-serif; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
 .paper { width: 210mm; max-width: 100%; margin: 12px auto 24px; background: #fff; padding: 12mm 13mm; box-shadow: 0 2px 12px rgba(0,0,0,.15); }
 .toolbar { width: 210mm; max-width: 100%; margin: 12px auto 0; display: flex; gap: 8px; }
+.toolbar .sp { flex: 1; }
+.toolbar .paperpick { display: inline-flex; border: 1px solid #bbb; border-radius: 6px; overflow: hidden; }
+.toolbar .paperpick button { border: 0; border-radius: 0; }
+.toolbar .paperpick button[aria-pressed="true"] { background: #222; color: #fff; }
+html.letter .paper, html.letter .toolbar { width: 215.9mm; }
 .toolbar button, .toolbar a { font: 10pt Helvetica, Arial, sans-serif; padding: 6px 12px; border: 1px solid #bbb; border-radius: 6px; background: #fff; color: #222; text-decoration: none; cursor: pointer; }
 
 /* header */
@@ -83,8 +87,33 @@ table.dips td:nth-child(-n+8) { white-space: nowrap; }
 @media (max-width: 700px) {
   .paper { padding: 5mm; } .meta { grid-template-columns: auto 1fr; } .row2, .cols { grid-template-columns: 1fr; }
 }
-</style></head><body>
-<div class="toolbar noprint"><button onclick="print()">Print / save as PDF</button><a href="?download=1">Download HTML</a></div>
+</style>
+<style id="pagesize">@page { size: A4 portrait; }</style>
+<script>
+// Paper size: ?paper=a4|letter, else the last choice, else the browser
+// locale (US, Canada, Mexico, Philippines… print on Letter).
+(function () {
+  var LETTER = /-(US|CA|MX|PH|CL|CO|VE|GT|CR|PA|DO|PR|SV|NI|BZ)\b/i;
+  function get() {
+    var q = (location.search.match(/[?&]paper=(a4|letter)/i) || [])[1];
+    if (q) return q.toLowerCase();
+    try { var v = localStorage.getItem("easyvna.paper"); if (v === "a4" || v === "letter") return v; } catch (e) {}
+    var langs = navigator.languages || [navigator.language || ""];
+    return LETTER.test(langs[0] || "") ? "letter" : "a4";
+  }
+  window.setPaper = function (p, remember) {
+    document.documentElement.classList.toggle("letter", p === "letter");
+    document.getElementById("pagesize").textContent = "@page { size: " + (p === "letter" ? "letter" : "A4") + " portrait; }";
+    var bs = document.querySelectorAll(".paperpick button");
+    for (var i = 0; i < bs.length; i++) bs[i].setAttribute("aria-pressed", String(bs[i].value === p));
+    if (remember) { try { localStorage.setItem("easyvna.paper", p); } catch (e) {} }
+  };
+  var p = get();
+  window.setPaper(p, false);
+  document.addEventListener("DOMContentLoaded", function () { window.setPaper(p, false); });
+})();
+</script></head><body>
+<div class="toolbar noprint"><button onclick="print()">Print / save as PDF</button><span class="paperpick" role="group" aria-label="Paper size"><button value="a4" onclick="setPaper('a4',true)">A4</button><button value="letter" onclick="setPaper('letter',true)">Letter</button></span><span class="sp"></span><a href="?download=1">Download HTML</a></div>
 <div class="paper">
 
 <header class="rh">
