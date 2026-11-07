@@ -8,6 +8,10 @@ const S = {
   hold: { version: -1, traces: {}, highlight: 0, lastCaptured: 0 },
   calOpen: false, trim: null, trimList: [], tone: null, cmpName: 'B', cmpAName: 'A',
 };
+// Set only in the single-file browser build (web/browser/host.js), where the
+// app runs in WebAssembly inside the page: USB via Web Serial, reports as
+// blob pages. Undefined when served by the easyvna-web program.
+const HOST = window.EasyVNAHost || null;
 const CUSTOM_SLOT = 2; // matches the PiX firmware's custom profile slot
 const LORA_TARGETS = [433.92e6, 869e6, 915e6];
 
@@ -306,7 +310,10 @@ $('aRefClear').onclick = () => run(async () => {
 $('aTune').onclick = () => openTune();
 $('aCompare').onclick = () => openCompare();
 $('aReport').onclick = () => openReport();
-$('btnConnect').onclick = () => run(async () => { await api('POST', 'api/connect'); toast('Connected'); });
+$('btnConnect').onclick = () => run(async () => {
+  if (HOST) await HOST.beforeConnect(); // Web Serial: pick the port while the click still counts
+  await api('POST', 'api/connect'); toast('Connected');
+});
 
 // REF overlay follows the current profile's stored REF.
 async function syncRef() {
@@ -1227,7 +1234,8 @@ async function openReport() {
     const w = window.open('', '_blank');
     try {
       const r = await api('POST', 'api/report', { name: $('repName').value.trim(), notes: $('repNotes').value, profiles, trim: $('repTrim').value });
-      if (w) w.location = r.url; else location.href = r.url;
+      if (HOST) await HOST.openReport(w, r.url, r.file);
+      else if (w) w.location = r.url; else location.href = r.url;
       toast('Report saved: ' + r.file);
     } catch (e) { if (w) w.close(); throw e; }
   });
