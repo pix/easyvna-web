@@ -30,7 +30,7 @@ func main() {
 	listen := flag.String("listen", "127.0.0.1:8080", "HTTP listen address")
 	port := flag.String("port", "", "serial device (default: auto-detect NanoVNA-H/H4 by USB ID 0483:5740 on /dev/ttyACM*)")
 	useMock := flag.Bool("mock", false, "simulate a NanoVNA-H4 with a test antenna (no hardware needed)")
-	mockFW := flag.String("mock-firmware", "custom", "mock firmware: custom (PiX fork: `profile` command, Fork: line) or stock (plain NanoVNA-D)")
+	mockFW := flag.String("mock-firmware", "custom", "mock firmware: custom (EasyVNA/PiX fork: `profile` command, Fork: line) or stock (plain NanoVNA-D)")
 	mockAnt := flag.String("mock-antenna", "dual", "mock antenna scenario: "+strings.Join(scenarioNames(), ", "))
 	dataDir := flag.String("data", defaultDataDir(), "directory for snapshots and settings")
 	maxPoints := flag.Int("maxpoints", 0, "override points per device scan (0 = auto: 401 on H4, 101 on H)")

@@ -29,7 +29,7 @@ type Options struct {
 	Seed      uint64
 	// NoEcho disables character echo (some tests use it).
 	NoEcho bool
-	// Profiles simulates the PiX fork: `profile` command and a Fork: line.
+	// Profiles simulates the EasyVNA (PiX) fork: `profile` command and a Fork: line.
 	Profiles bool
 }
 
@@ -229,7 +229,7 @@ func (s *Sim) execute(line string) string {
 	switch args[0] {
 	case "version":
 		if s.opt.Profiles {
-			return s.version() + nl + "Fork: PiX (vnaview mock)" + nl
+			return s.version() + nl + "Fork: EasyVNA by PiX (vnaview mock)" + nl
 		}
 		return s.version() + nl
 	case "info":
@@ -376,7 +376,7 @@ func (s *Sim) version() string {
 
 func (s *Sim) forkLine() string {
 	if s.opt.Profiles {
-		return "Fork: PiX (vnaview mock)"
+		return "Fork: EasyVNA by PiX (vnaview mock)"
 	}
 	return "Licensed under GPL."
 }

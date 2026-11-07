@@ -372,9 +372,9 @@ func (d *Driver) RecallCal(ctx context.Context, slot int) error {
 }
 
 // SupportsProfiles implements vna.Profiler.
-// The PiX fork is recognised by `help` listing `profile` or by a
-// "Fork: PiX" line in version/info.
-func (d *Driver) SupportsProfiles() bool { return d.commands["profile"] || IsPiXFork(d.info.Fork) }
+// The EasyVNA (formerly PiX) fork is recognised by `help` listing `profile`
+// or by a "Fork:" line mentioning EasyVNA or PiX in version/info.
+func (d *Driver) SupportsProfiles() bool { return d.commands["profile"] || IsEasyVNAFork(d.info.Fork) }
 
 // Profiles lists the on-device profiles.
 func (d *Driver) Profiles(ctx context.Context) (vna.DeviceProfiles, error) {

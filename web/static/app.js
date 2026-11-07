@@ -105,8 +105,8 @@ function renderState() {
   const pill = $('devpill');
   pill.classList.toggle('on', st.connected);
   if (st.connected && st.info) {
-    const pix = st.info.fork && /^pix/i.test(st.info.fork);
-    $('devtext').textContent = `${st.info.model} · fw ${st.info.version}${pix ? ' · PiX fork' : ''}${st.info.mock ? ' · MOCK' : ''}`;
+    const easy = st.info.fork && /easyvna|pix/i.test(st.info.fork);
+    $('devtext').textContent = `${st.info.model} · fw ${st.info.version}${easy ? ' · EasyVNA' : ''}${st.info.mock ? ' · MOCK' : ''}`;
   } else $('devtext').textContent = 'not connected';
   pill.title = st.info ? `${st.info.port}, ${st.info.maxPoints} points/scan${st.info.fork ? ', fork: ' + st.info.fork : ''}` : (st.error || '');
   $('ropill').hidden = !st.readOnly;

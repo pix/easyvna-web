@@ -437,5 +437,9 @@ func ParseFork(lines []string) string {
 	return ""
 }
 
-// IsPiXFork reports whether a fork string names the PiX firmware.
-func IsPiXFork(fork string) bool { return strings.HasPrefix(strings.ToLower(fork), "pix") }
+// IsEasyVNAFork reports whether a fork string names the profile firmware:
+// "EasyVNA by PiX (...)" (current name) or "PiX (...)" (older builds).
+func IsEasyVNAFork(fork string) bool {
+	f := strings.ToLower(fork)
+	return strings.Contains(f, "easyvna") || strings.Contains(f, "pix")
+}

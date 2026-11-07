@@ -25,7 +25,7 @@ Then open http://127.0.0.1:8080.
 | `-readonly` | off | never change stored device state: cal, save, recall and on-device profile switching are refused (in the server and the driver); sweeps still work |
 | `-mock` | off | simulate a NanoVNA-H4 (the real shell protocol is spoken by the simulator) |
 | `-mock-antenna` | `dual` | `dual` (433 whip, slightly long, with a 2nd mode near 850 MHz), `869` (whip slightly long), `869tuned`, `915` (tuned), `dummy` (lossy resistor posing as an antenna), `open` (no antenna), `bend` (whip being bent by hand: a new still position every 6 s with a motion burst in between). Switch live under *Device* in the UI |
-| `-mock-firmware` | `custom` | `custom` simulates the PiX fork (`profile` command, `Fork: PiX` line), `stock` plain NanoVNA-D |
+| `-mock-firmware` | `custom` | `custom` simulates the EasyVNA (PiX) fork (`profile` command, `Fork: PiX` line), `stock` plain NanoVNA-D |
 | `-data` | `$XDG_DATA_HOME/vnaview` or `~/.local/share/vnaview` | settings, REF traces, trim logs, compare session, reports, snapshots |
 | `-maxpoints` | auto | points per device scan (auto: 401 on H4, 101 on H, learnt from the firmware's error otherwise) |
 | `-cal-settle` | `1.5s` | time the device sweeps with a standard attached before `cal <std>` (older firmware copies the last live sweep) |
@@ -160,9 +160,10 @@ download.
 
 ### On-device profiles (PiX firmware fork)
 
-vnaview treats the device as the PiX fork when version/info prints a
-`Fork: PiX (...)` line or when `help` lists `profile`. The device badge then
-shows "PiX fork". `profile` with no argument prints:
+vnaview treats the device as the EasyVNA fork when version/info prints a
+`Fork:` line mentioning EasyVNA or PiX (`Fork: EasyVNA by PiX (...)`, older
+builds `Fork: PiX (...)`), or when `help` lists `profile`. The device badge
+then shows "EasyVNA". `profile` with no argument prints:
 
 ```
 wide 300000000 1000000000 401 3 1 0      name start stop points slot cal active

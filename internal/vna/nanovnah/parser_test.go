@@ -214,11 +214,17 @@ func TestParseProfilesV2(t *testing.T) {
 }
 
 func TestParseFork(t *testing.T) {
-	if f := ParseFork([]string{"1.2.50", "Fork: PiX (profiles v2)"}); f != "PiX (profiles v2)" || !IsPiXFork(f) {
-		t.Errorf("fork %q", f)
+	for _, line := range []string{"Fork: EasyVNA by PiX (LoRa profiles)", "Fork: PiX (profiles v2)", "Fork: easyvna"} {
+		f := ParseFork([]string{"1.2.50", line})
+		if f == "" || !IsEasyVNAFork(f) {
+			t.Errorf("%q: fork %q not recognised", line, f)
+		}
 	}
-	if f := ParseFork([]string{"Board: NanoVNA-H 4", "Version: 1.2.50"}); f != "" || IsPiXFork(f) {
+	if f := ParseFork([]string{"Board: NanoVNA-H 4", "Version: 1.2.50"}); f != "" || IsEasyVNAFork(f) {
 		t.Errorf("stock fork %q", f)
+	}
+	if IsEasyVNAFork("Someone else (custom build)") {
+		t.Error("unrelated fork accepted")
 	}
 }
 

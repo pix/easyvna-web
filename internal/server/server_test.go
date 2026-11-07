@@ -143,7 +143,7 @@ func TestDeviceProfilesDriveCalibration(t *testing.T) {
 	ts, _ := newTestServer(t, true) // custom firmware with `profile`
 	var st State
 	call(t, ts, "POST", "/api/connect", "", &st)
-	if st.DeviceProfiles == nil || len(st.DeviceProfiles.Profiles) != 4 || st.DeviceProfiles.Custom == nil || st.Info == nil || !strings.HasPrefix(st.Info.Fork, "PiX") {
+	if st.DeviceProfiles == nil || len(st.DeviceProfiles.Profiles) != 4 || st.DeviceProfiles.Custom == nil || st.Info == nil || !strings.Contains(st.Info.Fork, "EasyVNA") {
 		t.Fatalf("device profiles: %+v", st.DeviceProfiles)
 	}
 	var pr struct {

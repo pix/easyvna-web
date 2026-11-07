@@ -284,10 +284,10 @@ func TestCalibrationFlowOverSimulator(t *testing.T) {
 func TestDeviceProfilesOverSimulator(t *testing.T) {
 	d, sim := openSim(t, mock.Options{Profiles: true}, Options{})
 	if !d.SupportsProfiles() {
-		t.Fatal("PiX fork not detected")
+		t.Fatal("EasyVNA fork not detected")
 	}
 	info, _ := d.Info(context.Background())
-	if !IsPiXFork(info.Fork) || strings.Contains(info.Version, "Fork") {
+	if !IsEasyVNAFork(info.Fork) || strings.Contains(info.Version, "Fork") {
 		t.Errorf("info: %+v", info)
 	}
 	ctx := context.Background()

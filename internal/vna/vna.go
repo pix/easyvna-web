@@ -16,7 +16,7 @@ type Info struct {
 	Driver    string   `json:"driver"`         // e.g. "nanovna-h"
 	Model     string   `json:"model"`          // e.g. "NanoVNA-H 4"
 	Version   string   `json:"version"`        // firmware version string
-	Fork      string   `json:"fork,omitempty"` // e.g. "PiX (...)" from a "Fork:" line
+	Fork      string   `json:"fork,omitempty"` // e.g. "EasyVNA by PiX (...)" from a "Fork:" line
 	Port      string   `json:"port"`           // serial device or "mock"
 	Raw       []string `json:"raw"`            // raw identification lines (e.g. `info` output)
 	MaxPoints int      `json:"maxPoints"`
@@ -144,7 +144,7 @@ type Device interface {
 // ErrNotConnected is returned when no device is available.
 var ErrNotConnected = errors.New("no VNA connected")
 
-// DeviceProfile is an on-device sweep profile (PiX fork of the NanoVNA-H4
+// DeviceProfile is an on-device sweep profile (EasyVNA by PiX fork of the NanoVNA-H4
 // firmware, `profile` command): a named range tied to a calibration slot.
 type DeviceProfile struct {
 	Name   string  `json:"name"`
