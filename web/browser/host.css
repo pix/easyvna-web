@@ -15,6 +15,7 @@ body { background: var(--page); }
 .hostbar .hmode b { color: var(--ink); }
 .hostbar .hsp { flex: 1; }
 .hostbar .hdata { color: var(--muted); }
+.hostbar a.btn { color: var(--ink); text-decoration: none; }
 .hostnotice { margin: 10px 16px 0; padding: 10px 14px; border-radius: 8px; border: 2px solid var(--warn); background: var(--surface);
   display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; }
 .hostnotice b { color: var(--warn-ink); }
