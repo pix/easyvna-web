@@ -50,6 +50,24 @@ func TestConnReadTimeoutAndOrder(t *testing.T) {
 	}
 }
 
+// Regression: bytes pushed before a Read leave a wake-up behind; a later
+// Read must not take that stale wake-up for data and return early (the
+// shell's drain would stop and replies would shift by one command).
+func TestConnStaleWakeup(t *testing.T) {
+	c := NewConn(func([]byte) error { return nil }, nil)
+	c.ReadTimeout = 50 * time.Millisecond
+	c.Push([]byte("ch> "))
+	if n, _ := c.Read(make([]byte, 16)); n != 4 {
+		t.Fatalf("n=%d", n)
+	}
+	go func() { time.Sleep(15 * time.Millisecond); c.Push([]byte("late")) }()
+	b := make([]byte, 16)
+	n, err := c.Read(b)
+	if err != nil || string(b[:n]) != "late" {
+		t.Fatalf("got %q %v: returned on a stale wake-up", b[:n], err)
+	}
+}
+
 func TestConnWakesBlockedReader(t *testing.T) {
 	c := NewConn(func([]byte) error { return nil }, nil)
 	c.ReadTimeout = 5 * time.Second

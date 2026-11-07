@@ -93,19 +93,21 @@ func (c *Conn) Read(p []byte) (int, error) {
 	if len(p) == 0 {
 		return 0, nil
 	}
-	if n, err, ok := c.take(p); ok {
-		return n, err
-	}
 	t := time.NewTimer(c.ReadTimeout)
 	defer t.Stop()
-	select {
-	case <-c.notify:
-	case <-c.done:
-	case <-t.C:
-		return 0, nil
+	for {
+		if n, err, ok := c.take(p); ok {
+			return n, err
+		}
+		// A wake-up may be stale (its bytes were already taken by an
+		// earlier Read): keep waiting until data, the end, or the timeout.
+		select {
+		case <-c.notify:
+		case <-c.done:
+		case <-t.C:
+			return 0, nil
+		}
 	}
-	n, err, _ := c.take(p)
-	return n, err
 }
 
 // Write implements io.Writer.
