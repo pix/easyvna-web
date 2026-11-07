@@ -7,7 +7,6 @@ import (
 	"html/template"
 	"math"
 	"net/http"
-	"os"
 	"sort"
 	"strings"
 	"time"
@@ -414,12 +413,11 @@ func (s *Server) hReportList(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) hReportGet(w http.ResponseWriter, r *http.Request) {
-	p, err := s.store.ReportPath(r.PathValue("file"))
-	if err != nil {
+	b, err := s.store.ReadReportFile(r.PathValue("file"))
+	if errors.Is(err, ErrBadReportName) {
 		writeErr(w, 400, err)
 		return
 	}
-	b, err := os.ReadFile(p)
 	if err != nil {
 		writeErr(w, 404, err)
 		return

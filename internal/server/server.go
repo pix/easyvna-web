@@ -143,6 +143,11 @@ type Options struct {
 	// trim calculator can be exercised without hardware.
 	MockCut       func(mm float64)
 	MockScenarios []string
+	// Backup enables GET/POST /api/backup (export / import every stored
+	// file as one JSON document). The browser build turns it on.
+	Backup bool
+	// AppName is recorded in backups, e.g. "EasyVNA Web v0.2.0".
+	AppName string
 }
 
 // Server is the EasyVNA Web application.

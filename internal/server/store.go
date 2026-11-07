@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -34,28 +36,51 @@ type Settings struct {
 // Store manages the data directory: settings and snapshots.
 type Store struct {
 	dir string
+	b   Backend
 	mu  sync.Mutex
 }
 
+// storeDirs are the sub-directories of the data directory.
+var storeDirs = []string{"snapshots", "refs", "trim", "reports"}
+
 // NewStore creates the data directory layout.
 func NewStore(dir string) (*Store, error) {
-	for _, sub := range []string{"snapshots", "refs", "trim", "reports"} {
+	for _, sub := range storeDirs {
 		if err := os.MkdirAll(filepath.Join(dir, sub), 0o755); err != nil {
 			return nil, err
 		}
 	}
-	return &Store{dir: dir}, nil
+	return &Store{dir: dir, b: DirBackend{Root: dir}}, nil
 }
 
-// Dir returns the data directory.
+// NewStoreBackend creates a store on another backend (the browser build
+// uses a MemBackend). label is what Dir reports, e.g. "this browser".
+func NewStoreBackend(b Backend, label string) *Store { return &Store{dir: label, b: b} }
+
+// Dir returns the data directory (or the label of a non-disk backend).
 func (st *Store) Dir() string { return st.dir }
+
+// Backend returns the storage backend.
+func (st *Store) Backend() Backend { return st.b }
+
+// listMatch lists the files of dir whose base name matches pattern.
+func (st *Store) listMatch(dir, pattern string) []FileInfo {
+	all, _ := st.b.List(dir)
+	var out []FileInfo
+	for _, f := range all {
+		if ok, _ := path.Match(pattern, f.Name); ok {
+			out = append(out, f)
+		}
+	}
+	return out
+}
 
 // LoadSettings returns stored settings or defaults.
 func (st *Store) LoadSettings() Settings {
 	st.mu.Lock()
 	defer st.mu.Unlock()
 	s := Settings{ProfileSlots: map[string]int{}, Slots: map[int]SlotMeta{}, AutoRecall: true}
-	b, err := os.ReadFile(filepath.Join(st.dir, "settings.json"))
+	b, err := st.b.ReadFile("settings.json")
 	if err == nil {
 		_ = json.Unmarshal(b, &s)
 	}
@@ -76,7 +101,7 @@ func (st *Store) SaveSettings(s Settings) error {
 	if err != nil {
 		return err
 	}
-	return writeAtomic(filepath.Join(st.dir, "settings.json"), b)
+	return st.b.WriteFile("settings.json", b)
 }
 
 var nameRe = regexp.MustCompile(`[^A-Za-z0-9._-]+`)
@@ -117,7 +142,7 @@ func (st *Store) SaveSnapshot(name string, r *Result) (SnapshotInfo, error) {
 	if err != nil {
 		return SnapshotInfo{}, err
 	}
-	if err := writeAtomic(filepath.Join(st.dir, "snapshots", file), b); err != nil {
+	if err := st.b.WriteFile("snapshots/"+file, b); err != nil {
 		return SnapshotInfo{}, err
 	}
 	return infoOf(&cp, file), nil
@@ -134,7 +159,7 @@ func (st *Store) LoadSnapshot(name string) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
-	b, err := os.ReadFile(filepath.Join(st.dir, "snapshots", file))
+	b, err := st.b.ReadFile("snapshots/" + file)
 	if err != nil {
 		return nil, err
 	}
@@ -151,15 +176,14 @@ func (st *Store) DeleteSnapshot(name string) error {
 	if err != nil {
 		return err
 	}
-	return os.Remove(filepath.Join(st.dir, "snapshots", file))
+	return st.b.Remove("snapshots/" + file)
 }
 
 // ListSnapshots returns all snapshots, newest first.
 func (st *Store) ListSnapshots() []SnapshotInfo {
-	files, _ := filepath.Glob(filepath.Join(st.dir, "snapshots", "*.json"))
 	out := []SnapshotInfo{}
-	for _, f := range files {
-		b, err := os.ReadFile(f)
+	for _, f := range st.listMatch("snapshots", "*.json") {
+		b, err := st.b.ReadFile("snapshots/" + f.Name)
 		if err != nil {
 			continue
 		}
@@ -172,19 +196,11 @@ func (st *Store) ListSnapshots() []SnapshotInfo {
 		if json.Unmarshal(b, &r) != nil {
 			continue
 		}
-		out = append(out, SnapshotInfo{Name: r.Name, File: filepath.Base(f), Time: r.Time, Profile: r.Config.Profile,
+		out = append(out, SnapshotInfo{Name: r.Name, File: f.Name, Time: r.Time, Profile: r.Config.Profile,
 			Points: len(r.Freq), Start: r.Config.Start, Stop: r.Config.Stop})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Time.After(out[j].Time) })
 	return out
-}
-
-func writeAtomic(path string, b []byte) error {
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o644); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
 }
 
 // ---------- REF traces (one per profile, previous kept for undo) ----------
@@ -194,11 +210,11 @@ func (st *Store) refPath(profile string, prev bool) string {
 	if prev {
 		f = strings.TrimSuffix(f, ".json") + ".prev.json"
 	}
-	return filepath.Join(st.dir, "refs", f)
+	return "refs/" + f
 }
 
-func (st *Store) readResult(path string) (*Result, error) {
-	b, err := os.ReadFile(path)
+func (st *Store) readResult(name string) (*Result, error) {
+	b, err := st.b.ReadFile(name)
 	if err != nil {
 		return nil, err
 	}
@@ -209,10 +225,10 @@ func (st *Store) readResult(path string) (*Result, error) {
 	return &r, nil
 }
 
-func (st *Store) writeResult(path string, r *Result) error {
+func (st *Store) writeResult(name string, r *Result) error {
 	if r == nil {
-		err := os.Remove(path)
-		if os.IsNotExist(err) {
+		err := st.b.Remove(name)
+		if errors.Is(err, fs.ErrNotExist) {
 			return nil
 		}
 		return err
@@ -221,7 +237,7 @@ func (st *Store) writeResult(path string, r *Result) error {
 	if err != nil {
 		return err
 	}
-	return writeAtomic(path, b)
+	return st.b.WriteFile(name, b)
 }
 
 // SaveRef stores cur as the REF of profile (nil clears it) and prev as the
@@ -233,7 +249,7 @@ func (st *Store) SaveRef(profile string, cur, prev *Result) error {
 		if err := st.writeResult(st.refPath(profile, true), prev); err != nil {
 			return err
 		}
-	} else if err := writeAtomic(st.refPath(profile, true), []byte("null")); err != nil {
+	} else if err := st.b.WriteFile(st.refPath(profile, true), []byte("null")); err != nil {
 		return err
 	}
 	return st.writeResult(st.refPath(profile, false), cur)
@@ -241,7 +257,7 @@ func (st *Store) SaveRef(profile string, cur, prev *Result) error {
 
 // LoadRefPrev returns the undo copy (nil Result = "there was no REF").
 func (st *Store) LoadRefPrev(profile string) (*Result, error) {
-	b, err := os.ReadFile(st.refPath(profile, true))
+	b, err := st.b.ReadFile(st.refPath(profile, true))
 	if err != nil {
 		return nil, err
 	}
@@ -258,12 +274,11 @@ func (st *Store) LoadRefPrev(profile string) (*Result, error) {
 // LoadRefs loads all stored REF traces keyed by profile.
 func (st *Store) LoadRefs() map[string]*Result {
 	out := map[string]*Result{}
-	files, _ := filepath.Glob(filepath.Join(st.dir, "refs", "ref-*.json"))
-	for _, f := range files {
-		if strings.HasSuffix(f, ".prev.json") {
+	for _, f := range st.listMatch("refs", "ref-*.json") {
+		if strings.HasSuffix(f.Name, ".prev.json") {
 			continue
 		}
-		if r, err := st.readResult(f); err == nil && r != nil {
+		if r, err := st.readResult("refs/" + f.Name); err == nil && r != nil {
 			out[r.Config.Profile] = r
 		}
 	}
@@ -272,7 +287,7 @@ func (st *Store) LoadRefs() map[string]*Result {
 
 // HasRefPrev reports whether an undo copy exists.
 func (st *Store) HasRefPrev(profile string) bool {
-	_, err := os.Stat(st.refPath(profile, true))
+	_, err := st.b.Stat(st.refPath(profile, true))
 	return err == nil
 }
 
@@ -280,9 +295,9 @@ func (st *Store) HasRefPrev(profile string) bool {
 
 func (st *Store) comparePath(prev bool) string {
 	if prev {
-		return filepath.Join(st.dir, "compare.prev.json")
+		return "compare.prev.json"
 	}
-	return filepath.Join(st.dir, "compare.json")
+	return "compare.json"
 }
 
 // SaveCompare stores the session (nil clears it) and prev as the undo copy.
@@ -293,12 +308,12 @@ func (st *Store) SaveCompare(cur, prev *CompareSession) error {
 	if err != nil {
 		return err
 	}
-	if err := writeAtomic(st.comparePath(true), pb); err != nil {
+	if err := st.b.WriteFile(st.comparePath(true), pb); err != nil {
 		return err
 	}
 	if cur == nil {
-		err := os.Remove(st.comparePath(false))
-		if os.IsNotExist(err) {
+		err := st.b.Remove(st.comparePath(false))
+		if errors.Is(err, fs.ErrNotExist) {
 			return nil
 		}
 		return err
@@ -307,11 +322,11 @@ func (st *Store) SaveCompare(cur, prev *CompareSession) error {
 	if err != nil {
 		return err
 	}
-	return writeAtomic(st.comparePath(false), b)
+	return st.b.WriteFile(st.comparePath(false), b)
 }
 
-func (st *Store) readCompare(path string) (*CompareSession, error) {
-	b, err := os.ReadFile(path)
+func (st *Store) readCompare(name string) (*CompareSession, error) {
+	b, err := st.b.ReadFile(name)
 	if err != nil {
 		return nil, err
 	}
@@ -335,7 +350,7 @@ func (st *Store) LoadComparePrev() (*CompareSession, error) {
 
 // HasComparePrev reports whether an undo copy exists.
 func (st *Store) HasComparePrev() bool {
-	_, err := os.Stat(st.comparePath(true))
+	_, err := st.b.Stat(st.comparePath(true))
 	return err == nil
 }
 
@@ -354,7 +369,7 @@ func (st *Store) trimPath(name string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(st.dir, "trim", f), nil
+	return "trim/" + f, nil
 }
 
 // LoadTrim reads a trim session.
@@ -363,7 +378,7 @@ func (st *Store) LoadTrim(name string) (*TrimSession, error) {
 	if err != nil {
 		return nil, err
 	}
-	b, err := os.ReadFile(p)
+	b, err := st.b.ReadFile(p)
 	if err != nil {
 		return nil, err
 	}
@@ -389,15 +404,14 @@ func (st *Store) SaveTrim(t *TrimSession) error {
 	if err != nil {
 		return err
 	}
-	return writeAtomic(p, b)
+	return st.b.WriteFile(p, b)
 }
 
 // ListTrim lists trim sessions, most recently updated first.
 func (st *Store) ListTrim() []TrimInfo {
-	files, _ := filepath.Glob(filepath.Join(st.dir, "trim", "*.json"))
 	out := []TrimInfo{}
-	for _, f := range files {
-		b, err := os.ReadFile(f)
+	for _, f := range st.listMatch("trim", "*.json") {
+		b, err := st.b.ReadFile("trim/" + f.Name)
 		if err != nil {
 			continue
 		}
@@ -435,29 +449,39 @@ func ReportFileName(name string, t time.Time) (string, error) {
 
 // SaveReportFile writes a report under the given (validated) file name.
 func (st *Store) SaveReportFile(file string, html []byte) error {
-	p, err := st.ReportPath(file)
+	p, err := reportName(file)
 	if err != nil {
 		return err
 	}
-	return writeAtomic(p, html)
+	return st.b.WriteFile(p, html)
 }
 
-// ReportPath validates a report file name and returns its path.
-func (st *Store) ReportPath(file string) (string, error) {
-	if file != filepath.Base(file) || !strings.HasSuffix(file, ".html") || strings.HasPrefix(file, ".") {
-		return "", errors.New("bad report name")
+// ReadReportFile returns a saved report by file name.
+func (st *Store) ReadReportFile(file string) ([]byte, error) {
+	p, err := reportName(file)
+	if err != nil {
+		return nil, err
 	}
-	return filepath.Join(st.dir, "reports", file), nil
+	return st.b.ReadFile(p)
+}
+
+// ErrBadReportName is returned for report file names that are not plain
+// "<name>.html" files.
+var ErrBadReportName = errors.New("bad report name")
+
+// reportName validates a report file name and returns its store name.
+func reportName(file string) (string, error) {
+	if file != path.Base(file) || file != filepath.Base(file) || !strings.HasSuffix(file, ".html") || strings.HasPrefix(file, ".") {
+		return "", ErrBadReportName
+	}
+	return "reports/" + file, nil
 }
 
 // ListReports lists saved reports, newest first.
 func (st *Store) ListReports() []ReportInfo {
-	files, _ := filepath.Glob(filepath.Join(st.dir, "reports", "*.html"))
 	out := []ReportInfo{}
-	for _, f := range files {
-		if fi, err := os.Stat(f); err == nil {
-			out = append(out, ReportInfo{File: filepath.Base(f), Time: fi.ModTime(), Size: fi.Size()})
-		}
+	for _, f := range st.listMatch("reports", "*.html") {
+		out = append(out, ReportInfo{File: f.Name, Time: f.ModTime, Size: f.Size})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Time.After(out[j].Time) })
 	return out

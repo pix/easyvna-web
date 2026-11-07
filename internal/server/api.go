@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"net/http"
 	"os"
@@ -59,6 +60,10 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/mock/antenna", s.hMockAntenna)
 	mux.HandleFunc("POST /api/hold", s.hHold)
 	mux.HandleFunc("GET /api/hold", s.hHoldGet)
+	if s.opt.Backup {
+		mux.HandleFunc("GET /api/backup", s.hBackupGet)
+		mux.HandleFunc("POST /api/backup", s.hBackupPost)
+	}
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {
@@ -81,6 +86,15 @@ func readJSON(r *http.Request, v any) error {
 		return fmt.Errorf("bad JSON: %w", err)
 	}
 	return nil
+}
+
+// readAll reads a request body of at most limit bytes.
+func readAll(r *http.Request, limit int64) ([]byte, error) {
+	b, err := io.ReadAll(http.MaxBytesReader(nil, r.Body, limit))
+	if err != nil {
+		return nil, fmt.Errorf("reading request: %w", err)
+	}
+	return b, nil
 }
 
 func (s *Server) hState(w http.ResponseWriter, r *http.Request) { writeJSON(w, 200, s.state()) }
