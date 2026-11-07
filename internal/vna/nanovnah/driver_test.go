@@ -282,20 +282,50 @@ func TestCalibrationFlowOverSimulator(t *testing.T) {
 }
 
 func TestDeviceProfilesOverSimulator(t *testing.T) {
-	d, _ := openSim(t, mock.Options{Profiles: true}, Options{})
+	d, sim := openSim(t, mock.Options{Profiles: true}, Options{})
 	if !d.SupportsProfiles() {
-		t.Fatal("profile command not detected via help")
+		t.Fatal("PiX fork not detected")
 	}
-	ps, err := d.Profiles(context.Background())
-	if err != nil || len(ps) != 4 || ps[2].Name != "869" || ps[2].Slot != 2 || ps[0].Cal != true {
-		t.Fatalf("%+v %v", ps, err)
+	info, _ := d.Info(context.Background())
+	if !IsPiXFork(info.Fork) || strings.Contains(info.Version, "Fork") {
+		t.Errorf("info: %+v", info)
 	}
-	p, err := d.ApplyProfile(context.Background(), "433")
-	if err != nil || p.Start != 384e6 || !p.Active || p.Cal {
+	ctx := context.Background()
+	dp, err := d.Profiles(ctx)
+	if err != nil || len(dp.Profiles) != 4 || dp.Profiles[2].Name != "869" || dp.Profiles[2].Slot != 5 ||
+		!dp.Profiles[0].Cal || dp.Custom == nil || dp.Custom.Cal || dp.Boot == nil {
+		t.Fatalf("%+v %v", dp, err)
+	}
+	p, err := d.ApplyProfile(ctx, "433")
+	if err != nil || p.Start != 388.92e6 || p.Points != 401 || !p.Active || p.Cal {
 		t.Fatalf("%+v %v", p, err)
 	}
-	if _, err := d.ApplyProfile(context.Background(), "2400"); err == nil {
-		t.Error("unknown profile accepted")
+	// Save a custom range into slot 2, then `profile custom` restores it.
+	rng := &vna.ScanRequest{Start: 850e6, Stop: 950e6, Points: 201}
+	for _, s := range []vna.CalStep{vna.CalReset, vna.CalOpen, vna.CalShort, vna.CalLoad, vna.CalDone} {
+		if err := d.Calibrate(ctx, s, rng); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := d.SaveCal(ctx, 2); err != nil {
+		t.Fatal(err)
+	}
+	d.ApplyProfile(ctx, "wide")
+	c, err := d.ApplyProfile(ctx, "custom")
+	if err != nil || c.Start != 850e6 || c.Stop != 950e6 || c.Points != 201 || !c.Cal || !c.Active {
+		t.Fatalf("custom: %+v %v", c, err)
+	}
+	if _, err := d.ApplyProfile(ctx, "none"); err == nil {
+		t.Error("removed `profile none` accepted")
+	}
+	_ = sim
+}
+
+func TestStockFirmwareHasNoProfiles(t *testing.T) {
+	d, _ := openSim(t, mock.Options{}, Options{})
+	info, _ := d.Info(context.Background())
+	if d.SupportsProfiles() || info.Fork != "" {
+		t.Errorf("stock detected as fork: %+v", info)
 	}
 }
 

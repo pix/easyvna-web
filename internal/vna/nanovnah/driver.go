@@ -89,10 +89,21 @@ func (d *Driver) identify(ctx context.Context) error {
 		maxPts = d.opt.MaxPoints
 	}
 	d.maxPoints = maxPts
+	fork := ParseFork(ver)
+	if fork == "" {
+		fork = ParseFork(info)
+	}
+	var verLines []string
+	for _, l := range ver {
+		if !strings.HasPrefix(strings.TrimSpace(l), "Fork:") {
+			verLines = append(verLines, strings.TrimSpace(l))
+		}
+	}
 	d.info = vna.Info{
 		Driver:    "nanovna-h",
 		Model:     board,
-		Version:   strings.Join(ver, " "),
+		Version:   strings.Join(verLines, " "),
+		Fork:      fork,
 		Port:      d.opt.PortName,
 		Raw:       info,
 		MaxPoints: maxPts,
@@ -345,19 +356,21 @@ func (d *Driver) RecallCal(ctx context.Context, slot int) error {
 	return err
 }
 
-// SupportsProfiles implements vna.Profiler: true when `help` lists `profile`.
-func (d *Driver) SupportsProfiles() bool { return d.commands["profile"] }
+// SupportsProfiles implements vna.Profiler.
+// The PiX fork is recognised by `help` listing `profile` or by a
+// "Fork: PiX" line in version/info.
+func (d *Driver) SupportsProfiles() bool { return d.commands["profile"] || IsPiXFork(d.info.Fork) }
 
 // Profiles lists the on-device profiles.
-func (d *Driver) Profiles(ctx context.Context) ([]vna.DeviceProfile, error) {
+func (d *Driver) Profiles(ctx context.Context) (vna.DeviceProfiles, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if !d.SupportsProfiles() {
-		return nil, errors.ErrUnsupported
+		return vna.DeviceProfiles{}, errors.ErrUnsupported
 	}
 	lines, err := d.sh.Exec(ctx, "profile", 3*time.Second)
 	if err != nil {
-		return nil, err
+		return vna.DeviceProfiles{}, err
 	}
 	return ParseProfiles(lines), nil
 }
@@ -376,9 +389,8 @@ func (d *Driver) ApplyProfile(ctx context.Context, name string) (vna.DeviceProfi
 	if err != nil {
 		return vna.DeviceProfile{}, err
 	}
-	ps := ParseProfiles(lines)
-	for _, p := range ps {
-		if p.Name == name {
+	for _, l := range lines {
+		if p, err := ParseProfileLine(l); err == nil && p.Name == name {
 			return p, nil
 		}
 	}

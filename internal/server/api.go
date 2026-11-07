@@ -106,6 +106,10 @@ func (s *Server) hProfile(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, err)
 		return
 	}
+	if req.ID == "custom" {
+		s.hCustomProfile(w, r)
+		return
+	}
 	s.mu.Lock()
 	p, ok := s.profile(req.ID)
 	if !ok {
@@ -117,7 +121,7 @@ func (s *Server) hProfile(w http.ResponseWriter, r *http.Request) {
 	meta, haveMeta := s.settings.Slots[p.CalSlot]
 	needRecall := s.settings.AutoRecall && haveMeta && meta.Start == p.Start && meta.Stop == p.Stop &&
 		(s.cal.Active == nil || s.cal.Active.Start != p.Start || s.cal.Active.Stop != p.Stop)
-	useDevice := len(s.devProfs) > 0
+	useDevice := s.devProfs != nil
 	s.mu.Unlock()
 	msg := ""
 	switch {
@@ -545,7 +549,7 @@ func (s *Server) hCalSave(w http.ResponseWriter, r *http.Request) {
 	}
 	s.mu.Lock()
 	cfg := s.cfg
-	slot := 0
+	slot := CustomSlot
 	if p, ok := s.profile(cfg.Profile); ok {
 		slot = p.CalSlot
 	}
@@ -595,6 +599,74 @@ func (s *Server) hCalRecall(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, s.state().Cal)
 }
 
+// hCustomProfile restores the custom range saved with the custom slot: on
+// PiX firmware via `profile custom`, otherwise from what vnaview recorded
+// when it saved that slot (then recalled if auto-recall is on).
+func (s *Server) hCustomProfile(w http.ResponseWriter, r *http.Request) {
+	s.mu.Lock()
+	useDevice := s.devProfs != nil
+	meta, haveMeta := s.settings.Slots[CustomSlot]
+	auto := s.settings.AutoRecall
+	s.mu.Unlock()
+	var start, stop float64
+	points := 401
+	msg := ""
+	switch {
+	case useDevice:
+		s.opMu.Lock()
+		dev, err := s.device(r.Context())
+		var dp vna.DeviceProfile
+		if err == nil {
+			dp, err = dev.(vna.Profiler).ApplyProfile(r.Context(), "custom")
+		}
+		if err == nil {
+			s.refreshCal(r.Context(), dev)
+			s.syncDeviceProfiles(r.Context(), dev)
+		}
+		s.opMu.Unlock()
+		if err != nil {
+			s.handleDevErr(err)
+			writeErr(w, 500, err)
+			return
+		}
+		if !dp.Cal || dp.Stop <= dp.Start {
+			writeErr(w, 404, fmt.Errorf("no custom range saved in slot %d yet: set one in Advanced, calibrate and save", dp.Slot))
+			return
+		}
+		start, stop = dp.Start, dp.Stop
+		if dp.Points > 1 {
+			points = dp.Points
+		}
+		sl := dp.Slot
+		s.mu.Lock()
+		s.cal.Active = &CalRange{Start: start, Stop: stop, Points: points, Source: fmt.Sprintf("slot %d (device custom)", sl), Slot: &sl}
+		s.mu.Unlock()
+		msg = fmt.Sprintf("device custom profile applied (%s, slot %d)", mhzRange(start, stop), sl)
+	case haveMeta:
+		start, stop = meta.Start, meta.Stop
+		if meta.Points > 1 {
+			points = meta.Points
+		}
+		if auto {
+			if err := s.recall(r.Context(), CustomSlot); err != nil {
+				msg = "recall failed: " + err.Error()
+			} else {
+				msg = fmt.Sprintf("recalled custom slot %d (%s)", CustomSlot, mhzRange(start, stop))
+			}
+		}
+	default:
+		writeErr(w, 404, fmt.Errorf("no custom range saved in slot %d yet", CustomSlot))
+		return
+	}
+	s.mu.Lock()
+	pe, s21 := s.cfg.PortExtPs, s.cfg.S21
+	s.cfg = Config{Profile: "custom", Start: start, Stop: stop, Points: points, S21: s21, PortExtPs: pe,
+		Bands: bandsOverlapping(start, stop)}
+	s.mu.Unlock()
+	s.publishState()
+	writeJSON(w, 200, map[string]any{"state": s.state(), "message": msg})
+}
+
 // applyDeviceProfile runs `profile <id>` on custom firmware and records the
 // calibration that came with it. Returns a message for the UI.
 func (s *Server) applyDeviceProfile(ctx context.Context, p Profile) string {
@@ -619,7 +691,7 @@ func (s *Server) applyDeviceProfile(ctx context.Context, p Profile) string {
 	defer s.mu.Unlock()
 	if dp.Cal {
 		sl := dp.Slot
-		s.cal.Active = &CalRange{Start: dp.Start, Stop: dp.Stop, Source: fmt.Sprintf("slot %d (device profile)", sl), Slot: &sl}
+		s.cal.Active = &CalRange{Start: dp.Start, Stop: dp.Stop, Points: dp.Points, Source: fmt.Sprintf("slot %d (device profile)", sl), Slot: &sl}
 		return fmt.Sprintf("device profile %s applied, calibration slot %d loaded", dp.Name, dp.Slot)
 	}
 	return fmt.Sprintf("device profile %s applied; slot %d has no calibration yet", dp.Name, dp.Slot)

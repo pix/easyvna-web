@@ -79,7 +79,7 @@ type State struct {
 	Points     []int     `json:"pointChoices"`
 	Antenna    string    `json:"mockAntenna,omitempty"`
 	// DeviceProfiles is set when the firmware has the `profile` command.
-	DeviceProfiles []vna.DeviceProfile `json:"deviceProfiles,omitempty"`
+	DeviceProfiles *vna.DeviceProfiles `json:"deviceProfiles,omitempty"`
 }
 
 // Result is one processed sweep, as sent to the UI and stored in snapshots.
@@ -143,7 +143,7 @@ type Server struct {
 	profiles []Profile
 	last     *Result
 	seq      int64
-	devProfs []vna.DeviceProfile
+	devProfs *vna.DeviceProfiles
 
 	continuous atomic.Bool
 	wake       chan struct{}
@@ -249,8 +249,8 @@ func (s *Server) device(ctx context.Context) (vna.Device, error) {
 	return dev, nil
 }
 
-// syncDeviceProfiles reads on-device profiles (custom firmware only) and
-// adopts their ranges and slots so the UI and the device agree.
+// syncDeviceProfiles reads on-device profiles (PiX firmware only) and
+// adopts their ranges, points and slots so the UI and the device agree.
 func (s *Server) syncDeviceProfiles(ctx context.Context, dev vna.Device) {
 	pr, ok := dev.(vna.Profiler)
 	if !ok || !pr.SupportsProfiles() {
@@ -266,24 +266,27 @@ func (s *Server) syncDeviceProfiles(ctx context.Context, dev vna.Device) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.devProfs = dps
-	for _, dp := range dps {
+	s.devProfs = &dps
+	for _, dp := range dps.Profiles {
 		for i := range s.profiles {
 			p := &s.profiles[i]
 			if p.ID != dp.Name {
 				continue
 			}
 			p.Start, p.Stop, p.CalSlot = dp.Start, dp.Stop, dp.Slot
-			p.Sub = fmt.Sprintf("%.0f–%.0f MHz", dp.Start/1e6, dp.Stop/1e6)
+			if dp.Points > 1 {
+				p.Points = dp.Points
+			}
+			p.Sub = mhzRange(dp.Start, dp.Stop)
 			if p.Identify {
 				p.Sub += " · identify"
 			}
 			if s.cfg.Profile == p.ID {
-				s.cfg.Start, s.cfg.Stop = p.Start, p.Stop
+				s.cfg.Start, s.cfg.Stop, s.cfg.Points = p.Start, p.Stop, p.Points
 			}
 			if dp.Active && dp.Cal && s.cal.Active == nil {
 				sl := dp.Slot
-				s.cal.Active = &CalRange{Start: dp.Start, Stop: dp.Stop, Source: fmt.Sprintf("slot %d (device profile)", sl), Slot: &sl}
+				s.cal.Active = &CalRange{Start: dp.Start, Stop: dp.Stop, Points: dp.Points, Source: fmt.Sprintf("slot %d (device profile)", sl), Slot: &sl}
 			}
 		}
 	}

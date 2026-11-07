@@ -29,23 +29,35 @@ type Options struct {
 	Seed      uint64
 	// NoEcho disables character echo (some tests use it).
 	NoEcho bool
-	// Profiles enables the custom H4 firmware's `profile` command.
+	// Profiles simulates the PiX fork: `profile` command and a Fork: line.
 	Profiles bool
 }
 
-// SimProfile is an on-device profile of the custom firmware.
+// SimProfile is an on-device profile of the PiX firmware.
 type SimProfile struct {
 	Name        string
 	Start, Stop float64
+	Points      int
 	Slot        int
 }
 
-// FirmwareProfiles mirror the custom NanoVNA-H4 firmware.
+// FirmwareProfiles mirror the PiX NanoVNA-H4 firmware v2 profile table.
+// Slots 0 and 1 are left for the user (stock firmware loads slot 0 at boot).
 var FirmwareProfiles = []SimProfile{
-	{"wide", 300e6, 1000e6, 0},
-	{"433", 384e6, 484e6, 1},
-	{"869", 819e6, 919e6, 2},
-	{"915", 865e6, 965e6, 3},
+	{"wide", 300e6, 1000e6, 401, 3},
+	{"433", 388.92e6, 478.92e6, 401, 4},
+	{"869", 779e6, 959e6, 401, 5},
+	{"915", 825e6, 1005e6, 401, 6},
+}
+
+// CustomSlot holds the custom profile; its range is whatever was saved there.
+const CustomSlot = 2
+
+// slotData is a saved calibration slot (status bits plus the sweep range).
+type slotData struct {
+	status      uint32
+	start, stop float64
+	points      int
 }
 
 // Sim is an in-memory NanoVNA shell. It implements io.ReadWriteCloser.
@@ -64,7 +76,7 @@ type Sim struct {
 	points      int
 	paused      bool
 	calStatus   uint32
-	slots       map[int]uint32
+	slots       map[int]slotData
 	lastFreq    []float64
 	lastS11     []complex128
 	lastS21     []complex128
@@ -114,7 +126,10 @@ func New(opt Options) *Sim {
 	s := &Sim{
 		opt: opt, rng: rand.New(rand.NewPCG(opt.Seed, 1)), t0: time.Now(),
 		start: 50e3, stop: 900e6, points: opt.MaxPoints,
-		calStatus: full, slots: map[int]uint32{0: full},
+		calStatus: full, slots: map[int]slotData{
+			0: {full, 50e3, 900e6, opt.MaxPoints},   // user's power-on calibration
+			3: {full, 300e6, 1000e6, opt.MaxPoints}, // wide profile already calibrated
+		},
 	}
 	s.cond = sync.NewCond(&s.mu)
 	s.out.WriteString("\r\nNanoVNA Shell\r\n" + "ch> ")
@@ -206,15 +221,19 @@ func (s *Sim) execute(line string) string {
 	}
 	switch args[0] {
 	case "version":
-		return "1.2.40-mock" + nl
+		if s.opt.Profiles {
+			return s.version() + nl + "Fork: PiX (vnaview mock)" + nl
+		}
+		return s.version() + nl
 	case "info":
 		return strings.Join([]string{
 			"Board: " + s.opt.Board,
+			s.forkLine(),
 			"2019-2024 Copyright NanoVNA.com",
 			"based on @DiSlord @edy555 ... source",
 			"Licensed under GPL.",
 			"  https://github.com/DiSlord/NanoVNA-D",
-			"Version: 1.2.40-mock [p:" + strconv.Itoa(s.opt.MaxPoints) + ", IF:12k, ADC:384k, Lcd:480x320]",
+			"Version: " + s.version() + " [p:" + strconv.Itoa(s.opt.MaxPoints) + ", IF:12k, ADC:384k, Lcd:480x320]",
 			"Build Time: simulated by vnaview -mock",
 			"Platform: vnaview simulator",
 		}, nl) + nl
@@ -283,11 +302,11 @@ func (s *Sim) execute(line string) string {
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		if args[0] == "save" {
-			s.slots[n] = s.calStatus
+			s.slots[n] = slotData{s.calStatus, s.start, s.stop, s.points}
 			return ""
 		}
 		if st, ok := s.slots[n]; ok {
-			s.calStatus = st
+			s.calStatus, s.start, s.stop, s.points = st.status, st.start, st.stop, st.points
 			return ""
 		}
 		s.calStatus = 0
@@ -299,33 +318,60 @@ func (s *Sim) execute(line string) string {
 func (s *Sim) cmdProfile(a []string) string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	b := func(v bool) int {
+		if v {
+			return 1
+		}
+		return 0
+	}
 	line := func(p SimProfile) string {
 		_, cal := s.slots[p.Slot]
-		b := func(v bool) int {
-			if v {
-				return 1
-			}
-			return 0
-		}
-		return fmt.Sprintf("%s %d %d %d %d %d"+nl, p.Name, int64(p.Start), int64(p.Stop), p.Slot, b(cal), b(s.activeProf == p.Name))
+		return fmt.Sprintf("%s %d %d %d %d %d %d"+nl, p.Name, int64(p.Start), int64(p.Stop), p.Points, p.Slot, b(cal), b(s.activeProf == p.Name))
+	}
+	custom := func() string {
+		cs, saved := s.slots[CustomSlot]
+		return fmt.Sprintf("custom %d %d %d %d %d %d"+nl, int64(cs.start), int64(cs.stop), cs.points, CustomSlot, b(saved), b(s.activeProf == "custom"))
 	}
 	if len(a) == 0 {
 		var out strings.Builder
 		for _, p := range FirmwareProfiles {
 			out.WriteString(line(p))
 		}
+		out.WriteString(custom())
+		out.WriteString("boot wide ask=0" + nl)
 		return out.String()
+	}
+	if a[0] == "custom" {
+		if cs, ok := s.slots[CustomSlot]; ok {
+			s.start, s.stop, s.points, s.calStatus = cs.start, cs.stop, cs.points, cs.status
+		}
+		s.activeProf = "custom"
+		return custom()
 	}
 	for _, p := range FirmwareProfiles {
 		if p.Name == a[0] {
-			s.start, s.stop, s.activeProf = p.Start, p.Stop, p.Name
+			s.start, s.stop, s.points, s.activeProf = p.Start, p.Stop, p.Points, p.Name
 			if st, ok := s.slots[p.Slot]; ok {
-				s.calStatus = st
+				s.calStatus = st.status
 			}
 			return line(p)
 		}
 	}
-	return "usage: profile [wide|433|869|915]" + nl
+	return "usage: profile [wide|433|869|915|custom]" + nl
+}
+
+func (s *Sim) version() string {
+	if s.opt.Profiles {
+		return "1.2.50-mock"
+	}
+	return "1.2.40-mock"
+}
+
+func (s *Sim) forkLine() string {
+	if s.opt.Profiles {
+		return "Fork: PiX (vnaview mock)"
+	}
+	return "Licensed under GPL."
 }
 
 func (s *Sim) numSlots() int {

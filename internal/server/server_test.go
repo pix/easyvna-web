@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -73,7 +74,7 @@ func TestSweepProfilesAndAnalysis(t *testing.T) {
 	var pr struct {
 		State State `json:"state"`
 	}
-	if c := call(t, ts, "POST", "/api/profile", `{"id":"869"}`, &pr); c != 200 || pr.State.Config.Start != 819e6 {
+	if c := call(t, ts, "POST", "/api/profile", `{"id":"869"}`, &pr); c != 200 || pr.State.Config.Start != 779e6 || pr.State.Config.Stop != 959e6 {
 		t.Fatalf("profile: %d %+v", c, pr.State.Config)
 	}
 	call(t, ts, "POST", "/api/sweep", "", &res)
@@ -112,10 +113,10 @@ func TestCalibrationSaveAndAutoRecall(t *testing.T) {
 			t.Fatalf("%s: flow %+v", step, cal.Flow)
 		}
 	}
-	if !cal.Status.Applied || cal.Active == nil || cal.Active.Start != 384e6 {
+	if !cal.Status.Applied || cal.Active == nil || cal.Active.Start != 388.92e6 {
 		t.Fatalf("after done: %+v", cal)
 	}
-	if c := call(t, ts, "POST", "/api/cal/save", "{}", &cal); c != 200 || cal.Active.Slot == nil || *cal.Active.Slot != 1 {
+	if c := call(t, ts, "POST", "/api/cal/save", "{}", &cal); c != 200 || cal.Active.Slot == nil || *cal.Active.Slot != 4 {
 		t.Fatalf("save: %d %+v", c, cal.Active)
 	}
 	// Switch away and back: the 433 slot must be recalled automatically.
@@ -132,8 +133,8 @@ func TestCalibrationSaveAndAutoRecall(t *testing.T) {
 	if c := call(t, ts, "POST", "/api/cal/step/bogus", "{}", nil); c != 400 {
 		t.Errorf("bogus step: %d", c)
 	}
-	// Explicit recall of slot 1 records its range.
-	if c := call(t, ts, "POST", "/api/cal/recall", `{"slot":1}`, &cal); c != 200 || cal.Active == nil || cal.Active.Stop != 484e6 {
+	// Explicit recall of slot 4 records its range.
+	if c := call(t, ts, "POST", "/api/cal/recall", `{"slot":4}`, &cal); c != 200 || cal.Active == nil || cal.Active.Stop != 478.92e6 {
 		t.Fatalf("recall: %d %+v", c, cal.Active)
 	}
 }
@@ -142,7 +143,7 @@ func TestDeviceProfilesDriveCalibration(t *testing.T) {
 	ts, _ := newTestServer(t, true) // custom firmware with `profile`
 	var st State
 	call(t, ts, "POST", "/api/connect", "", &st)
-	if len(st.DeviceProfiles) != 4 {
+	if st.DeviceProfiles == nil || len(st.DeviceProfiles.Profiles) != 4 || st.DeviceProfiles.Custom == nil || st.Info == nil || !strings.HasPrefix(st.Info.Fork, "PiX") {
 		t.Fatalf("device profiles: %+v", st.DeviceProfiles)
 	}
 	var pr struct {
@@ -150,15 +151,54 @@ func TestDeviceProfilesDriveCalibration(t *testing.T) {
 		Message string `json:"message"`
 	}
 	call(t, ts, "POST", "/api/profile", `{"id":"wide"}`, &pr)
-	if !strings.Contains(pr.Message, "device profile wide applied, calibration slot 0 loaded") {
+	if !strings.Contains(pr.Message, "device profile wide applied, calibration slot 3 loaded") {
 		t.Errorf("message %q", pr.Message)
 	}
-	if pr.State.Cal.Active == nil || *pr.State.Cal.Active.Slot != 0 || pr.State.Cal.Matches == nil || !*pr.State.Cal.Matches {
+	if pr.State.Cal.Active == nil || *pr.State.Cal.Active.Slot != 3 || pr.State.Cal.Matches == nil || !*pr.State.Cal.Matches {
 		t.Errorf("active cal: %+v", pr.State.Cal)
 	}
 	call(t, ts, "POST", "/api/profile", `{"id":"915"}`, &pr)
-	if !strings.Contains(pr.Message, "slot 3 has no calibration") || *pr.State.Cal.Matches {
+	if !strings.Contains(pr.Message, "slot 6 has no calibration") || *pr.State.Cal.Matches {
 		t.Errorf("915: %q %+v", pr.Message, pr.State.Cal)
+	}
+	// Custom: nothing saved in slot 2 yet.
+	if c := call(t, ts, "POST", "/api/profile", `{"id":"custom"}`, nil); c != 404 {
+		t.Errorf("custom before save: %d", c)
+	}
+	// Calibrate and save a custom range; it lands in slot 2 and comes back via `profile custom`.
+	call(t, ts, "POST", "/api/config", `{"start":850000000,"stop":950000000,"points":201}`, nil)
+	for _, step := range []string{"open", "short", "load", "done"} {
+		call(t, ts, "POST", "/api/cal/step/"+step, `{"fresh":`+fmt.Sprint(step == "open")+`}`, nil)
+	}
+	var cal CalState
+	if call(t, ts, "POST", "/api/cal/save", "{}", &cal); cal.Active == nil || *cal.Active.Slot != 2 {
+		t.Fatalf("custom save slot: %+v", cal.Active)
+	}
+	call(t, ts, "POST", "/api/profile", `{"id":"wide"}`, nil)
+	if c := call(t, ts, "POST", "/api/profile", `{"id":"custom"}`, &pr); c != 200 || pr.State.Config.Start != 850e6 ||
+		pr.State.Config.Points != 201 || pr.State.Config.Profile != "custom" || !*pr.State.Cal.Matches {
+		t.Errorf("custom restore: %d %q %+v", c, pr.Message, pr.State.Config)
+	}
+}
+
+func TestStockCustomSlotRoundTrip(t *testing.T) {
+	ts, _ := newTestServer(t, false)
+	call(t, ts, "POST", "/api/config", `{"start":850000000,"stop":950000000,"points":201}`, nil)
+	for _, step := range []string{"open", "short", "load", "done"} {
+		call(t, ts, "POST", "/api/cal/step/"+step, `{"fresh":`+fmt.Sprint(step == "open")+`}`, nil)
+	}
+	var cal CalState
+	call(t, ts, "POST", "/api/cal/save", "{}", &cal)
+	if cal.Active == nil || *cal.Active.Slot != CustomSlot {
+		t.Fatalf("stock custom save: %+v", cal.Active)
+	}
+	call(t, ts, "POST", "/api/profile", `{"id":"wide"}`, nil)
+	var pr struct {
+		State   State  `json:"state"`
+		Message string `json:"message"`
+	}
+	if c := call(t, ts, "POST", "/api/profile", `{"id":"custom"}`, &pr); c != 200 || pr.State.Config.Stop != 950e6 || !strings.Contains(pr.Message, "recalled custom slot 2") {
+		t.Errorf("stock custom restore: %d %q", c, pr.Message)
 	}
 }
 

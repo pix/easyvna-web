@@ -6,18 +6,28 @@ import (
 	"sort"
 )
 
-// LoRa / ISM bands used for classification.
+// LoRa / ISM bands used for classification. Ref is the frequency that
+// resonance offsets are measured from (it matches the custom firmware's
+// "offset ref" column); bands without one use their centre.
 var (
-	Band433    = Band{Name: "433", Lo: 433.05e6, Hi: 434.79e6}
-	Band869    = Band{Name: "869", Lo: 863e6, Hi: 870e6}
+	Band433    = Band{Name: "433", Lo: 433.05e6, Hi: 434.79e6, Ref: 433.92e6}
+	Band869    = Band{Name: "869", Lo: 863e6, Hi: 870e6, Ref: 869e6}
 	Band869g3  = Band{Name: "869.4–869.65", Lo: 869.4e6, Hi: 869.65e6}
-	Band915    = Band{Name: "915", Lo: 902e6, Hi: 928e6}
+	Band915    = Band{Name: "915", Lo: 902e6, Hi: 928e6, Ref: 915e6}
 	LoRaBands  = []Band{Band433, Band869, Band915}
-	nearFactor = 0.15 // a dip within ±15 % of a band centre counts as "near" it
+	nearFactor = 0.15 // a dip within ±15 % of a band reference counts as "near" it
 )
 
 // Centre returns the arithmetic band centre.
 func (b Band) Centre() float64 { return (b.Lo + b.Hi) / 2 }
+
+// Reference returns the offset reference frequency (Ref, or the centre).
+func (b Band) Reference() float64 {
+	if b.Ref > 0 {
+		return b.Ref
+	}
+	return b.Centre()
+}
 
 // Verdict grades a worst-case in-band SWR.
 func Verdict(worstSWR float64) string {
@@ -47,8 +57,8 @@ type Dip struct {
 	Band           string  `json:"band"` // nearest band name
 	InBand         bool    `json:"inBand"`
 	Near           bool    `json:"near"`
-	OffsetEdge     float64 `json:"offsetEdge"`   // Hz to nearest band edge; <0 below, >0 above, 0 inside
-	OffsetCentre   float64 `json:"offsetCentre"` // Hz relative to band centre
+	OffsetEdge     float64 `json:"offsetEdge"` // Hz to nearest band edge; <0 below, >0 above, 0 inside
+	OffsetRef      float64 `json:"offsetRef"`  // Hz relative to the band reference
 	HarmonicOf     float64 `json:"harmonicOf,omitempty"`
 	HarmonicN      int     `json:"harmonicN,omitempty"`
 	LengthScalePct float64 `json:"lengthScalePct,omitempty"` // suggested length change, %
@@ -125,8 +135,8 @@ func ClassifyDips(dips []Dip, bands []Band) {
 			case dp.Freq > b.Hi:
 				dist = dp.Freq - b.Hi
 			}
-			if dist/b.Centre() < bestDist {
-				bestDist, best = dist/b.Centre(), k
+			if dist/b.Reference() < bestDist {
+				bestDist, best = dist/b.Reference(), k
 			}
 		}
 		if best < 0 {
@@ -135,7 +145,7 @@ func ClassifyDips(dips []Dip, bands []Band) {
 		}
 		b := bands[best]
 		dp.Band = b.Name
-		dp.OffsetCentre = dp.Freq - b.Centre()
+		dp.OffsetRef = dp.Freq - b.Reference()
 		switch {
 		case dp.Freq < b.Lo:
 			dp.OffsetEdge = dp.Freq - b.Lo
@@ -143,7 +153,7 @@ func ClassifyDips(dips []Dip, bands []Band) {
 			dp.OffsetEdge = dp.Freq - b.Hi
 		}
 		dp.InBand = dp.OffsetEdge == 0
-		dp.Near = dp.InBand || math.Abs(dp.OffsetCentre) <= nearFactor*b.Centre()
+		dp.Near = dp.InBand || math.Abs(dp.OffsetRef) <= nearFactor*b.Reference()
 		dp.Advice = dipAdvice(dp, b)
 	}
 }
@@ -156,14 +166,14 @@ func dipAdvice(dp *Dip, b Band) string {
 	}
 	switch {
 	case dp.InBand:
-		return fmt.Sprintf("In the %s band (%.1f MHz from centre).%s", b.Name, dp.OffsetCentre/1e6, harm)
+		return fmt.Sprintf("In the %s band (%+.1f MHz from %.2f MHz).%s", b.Name, dp.OffsetRef/1e6, b.Reference()/1e6, harm)
 	case !dp.Near:
 		return "Not near a LoRa band." + harm
 	case dp.HarmonicN > 0:
 		return fmt.Sprintf("%.1f MHz %s the %s band.%s", math.Abs(dp.OffsetEdge)/1e6, belowAbove(dp.OffsetEdge), b.Name, harm)
 	}
 	// Resonant length scales ~1/f: new length = old · f_res / f_centre.
-	dp.LengthScalePct = 100 * (dp.Freq/b.Centre() - 1)
+	dp.LengthScalePct = 100 * (dp.Freq/b.Reference() - 1)
 	dir := "too long: shorten"
 	if dp.OffsetEdge > 0 {
 		dir = "too short: lengthen"
@@ -179,11 +189,11 @@ func belowAbove(off float64) string {
 	return "above"
 }
 
-// NearestDip returns the dip closest to the band centre, or nil.
+// NearestDip returns the dip closest to the band reference, or nil.
 func NearestDip(dips []Dip, b Band) *Dip {
 	var best *Dip
 	for i := range dips {
-		if best == nil || math.Abs(dips[i].Freq-b.Centre()) < math.Abs(best.Freq-b.Centre()) {
+		if best == nil || math.Abs(dips[i].Freq-b.Reference()) < math.Abs(best.Freq-b.Reference()) {
 			best = &dips[i]
 		}
 	}

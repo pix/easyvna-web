@@ -170,17 +170,55 @@ func TestParseHelp(t *testing.T) {
 	}
 }
 
-func TestParseProfiles(t *testing.T) {
-	p, err := ParseProfileLine("869 819000000 919000000 2 1 1")
-	if err != nil || p.Name != "869" || p.Start != 819e6 || p.Stop != 919e6 || p.Slot != 2 || !p.Cal || !p.Active {
-		t.Fatalf("%+v %v", p, err)
+func TestParseProfilesV2(t *testing.T) {
+	// PiX firmware v2 `profile` listing.
+	raw := "profile\r\n" +
+		"wide 300000000 1000000000 401 3 1 0\r\n" +
+		"433 388920000 478920000 401 4 0 0\r\n" +
+		"869 779000000 959000000 401 5 1 1\r\n" +
+		"915 825000000 1005000000 401 6 0 0\r\n" +
+		"custom 850000000 950000000 201 2 1 0\r\n" +
+		"boot 869 ask=1\r\n" +
+		"ch> "
+	lines, err := SplitResponse("profile", []byte(raw))
+	if err != nil {
+		t.Fatal(err)
 	}
-	if _, err := ParseProfileLine("869 819000000 919000000 2 1 x"); err == nil {
+	dp := ParseProfiles(lines)
+	if len(dp.Profiles) != 4 {
+		t.Fatalf("%+v", dp)
+	}
+	p := dp.Profiles[2]
+	if p.Name != "869" || p.Start != 779e6 || p.Stop != 959e6 || p.Points != 401 || p.Slot != 5 || !p.Cal || !p.Active {
+		t.Errorf("869: %+v", p)
+	}
+	if dp.Profiles[1].Start != 388.92e6 || dp.Profiles[3].Stop != 1005e6 {
+		t.Errorf("ranges: %+v", dp.Profiles)
+	}
+	if dp.Custom == nil || dp.Custom.Slot != 2 || dp.Custom.Points != 201 || !dp.Custom.Cal || dp.Custom.Start != 850e6 {
+		t.Errorf("custom: %+v", dp.Custom)
+	}
+	if dp.Boot == nil || dp.Boot.Name != "869" || !dp.Boot.Ask {
+		t.Errorf("boot: %+v", dp.Boot)
+	}
+	// Tolerates the older 6-field form and rejects junk.
+	if p, err := ParseProfileLine("869 819000000 919000000 2 1 1"); err != nil || p.Slot != 2 || p.Points != 0 || !p.Active {
+		t.Errorf("6-field: %+v %v", p, err)
+	}
+	if _, err := ParseProfileLine("869 779000000 959000000 401 5 1 x"); err == nil {
 		t.Error("bad flag accepted")
 	}
-	ps := ParseProfiles([]string{"wide 300000000 1000000000 0 0 0", "garbage", "433 384000000 484000000 1 1 0"})
-	if len(ps) != 2 || ps[1].Name != "433" || !ps[1].Cal || ps[1].Active {
-		t.Fatalf("%+v", ps)
+	if _, ok := ParseBootLine("boot"); ok {
+		t.Error("short boot line accepted")
+	}
+}
+
+func TestParseFork(t *testing.T) {
+	if f := ParseFork([]string{"1.2.50", "Fork: PiX (profiles v2)"}); f != "PiX (profiles v2)" || !IsPiXFork(f) {
+		t.Errorf("fork %q", f)
+	}
+	if f := ParseFork([]string{"Board: NanoVNA-H 4", "Version: 1.2.50"}); f != "" || IsPiXFork(f) {
+		t.Errorf("stock fork %q", f)
 	}
 }
 

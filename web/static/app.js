@@ -9,6 +9,7 @@ const S = {
 
 // ---------- helpers ----------
 const mhz = (f, d = 2) => (f / 1e6).toFixed(d);
+const mhzR = (f) => String(+(f / 1e6).toFixed(3)); // 388.92, 1000
 const sgn = (v, d = 1) => (v >= 0 ? '+' : '−') + Math.abs(v).toFixed(d);
 function fmtZ(r, x) {
   const big = (v) => Math.abs(v) >= 1e4 ? v.toExponential(1) : v.toFixed(1);
@@ -66,6 +67,7 @@ function showBanner(msg) { const b = $('banner'); b.textContent = msg; b.hidden 
 
 // ---------- state rendering ----------
 const STEPS = ['open', 'short', 'load', 'done', 'save'];
+const CUSTOM_SLOT = 2; // matches the PiX firmware's custom profile slot
 const STEP_HELP = {
   open: 'Connect the OPEN standard at the end of the pigtail (where the antenna goes), then tap OPEN. OPEN starts a new calibration.',
   short: 'Connect the SHORT standard, then tap SHORT.',
@@ -85,11 +87,12 @@ function renderState() {
   const pill = $('devpill');
   pill.classList.toggle('on', st.connected);
   if (st.connected && st.info) {
-    $('devtext').textContent = `${st.info.model} · fw ${st.info.version}${st.info.mock ? ' · MOCK' : ''}`;
+    const pix = st.info.fork && /^pix/i.test(st.info.fork);
+    $('devtext').textContent = `${st.info.model} · fw ${st.info.version}${pix ? ' · PiX fork' : ''}${st.info.mock ? ' · MOCK' : ''}`;
   } else {
     $('devtext').textContent = 'not connected';
   }
-  pill.title = st.info ? `${st.info.port}, ${st.info.maxPoints} points/scan` : (st.error || '');
+  pill.title = st.info ? `${st.info.port}, ${st.info.maxPoints} points/scan${st.info.fork ? ', fork: ' + st.info.fork : ''}` : (st.error || '');
   const cal = st.cal.status;
   const cp = $('calpill');
   cp.className = 'pill ' + (!st.connected || !cal.known ? '' : cal.applied ? 'calon' : 'caloff');
@@ -111,7 +114,11 @@ function renderState() {
     ? [`Driver: ${st.info.driver}`, `Port: ${st.info.port}`, `Max points per scan: ${st.info.maxPoints}`,
        `Calibration slots: ${st.info.calSlots}`, `Firmware cal status: ${cal.raw || '(none)'}`,
        st.mockAntenna ? `Mock antenna: ${st.mockAntenna}` : '',
-       st.deviceProfiles ? 'Device profiles (firmware `profile`): ' + st.deviceProfiles.map((d) => `${d.name} ${mhz(d.start, 0)}-${mhz(d.stop, 0)} MHz slot ${d.slot}${d.cal ? ' cal' : ''}${d.active ? ' [active]' : ''}`).join('; ') : 'Device profiles: not supported by this firmware (using sweep + recall)', `Data dir: ${st.dataDir}`, '', ...(st.info.raw || [])].filter((l, i, a) => l !== '' || i === a.indexOf('')).join('\n')
+       st.info.fork ? `Fork: ${st.info.fork}` : '',
+       st.deviceProfiles ? 'Device profiles (firmware `profile`):\n' + [...st.deviceProfiles.profiles, ...(st.deviceProfiles.custom ? [st.deviceProfiles.custom] : [])]
+         .map((d) => `  ${d.name.padEnd(6)} ${mhzR(d.start)}–${mhzR(d.stop)} MHz, ${d.points} pts, slot ${d.slot}${d.cal ? ', cal saved' : ''}${d.active ? ' [active]' : ''}`).join('\n') +
+         (st.deviceProfiles.boot ? `\n  boot profile: ${st.deviceProfiles.boot.name}${st.deviceProfiles.boot.ask ? ' (asks)' : ''}` : '')
+         : 'Device profiles: not supported by this firmware (using sweep + recall)', `Data dir: ${st.dataDir}`, '', ...(st.info.raw || [])].filter((l, i, a) => l !== '' || i === a.indexOf('')).join('\n')
     : (st.error || 'Not connected.') + `\nData dir: ${st.dataDir}`;
   const key = st.config.profile + st.config.start + st.config.stop;
   if (key !== S.lastCfgKey) { S.lastCfgKey = key; S.swrMaxUser = null; }
@@ -126,7 +133,7 @@ function renderProfiles() {
     b.type = 'button'; b.className = 'profile';
     b.setAttribute('aria-pressed', String(st.config.profile === p.id));
     const meta = st.cal.settings.slots && st.cal.settings.slots[p.calSlot];
-    const dp = (st.deviceProfiles || []).find((d) => d.name === p.id);
+    const dp = st.deviceProfiles && st.deviceProfiles.profiles.find((d) => d.name === p.id);
     const saved = dp ? dp.cal : !!(meta && meta.start === p.start && meta.stop === p.stop);
     const big = p.identify ? esc(p.label) : `${esc(p.label)}<small>MHz</small>`;
     b.innerHTML = `<span class="big">${big}</span><span class="sub">${esc(p.sub)}</span>
@@ -148,13 +155,13 @@ function renderCal() {
   const st = S.state; const c = st.cal; const cfg = st.config;
   const p = currentProfile();
   const name = p ? (p.identify ? 'Wide' : p.label) + ' profile' : 'custom sweep';
-  $('calfor').textContent = `for the ${name} (${mhz(cfg.start, 0)}–${mhz(cfg.stop, 0)} MHz). Each profile needs its own calibration.`;
+  $('calfor').textContent = `for the ${name} (${mhzR(cfg.start)}–${mhzR(cfg.stop)} MHz). Each profile needs its own calibration.`;
   const a = c.active;
   let act;
   if (!st.connected) act = '';
   else if (!a) act = c.status.applied ? '<span class="muted">Active cal: range unknown (loaded by firmware)</span>' : '<span class="muted">No calibration applied</span>';
-  else if (c.matches) act = `<span style="color:var(--good-ink)">✓ Active cal: ${esc(a.source)}, ${mhz(a.start, 0)}–${mhz(a.stop, 0)} MHz, matches this sweep</span>`;
-  else act = `<span style="color:var(--warn-ink)">! Active cal is for ${mhz(a.start, 0)}–${mhz(a.stop, 0)} MHz (${esc(a.source)}): recalibrate or recall this profile's slot</span>`;
+  else if (c.matches) act = `<span style="color:var(--good-ink)">✓ Active cal: ${esc(a.source)}, ${mhzR(a.start)}–${mhzR(a.stop)} MHz, matches this sweep</span>`;
+  else act = `<span style="color:var(--warn-ink)">! Active cal is for ${mhzR(a.start)}–${mhzR(a.stop)} MHz (${esc(a.source)}): recalibrate or recall this profile's slot</span>`;
   $('calactive').innerHTML = act;
 
   const flow = c.flow || { steps: {} };
@@ -178,7 +185,7 @@ function renderCal() {
     sel.innerHTML = '';
     for (let i = 0; i < n; i++) sel.add(new Option(String(i), String(i)));
   }
-  if (document.activeElement !== sel) sel.value = String(p ? p.calSlot : 0);
+  if (document.activeElement !== sel) sel.value = String(p ? p.calSlot : CUSTOM_SLOT);
   $('slotlbl').textContent = '→ ' + sel.value;
   $('btnRecall').disabled = busy || !st.connected;
   $('autoRecall').checked = !!c.settings.autoRecall;
@@ -224,6 +231,12 @@ $('btnConnect').onclick = () => run(async () => { await api('POST', 'api/connect
 // ---------- advanced ----------
 function renderAdvanced() {
   const cfg = S.state.config;
+  const dc = S.state.deviceProfiles && S.state.deviceProfiles.custom;
+  const meta = S.state.cal.settings.slots && S.state.cal.settings.slots[CUSTOM_SLOT];
+  const src = dc && dc.cal ? dc : (!S.state.deviceProfiles && meta ? meta : null);
+  const cb = $('btnCustom');
+  cb.hidden = !src;
+  if (src) cb.textContent = `Load saved custom range ${mhzR(src.start)}–${mhzR(src.stop)} MHz (slot ${CUSTOM_SLOT})`;
   const form = $('advForm');
   if (form.contains(document.activeElement)) return;
   $('advStart').value = (cfg.start / 1e6).toString();
@@ -240,6 +253,7 @@ function peDelayPs() {
   return len / 100 / (vf * 299792458) * 1e12;
 }
 function updatePe() { $('pePs').textContent = `= ${peDelayPs().toFixed(1)} ps one-way (active: ${S.state ? S.state.config.portExtPs.toFixed(1) : 0} ps)`; }
+$('btnCustom').onclick = () => selectProfile('custom');
 $('peLen').oninput = updatePe; $('peVF').oninput = updatePe;
 $('advForm').onsubmit = (e) => {
   e.preventDefault();
@@ -341,11 +355,11 @@ function edgeHint(r) {
 
 function bandCard(r, b, primary) {
   const band = b.band; const v = b.verdict === 'n/a' ? 'na' : b.verdict;
-  const centre = (band.lo + band.hi) / 2;
+  const ref = band.ref || (band.lo + band.hi) / 2;
   let res = '';
   if (b.dipFreq != null) {
     const pos = b.dipEdgeOffset === 0 ? 'inside the band' : `${Math.abs(b.dipEdgeOffset / 1e6).toFixed(1)} MHz ${b.dipEdgeOffset < 0 ? 'below' : 'above'} the band`;
-    res = `Resonance <b>${mhz(b.dipFreq)} MHz</b> (SWR ${swrText(b.dipSWR)}): ${pos}, ${sgn(b.dipOffset / 1e6)} MHz from centre ${mhz(centre, 2)} MHz.`;
+    res = `Resonance <b>${mhz(b.dipFreq)} MHz</b> (SWR ${swrText(b.dipSWR)}): ${pos}, ${sgn(b.dipOffset / 1e6)} MHz from ${band.ref ? 'reference' : 'centre'} ${mhzR(ref)} MHz.`;
   } else res = edgeHint(r);
   const cov = b.covered ? '' : '<div class="vline" style="color:var(--warn-ink)">! The sweep does not cover the whole band.</div>';
   const advice = primary && b.dipAdvice && b.dipEdgeOffset !== 0 ? `<div class="advice">${esc(b.dipAdvice)}</div>` : '';

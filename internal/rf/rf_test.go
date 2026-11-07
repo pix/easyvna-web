@@ -238,6 +238,9 @@ func TestFindDipsAndClassify(t *testing.T) {
 	if len(s.Bands) != 3 || s.Bands[0].DipFreq == nil {
 		t.Fatalf("bands: %+v", s.Bands)
 	}
+	// Offsets are measured from the band reference (433.92 MHz), not the centre.
+	near(t, "433 offset", *s.Bands[0].DipOffset, a.Freq-433.92e6, 1)
+	near(t, "dip1 offsetRef", a.OffsetRef, a.Freq-433.92e6, 1)
 }
 
 func TestDipAboveBandSaysLengthen(t *testing.T) {

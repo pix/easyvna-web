@@ -345,12 +345,17 @@ func ParseHelp(lines []string) map[string]bool {
 	return cmds
 }
 
-// ParseProfileLine parses one line of the custom firmware's `profile`
-// output: "name start_hz stop_hz slot cal(0|1) active(0|1)".
+// ParseProfileLine parses one profile record of the PiX firmware's
+// `profile` output: "name start_hz stop_hz points slot cal(0|1) active(0|1)".
+// The older 6-field form without points is accepted too. The custom line
+// ("custom start stop points slot saved active") has the same shape.
 func ParseProfileLine(line string) (vna.DeviceProfile, error) {
 	f := strings.Fields(line)
-	if len(f) != 6 {
-		return vna.DeviceProfile{}, fmt.Errorf("profile: want 6 fields, got %q", line)
+	if len(f) != 6 && len(f) != 7 {
+		return vna.DeviceProfile{}, fmt.Errorf("profile: want 7 fields, got %q", line)
+	}
+	if len(f) == 6 { // no points column
+		f = append(f[:3], append([]string{"0"}, f[3:]...)...)
 	}
 	var p vna.DeviceProfile
 	var err error
@@ -361,7 +366,10 @@ func ParseProfileLine(line string) (vna.DeviceProfile, error) {
 	if p.Stop, err = strconv.ParseFloat(f[2], 64); err != nil {
 		return p, fmt.Errorf("profile stop: %w", err)
 	}
-	if p.Slot, err = strconv.Atoi(f[3]); err != nil {
+	if p.Points, err = strconv.Atoi(f[3]); err != nil {
+		return p, fmt.Errorf("profile points: %w", err)
+	}
+	if p.Slot, err = strconv.Atoi(f[4]); err != nil {
 		return p, fmt.Errorf("profile slot: %w", err)
 	}
 	flag := func(s string) (bool, error) {
@@ -373,23 +381,61 @@ func ParseProfileLine(line string) (vna.DeviceProfile, error) {
 		}
 		return false, fmt.Errorf("profile flag %q not 0/1", s)
 	}
-	if p.Cal, err = flag(f[4]); err != nil {
+	if p.Cal, err = flag(f[5]); err != nil {
 		return p, err
 	}
-	if p.Active, err = flag(f[5]); err != nil {
+	if p.Active, err = flag(f[6]); err != nil {
 		return p, err
 	}
 	return p, nil
 }
 
-// ParseProfiles parses `profile` listing output, skipping lines that are not
-// profile records (headers, blank).
-func ParseProfiles(lines []string) []vna.DeviceProfile {
-	var out []vna.DeviceProfile
-	for _, l := range lines {
-		if p, err := ParseProfileLine(l); err == nil {
-			out = append(out, p)
+// ParseBootLine parses "boot <name> ask=<0|1>".
+func ParseBootLine(line string) (vna.DeviceBoot, bool) {
+	f := strings.Fields(line)
+	if len(f) < 2 || f[0] != "boot" {
+		return vna.DeviceBoot{}, false
+	}
+	b := vna.DeviceBoot{Name: f[1]}
+	for _, x := range f[2:] {
+		if v, ok := strings.CutPrefix(x, "ask="); ok {
+			b.Ask = v == "1"
 		}
+	}
+	return b, true
+}
+
+// ParseProfiles parses the `profile` listing: profile records, the custom
+// record and the boot line. Unknown lines are skipped.
+func ParseProfiles(lines []string) vna.DeviceProfiles {
+	out := vna.DeviceProfiles{Profiles: []vna.DeviceProfile{}}
+	for _, l := range lines {
+		if b, ok := ParseBootLine(l); ok {
+			out.Boot = &b
+			continue
+		}
+		p, err := ParseProfileLine(l)
+		if err != nil {
+			continue
+		}
+		if p.Name == "custom" {
+			out.Custom = &p
+			continue
+		}
+		out.Profiles = append(out.Profiles, p)
 	}
 	return out
 }
+
+// ParseFork returns the text after "Fork:" in version/info output, if any.
+func ParseFork(lines []string) string {
+	for _, l := range lines {
+		if v, ok := strings.CutPrefix(strings.TrimSpace(l), "Fork:"); ok {
+			return strings.TrimSpace(v)
+		}
+	}
+	return ""
+}
+
+// IsPiXFork reports whether a fork string names the PiX firmware.
+func IsPiXFork(fork string) bool { return strings.HasPrefix(strings.ToLower(fork), "pix") }

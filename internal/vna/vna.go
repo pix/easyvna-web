@@ -13,11 +13,12 @@ import (
 
 // Info describes a connected device and its capabilities.
 type Info struct {
-	Driver    string   `json:"driver"`  // e.g. "nanovna-h"
-	Model     string   `json:"model"`   // e.g. "NanoVNA-H 4"
-	Version   string   `json:"version"` // firmware version string
-	Port      string   `json:"port"`    // serial device or "mock"
-	Raw       []string `json:"raw"`     // raw identification lines (e.g. `info` output)
+	Driver    string   `json:"driver"`         // e.g. "nanovna-h"
+	Model     string   `json:"model"`          // e.g. "NanoVNA-H 4"
+	Version   string   `json:"version"`        // firmware version string
+	Fork      string   `json:"fork,omitempty"` // e.g. "PiX (...)" from a "Fork:" line
+	Port      string   `json:"port"`           // serial device or "mock"
+	Raw       []string `json:"raw"`            // raw identification lines (e.g. `info` output)
 	MaxPoints int      `json:"maxPoints"`
 	MinFreq   float64  `json:"minFreq"` // Hz
 	MaxFreq   float64  `json:"maxFreq"` // Hz
@@ -143,15 +144,29 @@ type Device interface {
 // ErrNotConnected is returned when no device is available.
 var ErrNotConnected = errors.New("no VNA connected")
 
-// DeviceProfile is an on-device sweep profile (custom NanoVNA-H4 firmware
-// `profile` command): a named range tied to a calibration slot.
+// DeviceProfile is an on-device sweep profile (PiX fork of the NanoVNA-H4
+// firmware, `profile` command): a named range tied to a calibration slot.
 type DeviceProfile struct {
 	Name   string  `json:"name"`
 	Start  float64 `json:"start"`
 	Stop   float64 `json:"stop"`
+	Points int     `json:"points"`
 	Slot   int     `json:"slot"`
-	Cal    bool    `json:"cal"`    // the slot holds calibration data
+	Cal    bool    `json:"cal"`    // the slot holds calibration data ("saved" for custom)
 	Active bool    `json:"active"` // this profile is currently applied
+}
+
+// DeviceBoot is the firmware's boot-profile setting ("boot <name> ask=<0|1>").
+type DeviceBoot struct {
+	Name string `json:"name"`
+	Ask  bool   `json:"ask"`
+}
+
+// DeviceProfiles is the full `profile` listing.
+type DeviceProfiles struct {
+	Profiles []DeviceProfile `json:"profiles"`         // wide, 433, 869, 915
+	Custom   *DeviceProfile  `json:"custom,omitempty"` // range stored with the custom slot
+	Boot     *DeviceBoot     `json:"boot,omitempty"`
 }
 
 // Profiler is optionally implemented by devices whose firmware has
@@ -159,6 +174,7 @@ type DeviceProfile struct {
 // firmware actually has them (stock firmware does not).
 type Profiler interface {
 	SupportsProfiles() bool
-	Profiles(ctx context.Context) ([]DeviceProfile, error)
+	Profiles(ctx context.Context) (DeviceProfiles, error)
+	// ApplyProfile applies wide, 433, 869, 915 or custom.
 	ApplyProfile(ctx context.Context, name string) (DeviceProfile, error)
 }

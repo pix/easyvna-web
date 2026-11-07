@@ -1,6 +1,10 @@
 package server
 
-import "vnaview/internal/rf"
+import (
+	"strconv"
+
+	"vnaview/internal/rf"
+)
 
 // Profile is a one-tap sweep setup.
 type Profile struct {
@@ -15,20 +19,32 @@ type Profile struct {
 	CalSlot  int       `json:"calSlot"`  // default firmware slot for this profile's calibration
 }
 
-// DefaultProfiles are the quick profiles shown at the top of the UI. Each
-// band profile is centred on its band with ±50 MHz so the dip is visible
-// even when the antenna is somewhat detuned.
+// CustomSlot is the calibration slot of the custom (advanced) range. It
+// matches the PiX firmware, which keeps slots 0 and 1 for the user because
+// stock firmware loads slot 0 at power-on.
+const CustomSlot = 2
+
+// DefaultProfiles are the quick profiles shown at the top of the UI. They
+// match the PiX firmware v2 profile table (ranges, points and slots), and
+// the same slots are used with stock firmware so a calibration saved from
+// either side is found by the other.
 func DefaultProfiles() []Profile {
 	return []Profile{
 		{ID: "wide", Label: "Wide", Sub: "300–1000 MHz · identify", Start: 300e6, Stop: 1000e6, Points: 401,
-			Bands: []rf.Band{rf.Band433, rf.Band869, rf.Band915}, Identify: true, CalSlot: 0},
-		{ID: "433", Label: "433", Sub: "384–484 MHz", Start: 384e6, Stop: 484e6, Points: 401,
-			Bands: []rf.Band{rf.Band433}, CalSlot: 1},
-		{ID: "869", Label: "869", Sub: "819–919 MHz", Start: 819e6, Stop: 919e6, Points: 401,
-			Bands: []rf.Band{rf.Band869, rf.Band869g3}, CalSlot: 2},
-		{ID: "915", Label: "915", Sub: "865–965 MHz", Start: 865e6, Stop: 965e6, Points: 401,
-			Bands: []rf.Band{rf.Band915}, CalSlot: 3},
+			Bands: []rf.Band{rf.Band433, rf.Band869, rf.Band915}, Identify: true, CalSlot: 3},
+		{ID: "433", Label: "433", Sub: "388.92–478.92 MHz", Start: 388.92e6, Stop: 478.92e6, Points: 401,
+			Bands: []rf.Band{rf.Band433}, CalSlot: 4},
+		{ID: "869", Label: "869", Sub: "779–959 MHz", Start: 779e6, Stop: 959e6, Points: 401,
+			Bands: []rf.Band{rf.Band869, rf.Band869g3}, CalSlot: 5},
+		{ID: "915", Label: "915", Sub: "825–1005 MHz", Start: 825e6, Stop: 1005e6, Points: 401,
+			Bands: []rf.Band{rf.Band915}, CalSlot: 6},
 	}
+}
+
+// mhzRange formats "388.92–478.92 MHz".
+func mhzRange(start, stop float64) string {
+	f := func(v float64) string { return strconv.FormatFloat(v/1e6, 'f', -1, 64) }
+	return f(start) + "–" + f(stop) + " MHz"
 }
 
 // bandsOverlapping returns the LoRa bands that overlap [start, stop]; used

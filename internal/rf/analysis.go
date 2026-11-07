@@ -8,8 +8,9 @@ import (
 // Band is a frequency range of interest (e.g. the EU 868 MHz SRD band).
 type Band struct {
 	Name string  `json:"name"`
-	Lo   float64 `json:"lo"` // Hz
-	Hi   float64 `json:"hi"` // Hz
+	Lo   float64 `json:"lo"`            // Hz
+	Hi   float64 `json:"hi"`            // Hz
+	Ref  float64 `json:"ref,omitempty"` // offset reference, Hz (0 = centre)
 }
 
 // Valid reports whether the band is usable.
@@ -70,7 +71,7 @@ type BandSummary struct {
 	// Nearest resonance dip to the band centre (if any dip was found).
 	DipFreq    *float64 `json:"dipFreq,omitempty"`
 	DipSWR     *float64 `json:"dipSWR,omitempty"`
-	DipOffset  *float64 `json:"dipOffset,omitempty"`     // Hz from band centre
+	DipOffset  *float64 `json:"dipOffset,omitempty"`     // Hz from band reference
 	DipEdgeOff *float64 `json:"dipEdgeOffset,omitempty"` // Hz from nearest band edge (0 inside)
 	DipAdvice  string   `json:"dipAdvice,omitempty"`
 }
@@ -174,7 +175,7 @@ func Analyze(freq []float64, d Derived, bands []Band) (Summary, error) {
 		}
 		bs := SummarizeBand(freq, d, b)
 		if dp := NearestDip(s.Dips, b); dp != nil {
-			f, sw, off := dp.Freq, dp.SWR, dp.Freq-b.Centre()
+			f, sw, off := dp.Freq, dp.SWR, dp.Freq-b.Reference()
 			edge := 0.0
 			if f < b.Lo {
 				edge = f - b.Lo
