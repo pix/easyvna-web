@@ -142,6 +142,13 @@
       return h;
     },
   };
+  // Closing the tab ends the connection without the driver's `resume`, which
+  // would leave the NanoVNA's own sweep paused (`scan` pauses it): send it
+  // now, best effort (the page may be gone before it is written).
+  window.addEventListener('pagehide', () => {
+    const c = serial.cur;
+    if (c && !demo) { try { c.write(new TextEncoder().encode('\rresume\r')).catch(() => {}); } catch { /* closing */ } }
+  });
   if (hasSerial) {
     navigator.serial.addEventListener('disconnect', (e) => {
       const cur = serial.cur;
@@ -308,7 +315,10 @@
   // ---------- host bar: mode, browser data, offline copy ----------
   function hostUI(version) {
     const btn = $('btnConnect');
-    if (!demo) { btn.textContent = 'Connect'; btn.title = 'Choose the NanoVNA (USB) and connect'; }
+    if (!demo) {
+      btn.dataset.idle = 'Connect'; // app.js shows Disconnect while connected
+      if (btn.textContent !== 'Disconnect') { btn.textContent = 'Connect'; btn.title = 'Choose the NanoVNA (USB) and connect'; }
+    }
     const foot = document.querySelector('.foot');
     if (foot) foot.append(` · ${version} (in your browser)`);
     const bar = document.createElement('div');

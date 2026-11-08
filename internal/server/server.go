@@ -173,6 +173,7 @@ type Server struct {
 	dev      vna.Device
 	info     *vna.Info
 	lastErr  string
+	parked   bool // Disconnect pressed: do not reopen the port until Connect
 	busy     string
 	cfg      Config
 	cal      CalState
@@ -278,6 +279,12 @@ func (s *Server) device(ctx context.Context) (vna.Device, error) {
 	s.mu.Unlock()
 	if dev != nil {
 		return dev, nil
+	}
+	s.mu.Lock()
+	parked := s.parked
+	s.mu.Unlock()
+	if parked {
+		return nil, errDisconnected
 	}
 	cctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()

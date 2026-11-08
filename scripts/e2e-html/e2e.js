@@ -519,6 +519,22 @@ async function serialFlow(browser, base, label, shots) {
     check(`${label}: 869 sweep over Web Serial (401 points)`, n === 401, String(n));
     if (shots) await shot(page, 'html-usb-connected.png', false);
   });
+  await step(`${label}: Disconnect gives the NanoVNA back`, async () => {
+    check(`${label}: connected: the button reads Disconnect`, (await page.textContent('#btnConnect')) === 'Disconnect');
+    const n0 = await page.evaluate(() => __fake.log.length);
+    await page.click('#btnConnect');
+    await page.waitForFunction(() => !S.state.connected, null, { timeout: 15000 });
+    await page.waitForTimeout(1500); // a sweep or reconnect would show up here
+    const log = await page.evaluate((n) => __fake.log.slice(n), n0);
+    s = await st(page);
+    check(`${label}: Disconnect sends resume, closes the port, stays closed`, log.includes('cmd resume') && log.includes('close') &&
+      log.indexOf('cmd resume') < log.indexOf('close') && !log.slice(log.indexOf('close')).some((l) => /^open|^tx/.test(l)) && !s.connected, log.join(' | '));
+    check(`${label}: after Disconnect the button reads Connect, the banner says how to resume`,
+      (await page.textContent('#btnConnect')) === 'Connect' && /Press Connect/.test(s.error), s.error);
+    await page.click('#btnConnect');
+    await page.waitForFunction(() => S.state.connected, null, { timeout: 20000 });
+    check(`${label}: Connect after Disconnect reconnects`, (await page.textContent('#btnConnect')) === 'Disconnect');
+  });
   await step(`${label}: unplug`, async () => {
     await page.evaluate(() => __fake.unplug());
     await page.waitForFunction(() => !S.state.connected, null, { timeout: 15000 });

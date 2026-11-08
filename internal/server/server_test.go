@@ -343,3 +343,51 @@ func TestRebootIntoDFU(t *testing.T) {
 		t.Errorf("reset dfu not sent: %q", sims[0].Log)
 	}
 }
+
+// Disconnect gives the NanoVNA back (`resume`, port closed) and nothing
+// reopens it until Connect.
+func TestDisconnect(t *testing.T) {
+	st, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sims []*mock.Sim
+	open := func(ctx context.Context) (vna.Device, error) {
+		sim := mock.New(mock.Options{PointTime: time.Microsecond, Seed: 7})
+		sims = append(sims, sim)
+		return nanovnah.Open(ctx, sim, nanovnah.Options{PortName: "mock", Mock: true, CalSettle: time.Millisecond})
+	}
+	s := New(Options{Open: open, Store: st, Static: fstest.MapFS{}, Logger: log.New(io.Discard, "", 0)})
+	ts := httptest.NewServer(s.Handler())
+	defer ts.Close()
+	var state struct {
+		Connected bool   `json:"connected"`
+		Error     string `json:"error"`
+	}
+	if code := call(t, ts, "POST", "/api/connect", "", &state); code != 200 || !state.Connected {
+		t.Fatalf("connect: %d %+v", code, state)
+	}
+	if code := call(t, ts, "POST", "/api/sweep", "", nil); code != 200 {
+		t.Fatalf("sweep: %d", code)
+	}
+	s.continuous.Store(true)
+	if code := call(t, ts, "POST", "/api/disconnect", "", &state); code != 200 || state.Connected || !strings.Contains(state.Error, "Press Connect") {
+		t.Fatalf("disconnect: %d %+v", code, state)
+	}
+	if s.continuous.Load() {
+		t.Error("live sweeping not stopped")
+	}
+	log0 := sims[0].Log
+	if len(log0) == 0 || log0[len(log0)-1] != "resume" {
+		t.Errorf("last command is not resume: %q", log0)
+	}
+	if code := call(t, ts, "POST", "/api/sweep", "", nil); code == 200 {
+		t.Error("a sweep reopened the port after Disconnect")
+	}
+	if len(sims) != 1 {
+		t.Errorf("port reopened %d times after Disconnect", len(sims)-1)
+	}
+	if code := call(t, ts, "POST", "/api/connect", "", &state); code != 200 || !state.Connected {
+		t.Fatalf("connect again: %d %+v", code, state)
+	}
+}

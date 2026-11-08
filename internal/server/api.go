@@ -22,6 +22,7 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/state", s.hState)
 	mux.HandleFunc("GET /api/events", s.hEvents)
 	mux.HandleFunc("POST /api/connect", s.hConnect)
+	mux.HandleFunc("POST /api/disconnect", s.hDisconnect)
 	mux.HandleFunc("POST /api/dfu", s.hDFU)
 	mux.HandleFunc("POST /api/profile", s.hProfile)
 	mux.HandleFunc("PUT /api/profiles/{id}/slot", s.hProfileSlot)
@@ -132,6 +133,7 @@ func (s *Server) hConnect(w http.ResponseWriter, r *http.Request) {
 		_ = s.dev.Close()
 		s.dev, s.info = nil, nil
 	}
+	s.parked = false
 	s.mu.Unlock()
 	_, err := s.device(r.Context())
 	s.opMu.Unlock()
@@ -140,6 +142,31 @@ func (s *Server) hConnect(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusServiceUnavailable, err)
 		return
 	}
+	writeJSON(w, 200, s.state())
+}
+
+// errDisconnected is what device() returns after Disconnect, until Connect.
+var errDisconnected = errors.New("disconnected: the NanoVNA is free (its own screen sweeps again). Press Connect to use it")
+
+// hDisconnect releases the NanoVNA: live sweeping stops, the driver gives
+// the device its own sweep back (NanoVNA-H: `resume`, which `scan` paused)
+// and closes the port, so the NanoVNA's screen and menus work normally and
+// other programs can open it. Nothing reopens it until Connect.
+func (s *Server) hDisconnect(w http.ResponseWriter, r *http.Request) {
+	s.continuous.Store(false)
+	s.opMu.Lock()
+	s.mu.Lock()
+	dev := s.dev
+	s.dev, s.info = nil, nil
+	s.parked = true
+	s.lastErr = errDisconnected.Error()
+	s.mu.Unlock()
+	if dev != nil {
+		_ = dev.Close()
+		s.log.Printf("device: disconnected by the user")
+	}
+	s.opMu.Unlock()
+	s.publishState()
 	writeJSON(w, 200, s.state())
 }
 

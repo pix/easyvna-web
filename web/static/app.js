@@ -119,6 +119,11 @@ function renderState() {
   cp.textContent = !st.connected ? 'CAL –' : !cal.known ? 'CAL ?' : cal.applied ? 'CAL ON' : 'CAL OFF';
   cp.title = 'Firmware reports: ' + (cal.raw || '(nothing)');
   showBanner(!st.connected && st.error ? 'Device: ' + st.error : '');
+  const cb = $('btnConnect');
+  if (cb.dataset.idle == null) cb.dataset.idle = cb.textContent; // "Connect" (browser) or "Reconnect"
+  cb.textContent = st.connected ? 'Disconnect' : cb.dataset.idle;
+  cb.title = st.connected ? 'Release the NanoVNA: while EasyVNA Web is connected, its own screen is paused and its menus are slow'
+    : (HOST ? 'Choose the NanoVNA (USB) and connect' : 'Connect to the NanoVNA');
 
   renderProfiles(); renderCal(); renderTiles(); renderAdvanced(); renderDevice();
   $('tabS21').hidden = !st.config.s21;
@@ -318,6 +323,10 @@ $('aTune').onclick = () => openTune();
 $('aCompare').onclick = () => openCompare();
 $('aReport').onclick = () => openReport();
 $('btnConnect').onclick = () => run(async () => {
+  if (S.state && S.state.connected) { // release the NanoVNA: its own sweep and menus come back
+    await api('POST', 'api/disconnect'); toast('Disconnected: the NanoVNA runs on its own again');
+    return;
+  }
   if (HOST) await HOST.beforeConnect(); // Web Serial: pick the port while the click still counts
   await api('POST', 'api/connect'); toast('Connected');
 });
