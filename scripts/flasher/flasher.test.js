@@ -13,6 +13,7 @@ const { SimDfuSe, fakeFirmware, VARIANTS, ST } = require('./dfuse-sim.js');
 const FW_DIR = path.join(__dirname, '..', '..', 'web', 'static', 'firmware');
 const MANIFEST = JSON.parse(fs.readFileSync(path.join(FW_DIR, 'manifest.json'), 'utf8'));
 const EASYVNA = new Uint8Array(fs.readFileSync(path.join(FW_DIR, MANIFEST.file)));
+const EASYVNA_PAGES = Math.ceil(EASYVNA.length / 2048);
 const H4 = F.parseLayout(VARIANTS.f303.layout);
 const H = F.parseLayout(VARIANTS.f072.layout);
 
@@ -126,7 +127,7 @@ const okText = (v) => v.checks.filter((c) => !c.ok).map((c) => c.text).join(' | 
 test('validate: the bundled EasyVNA image on an H4 keeps the calibration', () => {
   const v = F.validateImage(H4, F.loadImage(MANIFEST.file, EASYVNA), { mode: 'firmware', flashSize: MANIFEST.flashSize });
   assert.ok(v.ok, okText(v));
-  assert.equal(v.plan.pages.length, 60);
+  assert.equal(v.plan.pages.length, EASYVNA_PAGES);
   assert.equal(v.plan.pages[59].start, 0x0801d800);
   assert.equal(v.plan.data.length % 4, 0);
   assert.ok(v.checks.some((c) => /kept/.test(c.text)));
@@ -208,9 +209,9 @@ test('flash the bundled firmware: only its pages erased, calibration untouched, 
   await F.flashPlan(dfu, v.plan, { phase: (p) => phases.push(p) });
   assert.deepEqual(phases, ['erase', 'write', 'verify', 'done']);
   assert.equal(sha(sim.flash.subarray(0, EASYVNA.length)), MANIFEST.sha256);
-  assert.ok(sim.flash.subarray(EASYVNA.length, 60 * 2048).every((x) => x === 0xff));
-  assert.deepEqual(sim.flash.subarray(60 * 2048), before.subarray(60 * 2048)); // old bytes up to 0x23800 and the save area
-  assert.deepEqual(sim.erased, Array.from({ length: 60 }, (_, i) => 0x08000000 + i * 2048));
+  assert.ok(sim.flash.subarray(EASYVNA.length, EASYVNA_PAGES * 2048).every((x) => x === 0xff));
+  assert.deepEqual(sim.flash.subarray(EASYVNA_PAGES * 2048), before.subarray(EASYVNA_PAGES * 2048)); // old bytes up to 0x23800 and the save area
+  assert.deepEqual(sim.erased, Array.from({ length: EASYVNA_PAGES }, (_, i) => 0x08000000 + i * 2048));
   assert.equal(sim.massErase, 0);
   assert.equal(sim.unprotect, 0);
   assert.equal(sim.pollViolations, 0);

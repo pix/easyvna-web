@@ -433,7 +433,7 @@ either side is found by the other:
 | custom | as saved | as saved | 2 |
 
 **Bundled firmware.** EasyVNA Web carries a copy of the latest EasyVNA
-firmware release for the NanoVNA-H4 (currently `EasyVNA-H4-v0.1.0.bin`, in
+firmware release for the NanoVNA-H4 (currently `EasyVNA-H4-v0.1.1.bin`, in
 `web/static/firmware/`), so **Firmware** can install it without a download.
 It is the unmodified release binary, checked against the release's
 SHA-256 at build time and again before flashing. The EasyVNA firmware is

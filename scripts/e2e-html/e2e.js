@@ -646,6 +646,9 @@ const SIM = require('../flasher/dfuse-sim.js');
 const SIM_SRC = fs.readFileSync(path.join(__dirname, '..', 'flasher', 'dfuse-sim.js'), 'utf8') + '\n;DfuSeSim.installFakeUSB(window);';
 const FW_DIR = path.join(__dirname, '..', '..', 'web', 'static', 'firmware');
 const FW_MANIFEST = JSON.parse(fs.readFileSync(path.join(FW_DIR, 'manifest.json'), 'utf8'));
+const FW_PAGES = Math.ceil(FW_MANIFEST.size / 2048); // 2 KB pages the bundled image covers
+const FW_KB = (n) => (n % 1024 ? (n / 1024).toFixed(1) : String(n / 1024)) + ' KB';
+const FW_END = '0x' + (0x08000000 + FW_PAGES * 2048).toString(16).toUpperCase().padStart(8, '0');
 const FW_BIN = fs.readFileSync(path.join(FW_DIR, FW_MANIFEST.file));
 function intelHex(data, base) {
   const out = [];
@@ -757,7 +760,7 @@ async function flasherFlow(browser, base, label, shots, ctxOpts = {}) {
       /128 × 2 KB = 256 KB · transfers of 2048 bytes/.test(await page.textContent('#fwLayout')));
     const checks = await page.$$eval('#fwChecks li', (li) => li.map((x) => x.className));
     check(`${label}: the bundled image passes every check on the H4`, checks.length >= 5 && checks.every((c) => c === 'ok'), checks.join());
-    check(`${label}: plan: 60 pages`, /erase 60 pages \(120 KB\)/.test(await page.textContent('#fwPlan')));
+    check(`${label}: plan: ${FW_PAGES} pages`, (await page.textContent('#fwPlan')).includes(`erase ${FW_PAGES} pages (${FW_KB(FW_PAGES * 2048)})`));
     if (shots) await fwShot(page, 'flasher-connected.png', true);
     if (shots) {
       const vp = page.viewportSize();
@@ -783,7 +786,7 @@ async function flasherFlow(browser, base, label, shots, ctxOpts = {}) {
     const ask = await fwFlash(page);
     check(`${label}: confirmation: target, image, version, size, pages, calibration kept, already backed up`,
       /NanoVNA-H4 \(STM32F303, 256 KB\)/.test(ask) && ask.includes(`${FW_MANIFEST.file} · ${FW_MANIFEST.version} · ${FW_MANIFEST.size.toLocaleString('en-US')} bytes`) &&
-      /Erase: 60 pages of 2 KB, 0x08000000–0x0801E000/.test(ask) && /Calibration and configuration are kept/.test(ask) && /Backed up in this session/.test(ask), ask);
+      ask.includes(`Erase: ${FW_PAGES} pages of 2 KB, 0x08000000–${FW_END}`) && /Calibration and configuration are kept/.test(ask) && /Backed up in this session/.test(ask), ask);
     if (shots) {
       await page.waitForFunction(() => EasyVNAFlasherUI.state.phase === 'write' && EasyVNAFlasherUI.state.prog && EasyVNAFlasherUI.state.prog.done > 40000, null, { timeout: 20000 });
       await shot(page, 'flasher-progress.png', false);
@@ -793,7 +796,7 @@ async function flasherFlow(browser, base, label, shots, ctxOpts = {}) {
     const st = await sim(page, () => ({ erased: __d.erased.slice(), mass: __d.massErase, unprot: __d.unprotect, viol: __d.pollViolations }));
     check(`${label}: flash == EasyVNA image`, (await simSha(page, 0, FW_BIN.length)) === FW_MANIFEST.sha256);
     check(`${label}: calibration and config area untouched`, (await simSha(page, H4_FW_END)) === calBefore);
-    check(`${label}: only the 60 pages of the image erased, no mass erase`, st.erased.length === 60 && st.erased.every((a, i) => a === 0x08000000 + i * 2048) && st.mass === 0 && st.unprot === 0, JSON.stringify(st).slice(0, 200));
+    check(`${label}: only the ${FW_PAGES} pages of the image erased, no mass erase`, st.erased.length === FW_PAGES && st.erased.every((a, i) => a === 0x08000000 + i * 2048) && st.mass === 0 && st.unprot === 0, JSON.stringify(st).slice(0, 200));
     check(`${label}: bwPollTimeout honoured`, st.viol === 0, String(st.viol));
     check(`${label}: no second backup (already done this session)`, dl.length === 0, dl.join());
     check(`${label}: done: verified, calibration kept`, /Flashed and verified: EasyVNA/.test(await page.textContent('#fwDone')) && /Calibration and configuration were kept/.test(await page.textContent('#fwDone')));

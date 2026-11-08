@@ -1,12 +1,12 @@
 {
   "name": "EasyVNA",
-  "version": "v0.1.0",
-  "file": "EasyVNA-H4-v0.1.0.bin",
-  "sha256": "15a2fcc71fac8d6a2ef04f9d44c5bf8ff61999baf53e1b3134379f841e275c63",
-  "size": 122660,
+  "version": "v0.1.1",
+  "file": "EasyVNA-H4-v0.1.1.bin",
+  "sha256": "ec143cf2b944f90d750093fa6505dfbb302e4c25a8a5160b631b32bfade9b347",
+  "size": 123764,
   "target": "NanoVNA-H4 / STM32F303",
   "flashSize": 262144,
-  "published": "2026-11-07T22:25:22Z",
-  "source": "https://github.com/pix/easyvna/releases/tag/v0.1.0",
+  "published": "2026-11-08T09:03:59Z",
+  "source": "https://github.com/pix/easyvna/releases/tag/v0.1.1",
   "license": "GPL-3.0"
 }

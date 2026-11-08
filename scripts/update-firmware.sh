@@ -22,13 +22,14 @@ auth=()
 if [ -n "${1:-}" ]; then url="https://api.github.com/repos/$REPO/releases/tags/$1"; else url="https://api.github.com/repos/$REPO/releases/latest"; fi
 curl -fsSL --retry 3 "${auth[@]}" -H 'Accept: application/vnd.github+json' "$url" -o "$tmp/release.json"
 
-# tag, html url, publication date, then "name<TAB>url" per asset.
+# tag, html url, publication date, then "name<TAB>api url<TAB>download url"
+# per asset.
 python3 -I - "$tmp/release.json" > "$tmp/release.txt" <<'EOF'
 import json, sys
 d = json.load(open(sys.argv[1]))
 print(d["tag_name"]); print(d["html_url"]); print(d.get("published_at") or "")
 for a in d.get("assets", []):
-    print(a["name"] + "\t" + a["browser_download_url"])
+    print(a["name"] + "\t" + a["url"] + "\t" + a["browser_download_url"])
 EOF
 tag="$(sed -n 1p "$tmp/release.txt")"
 page="$(sed -n 2p "$tmp/release.txt")"
@@ -39,8 +40,15 @@ sums_line="$(tail -n +4 "$tmp/release.txt" | grep -E '^SHA256SUMS	' | head -1 ||
 [ -n "$sums_line" ] || { echo "update-firmware: release $tag has no SHA256SUMS" >&2; exit 1; }
 file="${bin_line%%	*}"
 case "$file" in */*|.*) echo "update-firmware: odd asset name $file" >&2; exit 1 ;; esac
-curl -fsSL --retry 3 -o "$tmp/$file" "${bin_line#*	}"
-curl -fsSL --retry 3 -o "$tmp/SHA256SUMS" "${sums_line#*	}"
+# fetch OUT LINE: the asset through the API (application/octet-stream), else
+# its github.com download link (which sometimes answers 504 for a while).
+fetch() {
+  local rest="${2#*	}"
+  curl -fsSL --retry 3 "${auth[@]}" -H 'Accept: application/octet-stream' -o "$1" "${rest%%	*}" ||
+    curl -fsSL --retry 3 -o "$1" "${rest#*	}"
+}
+fetch "$tmp/$file" "$bin_line"
+fetch "$tmp/SHA256SUMS" "$sums_line"
 
 want="$(awk -v f="$file" '$2 == f || $2 == "*" f { print $1 }' "$tmp/SHA256SUMS")"
 got="$(sha256sum "$tmp/$file" | cut -d' ' -f1)"
