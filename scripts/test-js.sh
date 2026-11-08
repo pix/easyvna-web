@@ -7,4 +7,4 @@ cd "$(dirname "$0")/.."
 node --check web/static/flasher.js
 node --check web/static/app.js
 node --check web/browser/host.js
-node --test scripts/flasher/
+node --test scripts/flasher/*.test.js
