@@ -20,4 +20,5 @@ LICENSE text eol=lf
 *.zip   binary
 *.gz    binary
 *.wasm  binary
+*.bin   binary
 *.exe   binary

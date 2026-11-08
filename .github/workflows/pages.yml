@@ -28,11 +28,20 @@ jobs:
       - uses: actions/setup-go@v5.0.2
         with:
           go-version-file: go.mod
+      - name: bundle the latest EasyVNA firmware release
+        # The committed copy in web/static/firmware/ is used when nothing
+        # newer is out; the script checks the release's SHA256SUMS.
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          version="$(git describe --tags --always)" # before the firmware update dirties the tree
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+          scripts/update-firmware.sh
       - name: test
         run: go test ./...
       - name: build the single HTML file
         run: |
-          scripts/build-html.sh
+          scripts/build-html.sh "$VERSION"
           mkdir -p site
           cp dist/easyvna-web.html site/index.html
           cp dist/easyvna-web.html site/easyvna-web.html

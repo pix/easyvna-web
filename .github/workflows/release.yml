@@ -15,6 +15,12 @@ jobs:
       - uses: actions/setup-go@v5.0.2
         with:
           go-version-file: go.mod
+      - name: bundle the latest EasyVNA firmware release
+        # Embedded in the programs (go:embed) and the HTML page; checked
+        # against the release's SHA256SUMS.
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: scripts/update-firmware.sh
       - name: test
         run: go test ./...
       - name: build archives
