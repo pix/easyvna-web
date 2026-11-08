@@ -264,7 +264,23 @@ async function demoFlow(browser, base, label, shots) {
     await page.setInputFiles('#fileInput', path.join(FIXTURES, 'nanovna-saver.csv'));
     await page.waitForFunction(() => S.res && S.res.source && S.res.source.file === 'nanovna-saver.csv', null, { timeout: 15000 });
     check(`${label}: CSV with S21 opens`, await page.evaluate(() => S.res.freq.length === 4 && S.res.s21.length === 4 && !document.getElementById('expS2p').hidden));
+    // A jittery measurement (bad connector) is flagged in plain words.
+    const noisy = path.join(TMP, 'bad-connector.s1p');
+    let rows = '# MHz S RI R 50\n', seed = 7;
+    const rnd = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647 - 0.5; };
+    for (let i = 0; i < 401; i++) {
+      const f = 779 + 180 * i / 400, x = 45 * 14 * (f / 868 - 868 / f), re = 45, d = (re + 50) ** 2 + x * x;
+      rows += `${f.toFixed(4)} ${(((re * re + x * x - 2500) / d) + 0.03 * rnd()).toFixed(6)} ${((100 * x / d) + 0.03 * rnd()).toFixed(6)}\n`;
+    }
+    fs.writeFileSync(noisy, rows);
+    await page.setInputFiles('#fileInput', noisy);
+    await page.waitForFunction(() => S.res && S.res.source && S.res.source.file === 'bad-connector.s1p', null, { timeout: 15000 });
+    const wtxt = await page.textContent('#warnings');
+    check(`${label}: noisy measurement warning ("check the connector and cable, then recalibrate"), verdict CHECK`,
+      /Noisy measurement/.test(wtxt) && /check the connector and cable, then recalibrate/.test(wtxt) && /CHECK/.test(await page.textContent('#verdict')), wtxt);
+    if (shots) { await page.evaluate(() => scrollTo(0, 0)); await shot(page, 'html-noisy-warning.png', false); }
     await sweepDone(page, () => page.click('#fileLive'));
+    check(`${label}: clean simulator sweep has no noise or calibration warning`, await page.evaluate(() => !S.res.summary.warnings.some((w) => /noisy|calmismatch/.test(w.code))));
     check(`${label}: "Back to live" sweeps and hides the file bar`, await page.evaluate(() => !S.res.source && document.getElementById('filebar').hidden));
   });
   await step(`${label}: Ctrl+P prints every graph`, async () => {
@@ -363,9 +379,13 @@ async function demoFlow(browser, base, label, shots) {
     await page.waitForSelector('#histLog', { timeout: 10000 });
     check(`${label}: history opens on the sheet's antenna, with the sheet and report entries`, (await page.inputValue('#histName')) === 'whip-e2e' &&
       (await page.evaluate(() => S.hist && S.hist.history.some((e) => e.kind === 'sheet') && S.hist.history.some((e) => e.kind === 'report'))));
+    // A new antenna name: log the slightly long whip, then the tuned one.
+    await page.fill('#histName', 'drift-e2e');
+    await page.dispatchEvent('#histName', 'change');
+    await page.waitForFunction(() => S.hist && S.hist.name === 'drift-e2e', null, { timeout: 10000 });
     await page.click('#histLog');
-    await page.waitForFunction(() => S.hist.history[S.hist.history.length - 1].kind === 'manual', null, { timeout: 10000 });
-    const n1 = await page.evaluate(() => S.hist.history.length);
+    await page.waitForFunction(() => S.hist.history.length === 1, null, { timeout: 10000 });
+    const n1 = 1;
     await page.click('#histClose');
     await api(page, 'POST', 'api/mock/antenna', { name: '869tuned' });
     await sweepDone(page, () => page.click('#aSweep'));
@@ -379,7 +399,7 @@ async function demoFlow(browser, base, label, shots) {
     check(`${label}: logged twice, the detuned antenna shows "Resonance moved", sparklines drawn`, /Resonance moved/.test(txt) && /Previous measurement/.test(txt) && drawn, txt.slice(0, 200));
     if (shots) await shot(page, 'html-history.png', false);
     const csv = await download(page, () => page.click('#histInfo a:has-text("Export history")'));
-    check(`${label}: history CSV`, csv.name === 'whip-e2e-history.csv' && csv.body.toString().split('\n').length >= 4, csv.name);
+    check(`${label}: history CSV`, csv.name === 'drift-e2e-history.csv' && csv.body.toString().split('\n').length >= 3, csv.name);
     await page.click('#histClose');
     check(`${label}: HISTORY tile flags the drift`, /⚠/.test(await page.textContent('#aHist')));
   });

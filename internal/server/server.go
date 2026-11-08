@@ -181,6 +181,8 @@ type Server struct {
 
 	avgBuf, avgBuf21 [][]complex128
 	avgKey           string
+	prevRaw          []complex128 // previous raw S11 (for sweep-to-sweep noise)
+	prevRawKey       string
 	lastByProfile    map[string]*Result
 	tune             *tuneState
 	refs             map[string]*Result
@@ -415,10 +417,41 @@ func (s *Server) process(sw *vna.Sweep, cfg Config) *Result {
 			s21[i] = rf.TransmissionExtension(sw.S21[i], f, tau)
 		}
 	}
+	repeat := s.repeatNoise(sw.Freq, s11)
 	s11, s21, avgN := s.average(cfg, sw.Freq, s11, s21)
 	r := buildResult(sw.Freq, s11, s21, cfg, sw.Started, sw.Duration)
 	r.AvgN = avgN
+	if repeat > rf.NoiseThreshold && !hasWarning(r.Summary.Warnings, "noisy") {
+		r.Summary.Warnings = append(r.Summary.Warnings, rf.NoisyWarning(repeat, true))
+	}
 	return r
+}
+
+// repeatNoise compares this raw sweep with the previous one of the same
+// grid: the random part of their difference (smooth changes, such as a
+// moved antenna, do not count). 0 for the first sweep of a grid.
+func (s *Server) repeatNoise(freq []float64, s11 []complex128) float64 {
+	key := ""
+	if n := len(freq); n > 0 {
+		key = fmt.Sprintf("%d/%.0f/%.0f", n, freq[0], freq[n-1])
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	v := 0.0
+	if key == s.prevRawKey {
+		v = rf.RepeatNoise(s11, s.prevRaw)
+	}
+	s.prevRaw, s.prevRawKey = append([]complex128(nil), s11...), key
+	return v
+}
+
+func hasWarning(ws []rf.Warning, code string) bool {
+	for _, w := range ws {
+		if w.Code == code {
+			return true
+		}
+	}
+	return false
 }
 
 func buildResult(freq []float64, s11, s21 []complex128, cfg Config, t time.Time, dur time.Duration) *Result {

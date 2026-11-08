@@ -1,6 +1,7 @@
 package rf
 
 import (
+	"fmt"
 	"math"
 	"sort"
 )
@@ -34,7 +35,7 @@ func QFromBandwidth(f0, bw, s float64) float64 {
 
 // Warning is an automatic hint about the measurement itself.
 type Warning struct {
-	Code  string `json:"code"`  // "open", "calcheck", "lossy"
+	Code  string `json:"code"`  // "open", "calcheck", "calmismatch", "noisy", "lossy"
 	Level string `json:"level"` // "bad", "warn"
 	Title string `json:"title"`
 	Text  string `json:"text"`
@@ -71,6 +72,15 @@ func Detect(freq []float64, d Derived) []Warning {
 			Text: "|Γ| ≈ 1 everywhere: open or shorted cable, nothing connected, or a broken connector."})
 	}
 	span := freq[n-1] - freq[0]
+	if gMed <= 1.04 && span > 0 {
+		if lo, hi, k := overUnityRun(freq, d); k >= calOverPoints && 100*(hi-lo)/span >= calOverSpanPct {
+			out = append(out, Warning{Code: "calmismatch", Level: "bad", Title: "Calibration does not match this setup",
+				Text: fmt.Sprintf("|Γ| is above 1 from %.1f to %.1f MHz, which an antenna cannot do: the calibration was made with another cable or adapter, for another range, or is stale. Recalibrate at the end of the cable you measure with.", lo/1e6, hi/1e6)})
+		}
+	}
+	if lvl := NoiseLevel(gammaOf(d)); lvl > NoiseThreshold {
+		out = append(out, NoisyWarning(lvl, false))
+	}
 	centre := (freq[n-1] + freq[0]) / 2
 	if centre > 0 && span/centre >= 0.5 && gLow <= 0.9 {
 		swr10, swr90 := percentile(d.SWR, 0.1), percentile(d.SWR, 0.9)

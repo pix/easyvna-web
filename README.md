@@ -150,7 +150,10 @@ detuning test: free air, then in your hand or the enclosure. A **per band**
 line says what the change did in every band in view, e.g. *433: +3.1 MHz ·
 869: +12.4 MHz, SWR 1.8→1.3* (in Wide and Survey also for every resonance
 dip); TUNE, the sheet and the report show it too. Automatic
-warnings catch *no antenna*, *bad calibration* and *lossy "fake"* antennas.
+warnings catch *no antenna*, *bad calibration*, *lossy "fake"* antennas, a
+*noisy measurement* (a loose connector or a damaged cable: the trace
+jitters, within a sweep or from one sweep to the next) and a *calibration
+that does not match this setup* (|Γ| above 1 over part of the sweep).
 
 ![A fake (resistive) antenna is flagged and its verdicts are marked CHECK](doc/screenshots/fake-antenna-warning.png)
 
@@ -272,7 +275,7 @@ sweep as `.s1p`, `.s2p` (when S21 was measured) or CSV.
 | **HOLD** | stable-positions envelope with motion rejection and resonance spread |
 | **AVG** | averaging over ×1 / 2 / 4 / 8 / 16 sweeps |
 | **COMPARE** | S21 against antenna A, live Δ dB in band, leaderboard |
-| **Warnings** | no antenna or open cable, reflection above 1 (bad calibration), lossy / fake antenna |
+| **Warnings** | no antenna or open cable, reflection above 1 (bad calibration, also over part of the sweep), lossy / fake antenna, noisy measurement (point-to-point jitter and sweep-to-sweep repeatability, 4× real H4 noise; moving the antenna does not count) |
 | **History** | per-antenna measurement log (sheet, report, *Log this measurement*), resonance and SWR sparklines, drift warnings (resonance moved, SWR worse, rising loss), previous-measurement line on the sheet and report, CSV export |
 | **Report** | printable A4 / Letter report with vector plots (SWR, return loss, impedance, Smith) and tables, saved in the data folder |
 | **Antenna sheet** | PRINT: a one-page datasheet of the antenna (photo, key figures, all four graphs, notes, trim log); its details are remembered per antenna name |
@@ -347,6 +350,12 @@ is recalled automatically.
 The calibration does not match the current setup: a different cable or
 adapter, or a stale calibration. Recalibrate at the end of the cable you
 measure with.
+
+**"Noisy measurement: check the connector and cable, then recalibrate"**
+The trace jitters much more than a NanoVNA normally does (about 0.0016
+RMS |ΔΓ|). Tighten the SMA connectors, try another cable or adapter, keep
+the cable still, then recalibrate. Bending or moving the antenna does not
+trigger it: only random jitter does.
 
 **S21 COMPARE reading is very low or noisy**
 Move the reference antenna and the antenna under test closer together (a
