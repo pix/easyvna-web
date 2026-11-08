@@ -980,7 +980,7 @@ function selectTab(t) {
   drawAll();
 }
 for (const b of document.querySelectorAll('.tabs button')) b.onclick = () => selectTab(b.dataset.tab);
-function lockBody() { document.body.classList.toggle('locked', !$('tuneView').hidden || !$('cmpView').hidden || !$('repView').hidden || !$('sheetView').hidden || !$('histView').hidden); }
+function lockBody() { document.body.classList.toggle('locked', !$('tuneView').hidden || !$('cmpView').hidden || !$('repView').hidden || !$('sheetView').hidden || !$('histView').hidden || !$('fwView').hidden); }
 
 // ---------- TUNE ----------
 function defaultTarget() {

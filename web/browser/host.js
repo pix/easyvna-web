@@ -7,9 +7,12 @@
 //   * HTTP: the UI's fetch('api/...') and EventSource('api/events') are
 //     routed into the Go http.Handler running in this page (no network);
 //   * storage: the data directory lives in IndexedDB;
-//   * USB: the NanoVNA is opened with Web Serial (Chrome / Edge);
+//   * USB: the NanoVNA is opened with Web Serial (Chrome / Edge); the
+//     FIRMWARE dialog (flasher.js) uses WebUSB and the firmware bundled in
+//     this page (firmware());
 //   * ?demo runs the built-in simulator instead (works in every browser).
-// It then inserts the UI (index.html body) and runs app.js unchanged.
+// It then inserts the UI (index.html body) and runs flasher.js and app.js
+// unchanged.
 (() => {
   // NanoVNA-H / H4 (STM32 USB CDC), and NanoVNA V2 / LiteVNA (binary
   // protocol, experimental driver).
@@ -364,6 +367,16 @@
     if (off) off.onclick = () => saveBlob(new Blob([selfHTML()], { type: 'text/html' }), 'easyvna-web.html');
   }
 
+  // ---------- the bundled firmware (FIRMWARE dialog) ----------
+  // firmware returns {manifest, bytes} of the EasyVNA firmware inlined in
+  // this page (gzip + base64), or null. flasher.js checks its SHA-256.
+  async function firmware() {
+    if (!$('ev-fw') || !$('ev-fwmeta')) return null;
+    const manifest = JSON.parse(text('ev-fwmeta'));
+    const z = new Blob([b64bytes(text('ev-fw'))]).stream().pipeThrough(new DecompressionStream('gzip'));
+    return { manifest, bytes: new Uint8Array(await new Response(z).arrayBuffer()) };
+  }
+
   // ---------- boot ----------
   const host = window.EasyVNAHost = {
     config: { demo, readOnly: q.has('readonly'), antenna: q.get('antenna') || '', firmware: q.get('firmware') || '',
@@ -373,6 +386,7 @@
     beforeConnect: async () => { if (!demo) await serial.choose(); },
     openReport,
     selfHTML,
+    firmware,
     goReady: null,
   };
   function loading(msg, err) {
@@ -406,12 +420,15 @@
     H.goServe = host.goServe; H.goStream = host.goStream; H.goMockShell = host.goMockShell;
     window.fetch = apiFetch;
     window.EventSource = GoEventSource;
-    // The UI: index.html's body, then app.js.
+    // The UI: index.html's body, then flasher.js and app.js.
     document.body.insertAdjacentHTML('afterbegin', text('ev-body'));
     hostUI(version);
-    const s = document.createElement('script');
-    s.textContent = text('ev-app');
-    document.body.appendChild(s);
+    for (const id of ['ev-flasher', 'ev-app']) {
+      if (!$(id)) continue;
+      const s = document.createElement('script');
+      s.textContent = text(id);
+      document.body.appendChild(s);
+    }
     const l = $('ev-loading');
     if (l) l.remove();
   }

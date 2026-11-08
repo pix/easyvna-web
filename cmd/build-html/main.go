@@ -4,10 +4,12 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/pix/easyvna-web/internal/htmlpack"
 )
@@ -32,8 +34,19 @@ func main() {
 		return b
 	}
 	rp := func(p string) string { return filepath.Join(*root, filepath.FromSlash(p)) }
+	// The bundled firmware (scripts/update-firmware.sh): the manifest names
+	// the file; htmlpack checks its SHA-256.
+	manifest := read(rp("web/static/firmware/manifest.json"))
+	var fm htmlpack.FirmwareManifest
+	if err := json.Unmarshal(manifest, &fm); err != nil || fm.File == "" || strings.ContainsAny(fm.File, `/\`) {
+		fmt.Fprintln(os.Stderr, "build-html: bad web/static/firmware/manifest.json:", err)
+		os.Exit(1)
+	}
+	firmware := read(rp("web/static/firmware/" + fm.File))
 	page, err := htmlpack.Build(htmlpack.Inputs{
 		IndexHTML: read(rp("web/static/index.html")), StyleCSS: read(rp("web/static/style.css")), AppJS: read(rp("web/static/app.js")),
+		FlasherJS: read(rp("web/static/flasher.js")), FlasherCSS: read(rp("web/static/flasher.css")),
+		FirmwareManifest: manifest, Firmware: firmware,
 		HostCSS: read(rp("web/browser/host.css")), HostJS: read(rp("web/browser/host.js")),
 		WasmExecJS: read(*wasmExec), Wasm: read(*wasm), Version: *version,
 	})
@@ -45,5 +58,5 @@ func main() {
 		fmt.Fprintln(os.Stderr, "build-html:", err)
 		os.Exit(1)
 	}
-	fmt.Printf("%s: %d bytes (wasm %d bytes)\n", *out, len(page), len(read(*wasm)))
+	fmt.Printf("%s: %d bytes (wasm %d bytes, firmware %s %d bytes)\n", *out, len(page), len(read(*wasm)), fm.File, len(firmware))
 }

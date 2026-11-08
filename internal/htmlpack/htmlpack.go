@@ -1,5 +1,6 @@
 // Package htmlpack builds the single-file browser version of EasyVNA Web:
-// one HTML page holding the UI (index.html body, style.css, app.js), the
+// one HTML page holding the UI (index.html body, style.css, app.js, the
+// firmware flasher flasher.js / flasher.css and the bundled firmware), the
 // browser host (host.js, host.css), Go's wasm_exec.js and the app compiled
 // to WebAssembly (gzip + base64, decoded by host.js at load time).
 //
@@ -12,7 +13,9 @@ package htmlpack
 import (
 	"bytes"
 	"compress/gzip"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -31,6 +34,21 @@ type Inputs struct {
 	WasmExecJS []byte // $(go env GOROOT)/lib/wasm/wasm_exec.js
 	Wasm       []byte // GOOS=js GOARCH=wasm build of ./cmd/easyvna-wasm
 	Version    string
+
+	FlasherJS  []byte // web/static/flasher.js (needed when index.html loads it)
+	FlasherCSS []byte // web/static/flasher.css
+	// The bundled firmware: web/static/firmware/manifest.json and the file
+	// it names. Optional; when set, its SHA-256 must match the manifest.
+	FirmwareManifest []byte
+	Firmware         []byte
+}
+
+// FirmwareManifest is the part of web/static/firmware/manifest.json the
+// build checks.
+type FirmwareManifest struct {
+	File   string `json:"file"`
+	SHA256 string `json:"sha256"`
+	Size   int    `json:"size"`
 }
 
 // Skeleton is the JSON stored in the #ev-skel block: the page is
@@ -45,11 +63,12 @@ type block struct {
 }
 
 var (
-	bodyRe    = regexp.MustCompile(`(?s)<body[^>]*>(.*)</body>`)
-	commentRe = regexp.MustCompile(`(?s)<!--.*?-->`)
-	appTagRe  = regexp.MustCompile(`<script\s+src="app\.js"\s*>\s*</script>\s*`)
-	iconRe    = regexp.MustCompile(`<link rel="icon"[^>]*>`)
-	titleRe   = regexp.MustCompile(`<title>([^<]*)</title>`)
+	bodyRe     = regexp.MustCompile(`(?s)<body[^>]*>(.*)</body>`)
+	commentRe  = regexp.MustCompile(`(?s)<!--.*?-->`)
+	appTagRe   = regexp.MustCompile(`<script\s+src="app\.js"\s*>\s*</script>\s*`)
+	flashTagRe = regexp.MustCompile(`<script\s+src="flasher\.js"\s*>\s*</script>\s*`)
+	iconRe     = regexp.MustCompile(`<link rel="icon"[^>]*>`)
+	titleRe    = regexp.MustCompile(`<title>([^<]*)</title>`)
 )
 
 // gz compresses deterministically (no name, no time stamp).
@@ -118,7 +137,11 @@ func Build(in Inputs) ([]byte, error) {
 	if !appTagRe.MatchString(m[1]) {
 		return nil, errors.New(`htmlpack: index.html does not load <script src="app.js">`)
 	}
-	body := appTagRe.ReplaceAllString(commentRe.ReplaceAllString(m[1], ""), "")
+	flasher := flashTagRe.MatchString(m[1])
+	if flasher && (len(in.FlasherJS) == 0 || len(in.FlasherCSS) == 0) {
+		return nil, errors.New(`htmlpack: index.html loads flasher.js but FlasherJS / FlasherCSS are empty`)
+	}
+	body := flashTagRe.ReplaceAllString(appTagRe.ReplaceAllString(commentRe.ReplaceAllString(m[1], ""), ""), "")
 	if strings.Contains(strings.ToLower(body), "<script") {
 		return nil, errors.New("htmlpack: index.html body has another <script>")
 	}
@@ -132,6 +155,25 @@ func Build(in Inputs) ([]byte, error) {
 		return nil, err
 	}
 	b64 := wrap(base64.StdEncoding.EncodeToString(z), 4096)
+	var fwBlocks []block
+	if len(in.Firmware) > 0 {
+		var m FirmwareManifest
+		if err := json.Unmarshal(in.FirmwareManifest, &m); err != nil {
+			return nil, fmt.Errorf("htmlpack: firmware manifest: %w", err)
+		}
+		sum := sha256.Sum256(in.Firmware)
+		if got := hex.EncodeToString(sum[:]); !strings.EqualFold(got, m.SHA256) || m.Size != len(in.Firmware) {
+			return nil, fmt.Errorf("htmlpack: firmware %s does not match its manifest (sha256 %s, %d bytes; manifest %s, %d bytes)", m.File, got, len(in.Firmware), m.SHA256, m.Size)
+		}
+		fz, err := gz(in.Firmware)
+		if err != nil {
+			return nil, err
+		}
+		fwBlocks = []block{
+			{"ev-fwmeta", `<script id="ev-fwmeta" type="application/json">`, strings.TrimSpace(lf(in.FirmwareManifest)), "</script>\n"},
+			{"ev-fw", `<script id="ev-fw" type="application/octet-stream">`, wrap(base64.StdEncoding.EncodeToString(fz), 4096), "</script>\n"},
+		}
+	}
 
 	head := "<!doctype html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n" +
 		"<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n" +
@@ -145,14 +187,24 @@ func Build(in Inputs) ([]byte, error) {
 		"<p id=\"ev-loading-text\">Loading EasyVNA Web…</p><noscript><p>EasyVNA Web needs JavaScript.</p></noscript></div>\n"
 	blocks := []block{
 		{"ev-css", head + `<style id="ev-css">`, lf(in.StyleCSS), "</style>\n"},
-		{"ev-hostcss", `<style id="ev-hostcss">`, lf(in.HostCSS), "</style>\n</head>\n<body>\n" + loader},
-		{"ev-body", `<script id="ev-body" type="text/html">`, body, "</script>\n"},
-		{"ev-app", `<script id="ev-app" type="text/plain">`, lf(in.AppJS), "</script>\n"},
+	}
+	if flasher {
+		blocks = append(blocks, block{"ev-flashcss", `<style id="ev-flashcss">`, lf(in.FlasherCSS), "</style>\n"})
+	}
+	blocks = append(blocks,
+		block{"ev-hostcss", `<style id="ev-hostcss">`, lf(in.HostCSS), "</style>\n</head>\n<body>\n" + loader},
+		block{"ev-body", `<script id="ev-body" type="text/html">`, body, "</script>\n"})
+	if flasher {
+		blocks = append(blocks, block{"ev-flasher", `<script id="ev-flasher" type="text/plain">`, lf(in.FlasherJS), "</script>\n"})
+	}
+	blocks = append(blocks, block{"ev-app", `<script id="ev-app" type="text/plain">`, lf(in.AppJS), "</script>\n"})
+	blocks = append(blocks, fwBlocks...)
+	blocks = append(blocks, []block{
 		{"ev-wasmexec", `<script id="ev-wasmexec">`, lf(in.WasmExecJS), "</script>\n"},
 		{"ev-wasm", `<script id="ev-wasm" type="application/octet-stream">`, b64, "</script>\n"},
 		{"ev-skel", `<script id="ev-skel" type="application/json">`, "", "</script>\n"},
 		{"ev-host", `<script id="ev-host">`, lf(in.HostJS), "</script>\n</body>\n</html>\n"},
-	}
+	}...)
 	sk := Skeleton{Parts: []string{""}}
 	for _, b := range blocks {
 		sk.IDs = append(sk.IDs, b.id)

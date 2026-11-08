@@ -42,7 +42,14 @@ func repoInputs(t *testing.T) Inputs {
 		return b
 	}
 	wasm := append([]byte("\x00asm\x01\x00\x00\x00"), bytes.Repeat([]byte("payload"), 1000)...)
+	manifest := read("web/static/firmware/manifest.json")
+	var m FirmwareManifest
+	if err := json.Unmarshal(manifest, &m); err != nil {
+		t.Fatal(err)
+	}
 	return Inputs{IndexHTML: read("web/static/index.html"), StyleCSS: read("web/static/style.css"), AppJS: read("web/static/app.js"),
+		FlasherJS: read("web/static/flasher.js"), FlasherCSS: read("web/static/flasher.css"),
+		FirmwareManifest: manifest, Firmware: read("web/static/firmware/" + m.File),
 		HostCSS: read("web/browser/host.css"), HostJS: read("web/browser/host.js"),
 		WasmExecJS: []byte("globalThis.Go = class {};\n"), Wasm: wasm, Version: "v9.9.9-test"}
 }
@@ -69,11 +76,29 @@ func TestBuildRoundTrip(t *testing.T) {
 	if got != p {
 		t.Fatal("page rebuilt from its blocks differs from the file")
 	}
-	if texts["ev-app"] != lf(in.AppJS) || texts["ev-host"] != lf(in.HostJS) || texts["ev-css"] != lf(in.StyleCSS) {
+	if texts["ev-app"] != lf(in.AppJS) || texts["ev-host"] != lf(in.HostJS) || texts["ev-css"] != lf(in.StyleCSS) ||
+		texts["ev-flasher"] != lf(in.FlasherJS) || texts["ev-flashcss"] != lf(in.FlasherCSS) {
 		t.Fatal("blocks are not verbatim copies of the sources")
 	}
+	// flasher.js runs before app.js (host.js runs them in block order).
+	if strings.Index(p, `id="ev-flasher"`) > strings.Index(p, `id="ev-app"`) {
+		t.Error("flasher block after the app block")
+	}
+	// The bundled firmware round-trips and its manifest is kept.
+	fz, _ := base64.StdEncoding.DecodeString(strings.ReplaceAll(texts["ev-fw"], "\n", ""))
+	fr, err := gzip.NewReader(bytes.NewReader(fz))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fw, _ := io.ReadAll(fr); !bytes.Equal(fw, in.Firmware) {
+		t.Fatal("firmware payload does not round-trip")
+	}
+	var m FirmwareManifest
+	if err := json.Unmarshal([]byte(texts["ev-fwmeta"]), &m); err != nil || m.Size != len(in.Firmware) {
+		t.Fatalf("firmware manifest block: %v %+v", err, m)
+	}
 	body := texts["ev-body"]
-	if strings.Contains(body, "app.js") || strings.Contains(body, "<!--") || !strings.Contains(body, `id="btnConnect"`) {
+	if strings.Contains(body, "app.js") || strings.Contains(body, "flasher.js") || !strings.Contains(body, `id="fwView"`) || strings.Contains(body, "<!--") || !strings.Contains(body, `id="btnConnect"`) {
 		t.Fatal("UI body not extracted as expected")
 	}
 	zb, _ := base64.StdEncoding.DecodeString(strings.ReplaceAll(texts["ev-wasm"], "\n", ""))
@@ -111,8 +136,8 @@ func TestBuildCRLF(t *testing.T) {
 		return bytes.ReplaceAll(bytes.ReplaceAll(b, []byte("\r\n"), []byte("\n")), []byte("\n"), []byte("\r\n"))
 	}
 	w := in
-	w.IndexHTML, w.StyleCSS, w.AppJS, w.HostCSS, w.HostJS, w.WasmExecJS =
-		crlf(in.IndexHTML), crlf(in.StyleCSS), crlf(in.AppJS), crlf(in.HostCSS), crlf(in.HostJS), crlf(in.WasmExecJS)
+	w.IndexHTML, w.StyleCSS, w.AppJS, w.HostCSS, w.HostJS, w.WasmExecJS, w.FlasherJS, w.FlasherCSS, w.FirmwareManifest =
+		crlf(in.IndexHTML), crlf(in.StyleCSS), crlf(in.AppJS), crlf(in.HostCSS), crlf(in.HostJS), crlf(in.WasmExecJS), crlf(in.FlasherJS), crlf(in.FlasherCSS), crlf(in.FirmwareManifest)
 	got, err := Build(w)
 	if err != nil {
 		t.Fatal(err)
@@ -137,6 +162,12 @@ func TestBuildRejects(t *testing.T) {
 		"end tag in js":  func(in *Inputs) { in.AppJS = []byte("var s = '</SCRIPT>';") },
 		"comment in js":  func(in *Inputs) { in.HostJS = []byte("var s = '<!--';") },
 		"end tag in css": func(in *Inputs) { in.StyleCSS = []byte("a{} </style>") },
+		"no flasher.js":  func(in *Inputs) { in.FlasherJS = nil },
+		"damaged firmware": func(in *Inputs) {
+			in.Firmware = append([]byte(nil), in.Firmware...)
+			in.Firmware[100] ^= 1
+		},
+		"firmware without manifest": func(in *Inputs) { in.FirmwareManifest = []byte("{") },
 	}
 	for name, mod := range cases {
 		in := base
