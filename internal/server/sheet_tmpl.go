@@ -32,6 +32,8 @@ h1 { font-size: 19pt; line-height: 1.05; margin: .5mm 0 .8mm; overflow-wrap: any
 .sim { display: inline-block; font-size: 7pt; font-weight: 700; letter-spacing: .08em; padding: .2mm 1.5mm; border: .3mm solid var(--ok); color: var(--ok); border-radius: 1mm; margin-left: 2mm; vertical-align: middle; }
 .uncal { border: .5mm solid var(--fail); color: var(--fail); font-weight: 700; border-radius: 1mm; padding: 1mm 2mm; font-size: 8.5pt; }
 .warn { border: .4mm solid var(--fail); border-radius: 1mm; padding: .8mm 2mm; font-size: 7.5pt; }
+.drift { border-left: .8mm solid var(--line); padding: .3mm 2mm; font-size: 7.3pt; }
+.drift.dw { border-left-color: var(--ok); }
 /* key figures */
 .kf { display: grid; grid-template-columns: 31mm 1fr; gap: 2.5mm; align-items: stretch; }
 .verdict { border: .3mm solid var(--line); border-left: 2mm solid var(--na); border-radius: 1.5mm; padding: 2mm; display: flex; flex-direction: column; justify-content: center; }
@@ -107,6 +109,7 @@ td.num, th.num { text-align: right; }
 <div>{{.SWR}}</div>
 <div class="prow"><div class="stack"><div>{{.RL}}</div><div>{{.Z}}</div></div><div>{{.Smith}}</div></div>
 <div class="legend">{{range .Legend}}<span>{{.}}</span>{{end}}</div>
+{{with .Drift}}<div class="drift{{if .Warnings}} dw{{end}}"><b>History:</b> {{.Line}}{{range .Warnings}}{{if ne .Level "info"}} <b>{{.Title}}</b>: {{.Text}}{{end}}{{end}}</div>{{end}}
 
 <div class="cols{{if .Trim}} three{{end}}">
   <div>

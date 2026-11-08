@@ -34,6 +34,9 @@ type AntennaInfo struct {
 	Notes     string    `json:"notes,omitempty"`
 	Photo     string    `json:"photo,omitempty"` // data:image/jpeg;base64,... (downscaled by the page)
 	Updated   time.Time `json:"updated"`
+	// History holds a summary of each measurement of this antenna (sheet,
+	// report, "Log this measurement"); see history.go.
+	History []HistoryEntry `json:"history,omitempty"`
 }
 
 // AntennaListEntry is one row of GET /api/antennas.
@@ -43,6 +46,7 @@ type AntennaListEntry struct {
 	Band     string    `json:"band,omitempty"`
 	HasPhoto bool      `json:"hasPhoto"`
 	Updated  time.Time `json:"updated"`
+	Logs     int       `json:"logs"` // history entries
 }
 
 const maxPhotoBytes = 3 << 20 // data URL length
@@ -128,7 +132,7 @@ func (st *Store) ListAntennas() []AntennaListEntry {
 		if json.Unmarshal(b, &a) != nil || a.Name == "" {
 			continue
 		}
-		out = append(out, AntennaListEntry{Name: a.Name, Type: a.Type, Band: a.Band, HasPhoto: a.Photo != "", Updated: a.Updated})
+		out = append(out, AntennaListEntry{Name: a.Name, Type: a.Type, Band: a.Band, HasPhoto: a.Photo != "", Updated: a.Updated, Logs: len(a.History)})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Updated.After(out[j].Updated) })
 	return out
@@ -183,6 +187,7 @@ type sheetData struct {
 	TrimMore  int
 	TrimTgt   float64
 	TrimNext  *rf.TrimPrediction
+	Drift     *DriftReport
 	Warnings  []rf.Warning
 }
 
@@ -285,12 +290,17 @@ func sheetFigures(r *Result) (figs []sheetFig, verdict, vclass string) {
 }
 
 // buildSheet renders the one-page sheet for antenna a from the last sweep.
-func (s *Server) buildSheet(id string, a AntennaInfo) ([]byte, error) {
+func (s *Server) buildSheet(id string, a AntennaInfo) ([]byte, *HistoryEntry, error) {
 	s.mu.Lock()
 	r := s.last
 	if r == nil {
 		s.mu.Unlock()
-		return nil, errors.New("no sweep yet: sweep the antenna first")
+		return nil, nil, errors.New("no sweep yet: sweep the antenna first")
+	}
+	var entry *HistoryEntry
+	if r.Tune == nil {
+		e := s.historyEntryLocked(r, "sheet")
+		entry = &e
 	}
 	d := sheetData{ID: id, A: a, Generated: time.Now(), App: s.opt.AppName, URL: s.opt.HomeURL, Warnings: r.Summary.Warnings}
 	if d.App == "" {
@@ -412,11 +422,14 @@ func (s *Server) buildSheet(id string, a AntennaInfo) ([]byte, error) {
 		t.predict()
 		d.TrimNext = t.Prediction
 	}
+	if entry != nil {
+		d.Drift = detectDrift(mergeHistory(append([]HistoryEntry(nil), a.History...), *entry))
+	}
 	var buf bytes.Buffer
 	if err := sheetTmpl.Execute(&buf, d); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return buf.Bytes(), nil
+	return buf.Bytes(), entry, nil
 }
 
 // hSheet saves the antenna record and builds the sheet from the last sweep
@@ -444,10 +457,16 @@ func (s *Server) hSheet(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, err)
 		return
 	}
-	html, err := s.buildSheet(strings.TrimSuffix(file, ".html"), a)
+	if old, err := s.store.LoadAntenna(a.Name); err == nil {
+		a.History = old.History // the dialog never sends the history
+	}
+	html, entry, err := s.buildSheet(strings.TrimSuffix(file, ".html"), a)
 	if err != nil {
 		writeErr(w, 409, err)
 		return
+	}
+	if entry != nil {
+		a.History = mergeHistory(a.History, *entry)
 	}
 	if err := s.store.SaveAntenna(&a); err != nil {
 		writeErr(w, 500, err)

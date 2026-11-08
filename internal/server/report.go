@@ -46,6 +46,7 @@ type reportSection struct {
 	KeyRows [][]reportKV // Key in pairs, for a compact two-column table
 	CalNote string
 	CalOK   bool
+	Drift   *DriftReport // previous measurement of this antenna / drift
 }
 
 type reportHold struct {
@@ -192,7 +193,8 @@ func verdictClass(v string) string {
 }
 
 // buildReport assembles the report for the chosen profiles.
-func (s *Server) buildReport(id, name, notes string, profiles []string, trimName string) ([]byte, error) {
+func (s *Server) buildReport(id, name, notes string, profiles []string, trimName string, hist []HistoryEntry) ([]byte, []HistoryEntry, error) {
+	var logged []HistoryEntry
 	s.mu.Lock()
 	d := reportData{ReportID: id, Name: name, Notes: notes, Generated: time.Now()}
 	if s.info != nil {
@@ -261,6 +263,9 @@ func (s *Server) buildReport(id, name, notes string, profiles []string, trimName
 			w.Title = strings.SplitN(label, " · ", 2)[0] + ": " + w.Title
 			d.Warnings = append(d.Warnings, w)
 		}
+		e := s.historyEntryLocked(r, "report")
+		logged = append(logged, e)
+		sec.Drift = detectDrift(mergeHistory(append([]HistoryEntry(nil), hist...), e))
 		sec.SWR, sec.RL = reportPlots(r)
 		sec.Z = impedancePlot(r)
 		sec.Smith = smithSVG(r, 52)
@@ -310,13 +315,13 @@ func (s *Server) buildReport(id, name, notes string, profiles []string, trimName
 		}
 	}
 	if len(d.Sections) == 0 && d.Trim == nil && d.Compare == nil && d.Hold == nil {
-		return nil, errors.New("nothing to report yet: sweep at least one profile")
+		return nil, nil, errors.New("nothing to report yet: sweep at least one profile")
 	}
 	var buf bytes.Buffer
 	if err := reportTmpl.Execute(&buf, d); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return buf.Bytes(), nil
+	return buf.Bytes(), logged, nil
 }
 
 func avgNote(n int) string {
@@ -447,10 +452,19 @@ func (s *Server) hReport(w http.ResponseWriter, r *http.Request) {
 		}
 		s.mu.Unlock()
 	}
-	html, err := s.buildReport(strings.TrimSuffix(file, ".html"), name, req.Notes, req.Profiles, req.Trim)
+	var hist []HistoryEntry
+	if a, err := s.store.LoadAntenna(name); err == nil {
+		hist = a.History
+	}
+	html, logged, err := s.buildReport(strings.TrimSuffix(file, ".html"), name, req.Notes, req.Profiles, req.Trim, hist)
 	if err != nil {
 		writeErr(w, 409, err)
 		return
+	}
+	if len(logged) > 0 {
+		if _, err := s.addHistory(name, logged...); err != nil {
+			s.log.Printf("history %s: %v", name, err)
+		}
 	}
 	if err := s.store.SaveReportFile(file, html); err != nil {
 		writeErr(w, 500, err)

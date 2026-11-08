@@ -268,7 +268,7 @@ input[type="number"], input:not([type]), select {
 
 /* ---- round 3: action tiles, banners, overlays ---- */
 .pill.ro { color: var(--warn-ink); border-color: currentColor; font-weight: 700; }
-.actions { display: grid; grid-template-columns: repeat(9, minmax(0, 1fr)); gap: 8px; }
+.actions { display: grid; grid-template-columns: repeat(10, minmax(0, 1fr)); gap: 8px; }
 .tilewrap { position: relative; display: flex; }
 .tilewrap .tile { flex: 1; }
 .tile {
@@ -371,6 +371,14 @@ canvas.cmpplot { height: 220px; background: var(--surface); border: 1px solid va
 .board th, .board td { padding: 7px 8px; border-bottom: 1px solid var(--border); text-align: left; }
 .board th { font-size: 12px; color: var(--muted); }
 .board td.pos { color: var(--good-ink); font-weight: 700; } .board td.neg { color: var(--bad-ink); font-weight: 700; }
+.histspark { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.histspark canvas { width: 100%; height: 120px; display: block; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
+.histline { font-size: 15px; }
+table.hist { width: 100%; border-collapse: collapse; font-size: 13px; font-variant-numeric: tabular-nums; }
+table.hist th, table.hist td { text-align: left; padding: 5px 6px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+table.hist th { color: var(--muted); font-weight: 600; font-size: 12px; }
+.histwrap { overflow-x: auto; }
+@media (max-width: 700px) { .histspark { grid-template-columns: 1fr; } }
 .choices { display: flex; flex-direction: column; gap: 6px; }
 .choices label { display: flex; gap: 10px; align-items: center; font-size: 15px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
 textarea { font: inherit; padding: 8px; border-radius: 6px; border: 1px solid var(--border); background: var(--raised); color: inherit; width: 100%; min-height: 60px; }

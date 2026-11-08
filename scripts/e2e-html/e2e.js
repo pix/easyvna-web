@@ -352,6 +352,33 @@ async function demoFlow(browser, base, label, shots) {
     check(`${label}: earlier report download`, dl2.name.endsWith('.html') && /whip-e2e/.test(dl2.body.toString()), dl2.name);
     await page.click('#repClose');
   });
+  await step(`${label}: antenna history and drift`, async () => {
+    await api(page, 'POST', 'api/mock/antenna', { name: '869' });
+    await sweepDone(page, () => page.locator('.profile', { hasText: '869' }).first().click());
+    await page.click('#aHist');
+    await page.waitForSelector('#histLog', { timeout: 10000 });
+    check(`${label}: history opens on the sheet's antenna, with the sheet and report entries`, (await page.inputValue('#histName')) === 'whip-e2e' &&
+      (await page.evaluate(() => S.hist && S.hist.history.some((e) => e.kind === 'sheet') && S.hist.history.some((e) => e.kind === 'report'))));
+    await page.click('#histLog');
+    await page.waitForFunction(() => S.hist.history[S.hist.history.length - 1].kind === 'manual', null, { timeout: 10000 });
+    const n1 = await page.evaluate(() => S.hist.history.length);
+    await page.click('#histClose');
+    await api(page, 'POST', 'api/mock/antenna', { name: '869tuned' });
+    await sweepDone(page, () => page.click('#aSweep'));
+    await page.click('#aHist');
+    await page.waitForSelector('#histLog', { timeout: 10000 });
+    await page.click('#histLog');
+    await page.waitForFunction((n) => S.hist.history.length === n + 1, n1, { timeout: 10000 });
+    await page.waitForSelector('#histInfo .wbanner', { timeout: 10000 });
+    const txt = await page.textContent('#histInfo');
+    const drawn = await page.evaluate(() => ['histRes', 'histSWR'].every((id) => { const c = document.getElementById(id); return c && c.width > 50; }));
+    check(`${label}: logged twice, the detuned antenna shows "Resonance moved", sparklines drawn`, /Resonance moved/.test(txt) && /Previous measurement/.test(txt) && drawn, txt.slice(0, 200));
+    if (shots) await shot(page, 'html-history.png', false);
+    const csv = await download(page, () => page.click('#histInfo a:has-text("Export history")'));
+    check(`${label}: history CSV`, csv.name === 'whip-e2e-history.csv' && csv.body.toString().split('\n').length >= 4, csv.name);
+    await page.click('#histClose');
+    check(`${label}: HISTORY tile flags the drift`, /⚠/.test(await page.textContent('#aHist')));
+  });
   let backupFile = '';
   await step(`${label}: export data`, async () => {
     const b = await download(page, () => page.click('#hostExport'));
@@ -360,6 +387,8 @@ async function demoFlow(browser, base, label, shots) {
     const want = ['settings.json', 'refs/ref-869.json', 'trim/whip-e2e.json', 'snapshots/e2e_snap.json', 'compare.json', 'antennas/whip-e2e.json'];
     check(`${label}: Export data JSON`, bk.format === 'easyvna-web-backup' && want.every((n) => names.includes(n)) && names.some((n) => n.startsWith('reports/')),
       want.filter((n) => !names.includes(n)).join(','));
+    const ant = bk.files.find((f) => f.name === 'antennas/whip-e2e.json');
+    check(`${label}: Export data includes the antenna history`, !!ant && JSON.parse(ant.data).history.length >= 3);
     backupFile = b.file;
   });
   await step(`${label}: reload persistence`, async () => {

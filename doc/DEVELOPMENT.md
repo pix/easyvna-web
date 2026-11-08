@@ -132,6 +132,7 @@ workflow also attaches `easyvna-web.html` to each release.
 | `PUT /api/profiles/{id}/slot {"slot"}`, `POST /api/settings {"autoRecall"}` | settings |
 | `POST /api/sheet {"antenna":{name,type,band,connector,lengthMm,ground,cable,maker,owner,notes,photo}}` | one-page antenna sheet from the last sweep (saved with the reports); the antenna record is remembered |
 | `GET /api/antennas`, `GET /api/antennas/{name}` | remembered antenna records (`antennas/<name>.json`) |
+| `GET /api/antennas/{name}/history`, `POST /api/antennas/{name}/history` (log the current result), `POST .../history/undo`, `GET .../history.csv` | antenna history (kept in the antenna record) with the drift report |
 | `GET /api/backup`, `POST /api/backup` | browser version only: every stored file as one JSON document |
 
 Example: `curl -s -XPOST localhost:8080/api/sweep | jq .summary.bands`

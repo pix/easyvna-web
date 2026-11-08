@@ -279,6 +279,9 @@ function renderTiles() {
   tile('aAvg', `AVG ×${avg}`, avg > 1 ? `averaging ${avg} · tap: ×${nextAvg(avg)}` : 'off · tap: ×2', avg > 1 ? 'on' : '');
   const c = st.compare;
   tile('aCompare', 'COMPARE', c.hasA ? `A: ${c.aName} · ${Math.max(0, c.leaderboard.length - 1)} tested` : 'S21 A vs B', c.active ? 'on' : c.hasA ? 'set' : '');
+  const hi = S.hist;
+  const drift = hi && hi.drift && hi.drift.warnings.some((w) => w.level !== 'info');
+  tile('aHist', drift ? 'HISTORY ⚠' : 'HISTORY', hi && hi.history.length ? `${hi.name} · ${hi.history.length} log${hi.history.length === 1 ? '' : 's'}${drift ? ' · drift' : ''}` : 'log & drift', drift ? 'set' : '');
   tile('aReport', 'REPORT', st.reportChoices.length ? `${st.reportChoices.length} profile sweep${st.reportChoices.length > 1 ? 's' : ''} ready` : 'sweep first', '');
   const hint = $('hint');
   hint.innerHTML = ref
@@ -965,7 +968,7 @@ function selectTab(t) {
   drawAll();
 }
 for (const b of document.querySelectorAll('.tabs button')) b.onclick = () => selectTab(b.dataset.tab);
-function lockBody() { document.body.classList.toggle('locked', !$('tuneView').hidden || !$('cmpView').hidden || !$('repView').hidden || !$('sheetView').hidden); }
+function lockBody() { document.body.classList.toggle('locked', !$('tuneView').hidden || !$('cmpView').hidden || !$('repView').hidden || !$('sheetView').hidden || !$('histView').hidden); }
 
 // ---------- TUNE ----------
 function defaultTarget() {
@@ -991,6 +994,7 @@ document.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape') return;
   if (!$('askView').hidden) return $('askNo').click();
   if (!$('tuneView').hidden) $('tuneClose').click(); else if (!$('cmpView').hidden) $('cmpClose').click(); else if (!$('repView').hidden) $('repClose').click();
+  else if (!$('histView').hidden) $('histClose').click(); else if (!$('sheetView').hidden) $('sheetClose').click();
 });
 
 function renderTune() {
@@ -1422,6 +1426,92 @@ async function openSheet() {
 }
 function closeSheet() { $('sheetView').hidden = true; lockBody(); }
 $('sheetClose').onclick = closeSheet;
+
+// ---------- HISTORY: one antenna over time ----------
+async function openHistory() {
+  let list = [];
+  try { list = await api('GET', 'api/antennas'); } catch { /* none yet */ }
+  const name = (S.hist && S.hist.name) || S.sheetName || S.state.trimActive || (S.trim && S.trim.name) || (list[0] && list[0].name) || '';
+  const canLog = S.res && !S.res.tune;
+  $('histBody').innerHTML = `<div class="step">Antenna history</div>
+    <div class="stepsub">Each sheet, each report and each <b>Log this measurement</b> keeps a short summary of the antenna (resonance, SWR, return loss, R + jX, Q, calibration).
+      Comparing the latest with the earlier ones of the same band shows drift: a moved resonance, a worse SWR, or signs of loss such as water in the coax.</div>
+    <datalist id="histNames">${list.map((x) => `<option value="${esc(x.name)}">`).join('')}</datalist>
+    <div class="row"><label class="stepsub">Antenna name<br><input id="histName" class="wide" list="histNames" maxlength="80" value="${esc(name)}" placeholder="e.g. whip-A or SN 0042" style="font-size:18px;padding:8px 10px;width:100%;max-width:420px"></label></div>
+    <div class="row"><button id="histLog" class="primary bigbtn" type="button" ${canLog ? '' : 'disabled'}>Log this measurement</button>
+      <span class="muted small">${canLog ? `${S.res.source ? 'file ' + esc(S.res.source.file) : 'sweep'} of ${hhmm(S.res.time)}, ${mhzR(S.res.freq[0])}–${mhzR(S.res.freq[S.res.freq.length - 1])} MHz` : 'sweep a profile first'}</span></div>
+    <div id="histInfo"></div>`;
+  $('histView').hidden = false; lockBody();
+  $('histName').onchange = () => run(() => loadHistory($('histName').value.trim()));
+  $('histLog').onclick = () => run(async () => {
+    const n = $('histName').value.trim();
+    if (!n) throw new Error('give the antenna a name');
+    S.hist = await api('POST', `api/antennas/${encodeURIComponent(n)}/history`);
+    renderHistory(); renderTiles();
+    toast(`Logged for ${n}` + (S.hist.drift && S.hist.drift.warnings.length ? ': see the drift warnings' : ''),
+      { undo: async () => { S.hist = await api('POST', `api/antennas/${encodeURIComponent(n)}/history/undo`); renderHistory(); renderTiles(); } });
+  });
+  if (name) await loadHistory(name); else renderHistory();
+}
+async function loadHistory(name) {
+  if (!name) { S.hist = null; renderHistory(); return; }
+  S.hist = await api('GET', `api/antennas/${encodeURIComponent(name)}/history`);
+  renderHistory(); renderTiles();
+}
+const HIST_LEVEL = { warn: 'warn', bad: 'bad', info: 'warn' };
+function renderHistory() {
+  const box = $('histInfo'); if (!box) return;
+  const hv = S.hist;
+  if (!hv || !hv.history.length) { box.innerHTML = `<div class="empty">No measurements logged${hv ? ' for ' + esc(hv.name) : ''} yet.</div>`; return; }
+  const d = hv.drift, h = hv.history, last = h[h.length - 1];
+  const group = h.filter((e) => e.profile === last.profile && e.band === last.band).slice(-40);
+  const warns = d ? d.warnings.map((w) => `<div class="wbanner ${HIST_LEVEL[w.level]}"><span class="wi">${w.level === 'info' ? 'i' : '!'}</span><div><b>${esc(w.title)}</b>${esc(w.text)}</div></div>`).join('') : '';
+  const z = (e) => fmtZ(e.r, e.x);
+  const rows = h.slice(-15).reverse().map((e) => `<tr><td>${new Date(e.measured).toLocaleString()}</td><td>${esc(e.band ? e.band + ' MHz' : e.range)}</td>
+    <td>${e.source === 'file' ? 'file ' + esc(e.file || '') : 'live'}</td><td>${esc(e.kind)}</td><td><b>${e.resFreq ? mhz(e.resFreq) : '–'}</b></td>
+    <td>${e.swrAtTarget ? swrText(e.swrAtTarget) : '–'}</td><td>${e.worstSWR ? swrText(e.worstSWR) : '–'}</td><td>${e.rl ? e.rl.toFixed(1) : '–'}</td>
+    <td>${z(e)}</td><td>${e.q ? e.q.toFixed(0) : '–'}</td><td>${esc(e.cal)}</td></tr>`).join('');
+  box.innerHTML = `${warns}<div class="histline">${esc(d ? d.line : '')}</div>
+    <div class="histspark"><canvas id="histRes" aria-label="Resonance per logged measurement"></canvas><canvas id="histSWR" aria-label="Worst SWR per logged measurement"></canvas></div>
+    <div class="small muted">Graphs: the ${group.length} logged measurement${group.length === 1 ? '' : 's'} of the ${esc(last.band ? last.band + ' MHz band' : last.range)} (${esc(last.profile)}), oldest left.</div>
+    <div class="histwrap"><table class="hist"><thead><tr><th>Measured</th><th>Band</th><th>Source</th><th>Logged by</th><th>Resonance MHz</th><th>SWR @ target</th><th>Worst SWR</th><th>RL dB</th><th>R + jX</th><th>Q</th><th>Calibration</th></tr></thead><tbody>${rows}</tbody></table></div>
+    <div class="row"><a class="btn ghost small" href="api/antennas/${encodeURIComponent(hv.name)}/history.csv" download>Export history (CSV)</a>
+      <button id="histUndo" class="ghost small" type="button">Remove the last entry</button></div>`;
+  $('histUndo').onclick = () => run(async () => {
+    if (!(await ask('Remove the last entry?', `The measurement of ${new Date(last.measured).toLocaleString()} is removed from the history of ${hv.name}.`, 'Remove'))) return;
+    S.hist = await api('POST', `api/antennas/${encodeURIComponent(hv.name)}/history/undo`); renderHistory(); renderTiles();
+  });
+  drawHistSpark($('histRes'), group.map((e) => e.resFreq / 1e6), 'resonance (MHz)', last.target ? [{ y: last.target / 1e6, label: 'target ' + mhzR(last.target) }] : [], 2);
+  const hasWorst = group.some((e) => e.worstSWR);
+  drawHistSpark($('histSWR'), group.map((e) => (hasWorst ? e.worstSWR : e.swrAtTarget)), hasWorst ? 'worst SWR in band' : 'SWR at target',
+    [{ y: 1.5, label: '1.5' }, { y: 2, label: '2' }], 2);
+}
+// drawHistSpark draws one small series (one point per logged measurement).
+function drawHistSpark(cv, ys, title, lines, dec) {
+  if (!cv) return;
+  const { ctx, w, h } = setup(cv);
+  const vals = ys.filter((v) => v > 0);
+  ctx.font = '11px system-ui, sans-serif';
+  ctx.fillStyle = css('--ink2'); ctx.textAlign = 'left'; ctx.textBaseline = 'top'; ctx.fillText(title, 6, 4);
+  if (!vals.length) { ctx.fillStyle = css('--muted'); ctx.textAlign = 'center'; ctx.fillText('no data', w / 2, h / 2); return; }
+  let lo = Math.min(...vals), hi = Math.max(...vals);
+  for (const l of lines) if (Math.abs(l.y - (lo + hi) / 2) < Math.max(hi - lo, Math.abs(hi) * 0.01) * 2) { lo = Math.min(lo, l.y); hi = Math.max(hi, l.y); }
+  const pad = Math.max((hi - lo) * 0.15, Math.abs(hi) * 0.002, 0.05); lo -= pad; hi += pad;
+  const fx = (i) => ys.length === 1 ? w / 2 : 14 + i / (ys.length - 1) * (w - 60), fy = (v) => h - 10 - (v - lo) / (hi - lo) * (h - 30);
+  ctx.setLineDash([4, 3]); ctx.lineWidth = 1; ctx.strokeStyle = css('--axis'); ctx.fillStyle = css('--axis'); ctx.textAlign = 'right'; ctx.textBaseline = 'bottom';
+  for (const l of lines) { if (l.y < lo || l.y > hi) continue; ctx.beginPath(); ctx.moveTo(0, fy(l.y)); ctx.lineTo(w, fy(l.y)); ctx.stroke(); ctx.fillText(l.label, w - 2, fy(l.y) - 1); }
+  ctx.setLineDash([]);
+  ctx.strokeStyle = css('--series1'); ctx.fillStyle = css('--series1'); ctx.lineWidth = 2; ctx.beginPath();
+  let pen = false;
+  ys.forEach((v, i) => { if (!(v > 0)) { pen = false; return; } if (pen) ctx.lineTo(fx(i), fy(v)); else { ctx.moveTo(fx(i), fy(v)); pen = true; } });
+  ctx.stroke();
+  ys.forEach((v, i) => { if (v > 0) { ctx.beginPath(); ctx.arc(fx(i), fy(v), 3.5, 0, 2 * Math.PI); ctx.fill(); } });
+  const lastV = vals[vals.length - 1];
+  ctx.fillStyle = css('--ink'); ctx.font = '600 12px system-ui, sans-serif'; ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
+  ctx.fillText(lastV.toFixed(dec), w - 4, Math.max(18, Math.min(h - 10, fy(lastV))));
+}
+$('aHist').onclick = () => run(openHistory);
+$('histClose').onclick = () => { $('histView').hidden = true; lockBody(); };
 
 // ---------- start ----------
 selectTab('smith');

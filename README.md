@@ -33,6 +33,10 @@ NanoVNA needed: <https://pix.github.io/easyvna-web/?demo>)
   calibration needed.
 - **Report card.** One button produces a clean A4 or Letter PDF with the verdicts,
   plots, trim log and comparison.
+- **Antenna history.** Every sheet and report (or **Log this
+  measurement**) keeps a summary per antenna, and EasyVNA Web warns when an
+  antenna drifts: resonance moved, SWR worse, or signs of loss such as water
+  in the coax.
 - **Open measurement files.** Load a `.s1p`, `.s2p` or CSV from any VNA
   program and get the same verdict, plots, report and sheet, clearly
   marked *not live*. No NanoVNA needed, so it works in every browser.
@@ -213,7 +217,23 @@ REF and HOLD when they are on. It fits on one A4 or Letter page.
 **Print sheet** prints it; **Save sheet (HTML)** keeps a copy. Ctrl+P on
 the main page also prints every graph at once.
 
-### 9. Open a measurement file
+### 9. Follow an antenna with HISTORY
+
+Each antenna sheet and each report keeps a short summary of the
+measurement under the antenna's name: date, band, resonance, SWR at the
+target and worst in band, return loss, R + jX, Q, calibration state and
+whether it was live or a file. **HISTORY** shows them with small graphs of
+the resonance and the worst SWR, and **Log this measurement** adds one
+without printing anything. The latest measurement is compared with the
+earlier ones of the same band, and plain warnings say when the antenna
+drifted: *Resonance moved* (more than 0.25 %, at least 1 MHz), *SWR got
+worse*, or *Signs of rising loss* (a broader dip with a lower Q, or a higher
+resistance at resonance: water in the coax, a corroded connector). The
+sheet and the report carry a *previous measurement / drift* line. The
+history lives in the antenna's record, so **Export data** includes it, and
+**Export history (CSV)** gives a spreadsheet.
+
+### 10. Open a measurement file
 
 **Open file** (top right) loads a measurement saved by EasyVNA Web or by
 another VNA program: Touchstone `.s1p`, `.s2p` (S11, plus S21 when it is
@@ -250,6 +270,7 @@ sweep as `.s1p`, `.s2p` (when S21 was measured) or CSV.
 | **AVG** | averaging over ×1 / 2 / 4 / 8 / 16 sweeps |
 | **COMPARE** | S21 against antenna A, live Δ dB in band, leaderboard |
 | **Warnings** | no antenna or open cable, reflection above 1 (bad calibration), lossy / fake antenna |
+| **History** | per-antenna measurement log (sheet, report, *Log this measurement*), resonance and SWR sparklines, drift warnings (resonance moved, SWR worse, rising loss), previous-measurement line on the sheet and report, CSV export |
 | **Report** | printable A4 / Letter report with vector plots (SWR, return loss, impedance, Smith) and tables, saved in the data folder |
 | **Antenna sheet** | PRINT: a one-page datasheet of the antenna (photo, key figures, all four graphs, notes, trim log); its details are remembered per antenna name |
 | **Files** | open `.s1p` / `.s2p` / CSV (Touchstone 1 and 2.0, any S format and unit, other reference impedances renormalised to 50 Ω) as a labelled *not live* measurement with the full analysis; export Touchstone `.s1p` / `.s2p`, CSV, named snapshots |

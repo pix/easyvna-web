@@ -70,6 +70,7 @@
     <button id="aCompare" class="tile" type="button"><b>COMPARE</b><span>S21 A vs B</span></button>
     <button id="aReport" class="tile" type="button"><b>REPORT</b><span>printable page</span></button>
     <button id="aPrint" class="tile" type="button" title="Print a one-page antenna sheet: key figures and all graphs"><b>PRINT</b><span>antenna sheet</span></button>
+    <button id="aHist" class="tile" type="button" title="Log this measurement and follow the antenna over time: drift, loss, detuning"><b>HISTORY</b><span>log &amp; drift</span></button>
   </section>
   <div id="hint" class="hint"></div>
   <section id="holdPanel" class="panel holdpanel" hidden aria-label="HOLD stable positions"></section>
@@ -224,6 +225,17 @@
     <button id="sheetClose" class="close" type="button" aria-label="Close antenna sheet">✕</button>
   </div>
   <div class="repbody" id="sheetBody"></div>
+</div>
+
+<!-- HISTORY: one antenna over time -->
+<div id="histView" class="overlay" hidden role="dialog" aria-modal="true" aria-label="Antenna history">
+  <div class="ovbar">
+    <b class="ovtitle">HISTORY</b>
+    <span class="muted small">one antenna over time: drift, loss, detuning</span>
+    <div class="spacer"></div>
+    <button id="histClose" class="close" type="button" aria-label="Close history">✕</button>
+  </div>
+  <div class="repbody" id="histBody"></div>
 </div>
 
 <!-- generic confirm -->
