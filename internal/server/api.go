@@ -22,6 +22,7 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/state", s.hState)
 	mux.HandleFunc("GET /api/events", s.hEvents)
 	mux.HandleFunc("POST /api/connect", s.hConnect)
+	mux.HandleFunc("POST /api/dfu", s.hDFU)
 	mux.HandleFunc("POST /api/profile", s.hProfile)
 	mux.HandleFunc("PUT /api/profiles/{id}/slot", s.hProfileSlot)
 	mux.HandleFunc("POST /api/config", s.hConfig)
@@ -139,6 +140,44 @@ func (s *Server) hConnect(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusServiceUnavailable, err)
 		return
 	}
+	writeJSON(w, 200, s.state())
+}
+
+// hDFU restarts the NanoVNA into its USB DFU bootloader for the FIRMWARE
+// dialog ("Reboot into DFU", never automatic). The connection is dropped
+// and live sweeping stops; nothing stored on the device changes.
+func (s *Server) hDFU(w http.ResponseWriter, r *http.Request) {
+	s.opMu.Lock()
+	defer s.opMu.Unlock()
+	s.mu.Lock()
+	dev := s.dev
+	s.mu.Unlock()
+	if dev == nil {
+		writeErr(w, http.StatusServiceUnavailable, vna.ErrNotConnected)
+		return
+	}
+	rb, ok := dev.(vna.DFURebooter)
+	if !ok {
+		writeErr(w, http.StatusNotImplemented, errors.New("this device cannot be rebooted into DFU from EasyVNA Web: use its own DFU procedure"))
+		return
+	}
+	if err := rb.RebootDFU(r.Context()); err != nil {
+		if errors.Is(err, errors.ErrUnsupported) {
+			err = errors.New("this firmware has no reset command: enter DFU mode on the device")
+		}
+		writeErr(w, http.StatusNotImplemented, err)
+		return
+	}
+	s.continuous.Store(false)
+	_ = dev.Close()
+	s.mu.Lock()
+	if s.dev == dev {
+		s.dev, s.info = nil, nil
+	}
+	s.lastErr = "Rebooted into DFU mode: flash it in Firmware, then press Start firmware there."
+	s.mu.Unlock()
+	s.log.Printf("device: rebooted into DFU mode")
+	s.publishState()
 	writeJSON(w, 200, s.state())
 }
 

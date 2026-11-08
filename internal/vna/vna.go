@@ -30,6 +30,9 @@ type Info struct {
 	HostCal bool `json:"hostCal,omitempty"`
 	// Experimental marks drivers not tested on real hardware.
 	Experimental bool `json:"experimental,omitempty"`
+	// DFUReboot: the driver can restart the device into its USB DFU
+	// bootloader (see DFURebooter).
+	DFUReboot bool `json:"dfuReboot,omitempty"`
 }
 
 // CalStatus is the calibration state as reported by the firmware.
@@ -144,6 +147,13 @@ type Device interface {
 	RecallCal(ctx context.Context, slot int) error
 	// Close releases the device (and returns it to its normal UI mode).
 	Close() error
+}
+
+// DFURebooter is implemented by drivers that can restart the device into
+// its USB DFU bootloader (NanoVNA-H / H4 shell: `reset dfu`), for the
+// FIRMWARE dialog's "Reboot into DFU". The connection ends with it.
+type DFURebooter interface {
+	RebootDFU(ctx context.Context) error
 }
 
 // ErrNotConnected is returned when no device is available.

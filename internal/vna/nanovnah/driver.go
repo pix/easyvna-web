@@ -118,6 +118,7 @@ func (d *Driver) identify(ctx context.Context) error {
 		CalSlots:  slots,
 		TwoPort:   true,
 		Mock:      d.opt.Mock,
+		DFUReboot: d.commands["reset"],
 	}
 	return nil
 }
@@ -413,6 +414,21 @@ func (d *Driver) ApplyProfile(ctx context.Context, name string) (vna.DeviceProfi
 		}
 	}
 	return vna.DeviceProfile{}, fmt.Errorf("profile %s: unexpected reply %q", name, strings.Join(lines, " | "))
+}
+
+// RebootDFU implements vna.DFURebooter: `reset dfu` restarts firmware built
+// with DFU support (NanoVNA-D on the H4, EasyVNA) in the STM32 bootloader
+// (USB 0483:df11). The serial port then goes away, so no prompt comes back
+// and a timeout or transport error is expected. Firmware without DFU
+// support simply restarts. It changes nothing stored on the device.
+func (d *Driver) RebootDFU(ctx context.Context) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if !d.commands["reset"] {
+		return errors.ErrUnsupported
+	}
+	_, _ = d.sh.ExecRaw(ctx, "reset dfu", 1500*time.Millisecond)
+	return nil
 }
 
 // Close resumes the on-device sweep (scan pauses it) and closes the port.

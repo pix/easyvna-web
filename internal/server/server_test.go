@@ -298,3 +298,48 @@ func TestSnapshotFileNames(t *testing.T) {
 		}
 	}
 }
+
+// "Reboot into DFU" (FIRMWARE dialog): `reset dfu` is sent, the device is
+// dropped and live sweeping stops.
+func TestRebootIntoDFU(t *testing.T) {
+	st, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sims []*mock.Sim
+	open := func(ctx context.Context) (vna.Device, error) {
+		sim := mock.New(mock.Options{PointTime: time.Microsecond, Seed: 7})
+		sims = append(sims, sim)
+		return nanovnah.Open(ctx, sim, nanovnah.Options{PortName: "mock", Mock: true, CalSettle: time.Millisecond})
+	}
+	s := New(Options{Open: open, Store: st, Static: fstest.MapFS{}, Logger: log.New(io.Discard, "", 0)})
+	ts := httptest.NewServer(s.Handler())
+	defer ts.Close()
+	var state struct {
+		Connected bool   `json:"connected"`
+		Error     string `json:"error"`
+		Info      *struct {
+			DFUReboot bool `json:"dfuReboot"`
+		} `json:"info"`
+	}
+	if code := call(t, ts, "POST", "/api/dfu", "", nil); code != http.StatusServiceUnavailable {
+		t.Fatalf("not connected: got %d", code)
+	}
+	if code := call(t, ts, "POST", "/api/connect", "", &state); code != 200 || !state.Connected || state.Info == nil || !state.Info.DFUReboot {
+		t.Fatalf("connect: %d %+v", code, state)
+	}
+	s.continuous.Store(true)
+	if code := call(t, ts, "POST", "/api/dfu", "", &state); code != 200 || state.Connected || !strings.Contains(state.Error, "DFU") {
+		t.Fatalf("dfu: %d %+v", code, state)
+	}
+	if s.continuous.Load() {
+		t.Error("live sweeping not stopped")
+	}
+	sent := false
+	for _, l := range sims[0].Log {
+		sent = sent || l == "reset dfu"
+	}
+	if !sent {
+		t.Errorf("reset dfu not sent: %q", sims[0].Log)
+	}
+}
