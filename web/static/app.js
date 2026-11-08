@@ -32,7 +32,15 @@ function fmtLC(x, f) {
 function esc(s) { return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
 function swrText(v) { return v >= 99 ? '>99' : v.toFixed(2); }
 function mlFromSWR(s) { const g = (s - 1) / (s + 1); return g >= 1 ? 60 : -10 * Math.log10(1 - g * g); }
-function grade(swr) { return swr <= 0 ? 'na' : swr < 1.5 ? 'good' : swr < 2 ? 'ok' : 'bad'; }
+// The band SWR limit of the acceptance setting (2 by default): BAD from
+// the limit on, GOOD below half its excess over 1:1 (1.5 for 2).
+function lim() { const a = S.state && S.state.acceptance; return (a && a.limit) || 2; }
+const goodLim = (l) => 1 + (l - 1) / 2;
+const fmtL = (l) => (+l).toFixed(1);
+const mhz2 = (hz) => (Math.round(hz / 1e4 + 1e-6) / 100).toFixed(2); // like the server: ± 4.35, not 4.34
+const rlOf = (s) => 20 * Math.log10((s + 1) / (s - 1));
+function grade(swr, l = lim()) { return swr <= 0 ? 'na' : swr < goodLim(l) ? 'good' : swr < l ? 'ok' : 'bad'; }
+function resLim(r) { const b = r && r.summary && r.summary.bands && r.summary.bands[0]; return (b && b.limit) || lim(); }
 const hhmm = (t) => new Date(t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
 
 async function api(method, path, body) {
@@ -125,7 +133,8 @@ function renderState() {
   cb.title = st.connected ? 'Release the NanoVNA: while EasyVNA Web is connected, its own screen is paused and its menus are slow'
     : (HOST ? 'Choose the NanoVNA (USB) and connect' : 'Connect to the NanoVNA');
 
-  renderProfiles(); renderCal(); renderTiles(); renderAdvanced(); renderDevice();
+  renderProfiles(); renderCal(); renderTiles(); renderAdvanced(); renderDevice(); renderMeasureBar();
+  if (!$('setupView').hidden) renderSetup();
   $('tabS21').hidden = !st.config.s21;
   if (!st.config.s21 && S.tab === 's21') selectTab('smith');
   const key = st.config.profile + st.config.start + st.config.stop;
@@ -590,7 +599,8 @@ function renderVerdict() {
       <div class="vmain"><div class="stat"><div class="v">${swrText(sm.minSWR)}</div><div class="l">best SWR @ ${mhz(sm.minSWRFreq)} MHz</div></div>
       <div class="stat"><div class="v">${sm.mlAtMin.toFixed(2)}<small> dB</small></div><div class="l">mismatch loss</div></div></div>${dipTable(sm.dips)}</div>`;
   else html = sm.bands.map((b, i) => bandCard(r, b, i === 0)).join('');
-  box.innerHTML = refRow(r) + html;
+  box.innerHTML = refRow(r) + html + (r.config.identify ? '' : accBar(r));
+  bindAccBar();
   for (const tr of document.querySelectorAll('.dips tr.click')) tr.onclick = () => { S.cursorIdx = Number(tr.dataset.idx); drawAll(); };
 }
 
@@ -624,7 +634,8 @@ function bandCard(r, b, primary) {
     res = `Resonance <b>${mhz(b.dipFreq)} MHz</b> (SWR ${swrText(b.dipSWR)}): ${pos}, ${sgn(b.dipOffset / 1e6)} MHz from ${band.ref ? 'reference' : 'centre'} ${mhzR(ref)} MHz${q}.`;
   } else res = edgeHint(r);
   const cov = b.covered ? '' : '<div class="vline" style="color:var(--warn-ink)">! The sweep does not cover the whole band.</div>';
-  const advice = primary && b.dipAdvice && b.dipEdgeOffset !== 0 ? `<div class="advice">${esc(b.dipAdvice)}</div>` : '';
+  // Outside the band but still covered at the limit: the trim is optional.
+  const advice = primary && b.dipAdvice && b.dipEdgeOffset !== 0 ? `<div class="advice">${b.verdict === 'good' || b.verdict === 'ok' ? `The band is covered at SWR &lt; ${fmtL(b.limit || 2)}: trimming is optional. ` : ''}${esc(b.dipAdvice)}</div>` : '';
   return `<div class="vcard ${v} wide ${primary ? '' : 'compact'}">
     <div class="vtitle"><h3>${bandTitle(band)}</h3><span class="range">${mhz(band.lo, 2)}–${mhz(band.hi, 2)} MHz</span>${badge(b.verdict)}</div>
     <div class="vmain">
@@ -632,7 +643,7 @@ function bandCard(r, b, primary) {
       <div class="stat"><div class="v">${b.worstML.toFixed(2)}<small> dB</small></div><div class="l">mismatch loss at worst</div></div>
       <div class="stat"><div class="v">${b.worstRL.toFixed(1)}<small> dB</small></div><div class="l">return loss, worst</div></div>
       <div class="stat"><div class="v">${swrText(b.bestSWR)}</div><div class="l">best SWR in band</div></div>
-      ${primary ? `<div class="stat"><div class="v">${b.pctBelow2.toFixed(0)}<small> %</small></div><div class="l">of band with SWR &lt; 2</div></div>` : ''}
+      ${primary ? `<div class="stat"><div class="v">${(b.pctBelowLimit != null ? b.pctBelowLimit : b.pctBelow2).toFixed(0)}<small> %</small></div><div class="l">of band with SWR &lt; ${fmtL(b.limit || 2)}</div></div>` : ''}
     </div>
     <div class="vline">${res}</div>${cov}${advice}${suspect() && primary ? '<div class="vline" style="color:var(--warn-ink)"><b>! Not trustworthy:</b> see the warning at the top of the page.</div>' : ''}</div>`;
 }
@@ -788,32 +799,34 @@ for (const b of document.querySelectorAll('#swrScale button')) b.onclick = () =>
 const swrTicks = (m) => m <= 3 ? [1, 1.5, 2, 2.5, 3] : m <= 5 ? [1, 1.5, 2, 3, 4, 5] : [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
 
 function drawSWR() {
-  const m = swrMax(), r = S.res;
+  const m = swrMax(), r = S.res, l = resLim(r);
   const hl = r && r.hold, holdOK = !!(hl && hl.envMin && hl.envMin.length === r.freq.length);
+  const mu = r && r.multi, multiOK = !holdOK && !!(mu && mu.envMin && mu.envMin.length === r.freq.length);
   const hiTrace = hl && S.hold.highlight && S.hold.traces[S.hold.highlight];
   const ys = r ? [{ y: r.derived.swr, color: css('--series1'), label: 'SWR' }] : [];
   if (hiTrace && hiTrace.length === r.freq.length) ys.unshift({ y: hiTrace, color: '#1baf7a', label: '#' + S.hold.highlight, width: 3 });
   drawLine($('swrPlot'), {
     ys,
     ymin: 1, ymax: m, yticks: swrTicks(m), yfmt: (t) => String(t),
-    hlines: [{ y: 1.5, label: 'SWR 1.5' }, { y: 2, label: 'SWR 2' }],
-    ref: (rr) => rr.derived.swr, dips: (d) => d.swr, envelope: holdOK ? { min: hl.envMin, max: hl.envMax } : null,
+    hlines: [{ y: goodLim(l), label: 'SWR ' + +goodLim(l).toFixed(2) }, { y: l, label: 'SWR ' + +l.toFixed(2) }],
+    ref: (rr) => rr.derived.swr, dips: (d) => d.swr, envelope: holdOK ? { min: hl.envMin, max: hl.envMax } : multiOK ? { min: mu.envMin, max: mu.envMax } : null,
   });
-  $('legend').innerHTML = `<span><i style="border-color:var(--series1)"></i>${r && r.source ? 'File ' + esc(r.source.file) : 'Live'}${r && r.avgN > 1 ? ` (avg ${r.avgN})` : ''}</span>` +
+  $('legend').innerHTML = `<span><i style="border-color:var(--series1)"></i>${r && r.source ? 'File ' + esc(r.source.file) : r && r.multi ? `Measure ×${r.multi.n}: vector average` : 'Live'}${r && r.avgN > 1 && !r.multi ? ` (avg ${r.avgN})` : ''}</span>` +
     (S.ref ? `<span><i class="dash" style="border-color:var(--series2)"></i>${esc(S.refName)}</span>` : '') +
     (holdOK ? `<span class="band"><i style="background:var(--band2)"></i>HOLD: ${hl.positions} steady position${hl.positions === 1 ? '' : 's'}</span>` : '') +
     (hiTrace ? `<span><i style="border-color:#1baf7a"></i>position #${S.hold.highlight}</span>` : '') +
+    (multiOK ? `<span class="band"><i style="background:var(--band2)"></i>×${mu.n}: min / max of the sweeps</span>` : '') +
     `<span class="band"><i></i>Band</span>`;
   updateScaleButtons();
 }
 function drawRL() {
-  const r = S.res; let lo = -30;
+  const r = S.res, l = resLim(r); let lo = -30;
   if (r) for (const v of r.derived.s11dB) if (v < lo) lo = v;
   lo = Math.max(-60, Math.floor(lo / 10) * 10);
   drawLine($('rlPlot'), {
     ys: r ? [{ y: r.derived.s11dB, color: css('--series1'), label: 'S11' }] : [],
     ymin: lo, ymax: 0, yticks: niceTicks(lo, 0, 6), yfmt: (t) => t + ' dB',
-    hlines: [{ y: -9.54, label: 'SWR 2 (RL 9.5 dB)' }, { y: -13.98, label: 'SWR 1.5 (RL 14 dB)' }],
+    hlines: [{ y: -rlOf(l), label: `SWR ${+l.toFixed(2)} (RL ${rlOf(l).toFixed(1)} dB)` }, { y: -rlOf(goodLim(l)), label: `SWR ${+goodLim(l).toFixed(2)} (RL ${rlOf(goodLim(l)).toFixed(1)} dB)` }],
     ref: (rr) => rr.derived.s11dB, dips: (d) => -d.rl,
   });
 }
@@ -994,7 +1007,7 @@ function selectTab(t) {
   drawAll();
 }
 for (const b of document.querySelectorAll('.tabs button')) b.onclick = () => selectTab(b.dataset.tab);
-function lockBody() { document.body.classList.toggle('locked', !$('tuneView').hidden || !$('cmpView').hidden || !$('repView').hidden || !$('sheetView').hidden || !$('histView').hidden || !$('fwView').hidden || !$('batchView').hidden); }
+function lockBody() { document.body.classList.toggle('locked', !$('accView').hidden || !$('setupView').hidden || !$('tuneView').hidden || !$('cmpView').hidden || !$('repView').hidden || !$('sheetView').hidden || !$('histView').hidden || !$('fwView').hidden || !$('batchView').hidden); }
 
 // ---------- TUNE ----------
 function defaultTarget() {
@@ -1019,6 +1032,8 @@ $('tuneClose').onclick = () => run(async () => { closeTuneUI(); await api('POST'
 document.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape') return;
   if (!$('askView').hidden) return $('askNo').click();
+  if (!$('accView').hidden) return closeAccept();
+  if (!$('setupView').hidden) return closeSetup();
   if (!$('tuneView').hidden) $('tuneClose').click(); else if (!$('cmpView').hidden) $('cmpClose').click(); else if (!$('repView').hidden) $('repClose').click();
   else if (!$('histView').hidden) $('histClose').click(); else if (!$('sheetView').hidden) $('sheetClose').click();
   else if (!$('batchView').hidden) $('batchClose').click();
@@ -1060,15 +1075,26 @@ function renderTune() {
   } else if (ti.direction === 'lengthen') dirSub = '<small> too short</small><small class="tcut">do not cut: cutting makes it worse</small>';
   $('tDir').innerHTML = esc(arrows[ti.direction]) + dirSub;
   cell.classList.add(ti.direction);
-  $('tSwrCell').className = 'ts ' + grade(ti.swrAtTarget);
+  $('tSwrCell').className = 'ts ' + grade(ti.swrAtTarget, ti.limit || lim());
   $('tSwr').textContent = swrText(ti.swrAtTarget);
   $('tRl').innerHTML = `${ti.rlAtTarget.toFixed(1)}<small> dB</small>`;
   $('tMl').innerHTML = `${ti.mlAtTarget.toFixed(2)}<small> dB</small>`;
   $('tSwrRes').textContent = ti.found ? swrText(ti.swrAtRes) : '–';
   $('tEffect').innerHTML = r.ref ? effectLine(r.ref) : '';
+  $('tAccept').innerHTML = tuneAccept(ti);
   toneUpdate(ti.swrAtTarget);
   renderTrim();
   updateCutBig();
+}
+// tuneAccept: TUNE's fine aim and the acceptance (band covered at the
+// limit, with how much margin).
+function tuneAccept(ti) {
+  const w = ti.accept, m = ti.margin; if (!w) return '';
+  const aim = `<span>aim <b>± ${mhz2(ti.aimHz)} MHz</b>${w.mode === 'auto' ? ' (fine tuning aim)' : ''}</span>`;
+  let acc = `<span>acceptance: ${esc(w.text)}</span>`;
+  if (m && m.ok) acc += m.covered ? `<span class="good">band covered at SWR &lt; ${fmtL(w.limit)} · margin used ${Math.round(m.usedPct)} %</span>` : `<span class="badtxt">band not covered at SWR &lt; ${fmtL(w.limit)}</span>`;
+  else if (m) acc += '<span class="muted">no SWR region below the limit in view</span>';
+  return aim + acc;
 }
 function setTarget(f) {
   run(async () => {
@@ -1345,7 +1371,8 @@ async function openReport() {
     ${batches.length ? `<label class="stepsub">Batch statistics <select id="repBatch"><option value="">none</option>${batches.map((b) => `<option value="${esc(b.id)}" ${b.id === st.batch.active ? 'selected' : ''}>${esc(b.name)} (${b.n})</option>`).join('')}</select></label>` : ''}
     <div class="stepsub">${st.compare.leaderboard.length > 1 ? `S21 compare results (${st.compare.leaderboard.length - 1} vs ${esc(st.compare.aName)}) are included.` : 'No S21 compare results yet.'}</div>
     <label class="stepsub">Notes (optional)<textarea id="repNotes" placeholder="e.g. 3D-printed enclosure, 10 cm RG316 pigtail"></textarea></label>
-    <div class="sheetform">${linkField('repLink')}<div class="wide">${photoBox('repPhoto', 'Antenna photo (optional, remembered with the antenna)')}</div></div>
+    <div class="sheetform">${linkField('repLink')}<div class="wide">${photoBox('repPhoto', 'Antenna photo (optional, remembered with the antenna)')}</div>${smallPrintFields('rep_')}</div>
+    ${S.res && !S.res.tune && !S.res.source ? `<div class="stepsub measline" id="repMeas">${S.res.multi ? '<b>Measurement:</b> ' + esc(S.res.multi.text) : 'Measurement: the latest single sweep of each profile.'} ${measureCtl('rep')}</div>` : ''}
     <div class="row"><button id="repGo" class="primary bigbtn" type="button">Create report</button></div>
     ${reports.length ? `<div class="stepsub"><b>Earlier reports</b></div><div class="choices">${reports.slice(0, 8).map((r) => `<label><a href="api/reports/${encodeURIComponent(r.file)}" target="_blank" rel="noopener">${esc(r.file)}</a> <span class="muted">${new Date(r.time).toLocaleString()}</span> <a class="btn ghost small" href="api/reports/${encodeURIComponent(r.file)}?download=1">download</a></label>`).join('')}</div>` : ''}`;
   bindLink('repLink');
@@ -1353,9 +1380,11 @@ async function openReport() {
     let a = null;
     try { a = await api('GET', 'api/antennas/' + encodeURIComponent($('repName').value.trim())); } catch { /* new antenna */ }
     S.repPhoto = (a && a.photo) || ''; $('repLink').value = (a && a.link) || ''; $('repLink').oninput();
+    $('rep_Cap').value = (a && a.photoCaption) || ''; if (a) $('rep_Note').value = a.linkNote || '';
     bindPhoto('repPhoto', 'repView', () => S.repPhoto, (v) => { S.repPhoto = v; });
   };
   $('repName').onchange = () => run(repAnt);
+  bindMeasureCtl('rep', () => ({ for: 'measure' }), () => { const e = $('repMeas'); if (e && S.res && S.res.multi) e.innerHTML = '<b>Measurement:</b> ' + esc(S.res.multi.text); });
   await repAnt();
   $('repGo').onclick = () => run(async () => {
     const link = linkValue('repLink');
@@ -1363,7 +1392,7 @@ async function openReport() {
     const w = window.open('', '_blank');
     try {
       const r = await api('POST', 'api/report', { name: $('repName').value.trim(), notes: $('repNotes').value, profiles, trim: $('repTrim').value, batch: $('repBatch') ? $('repBatch').value : '',
-        photo: S.repPhoto || '', link });
+        photo: S.repPhoto || '', link, ...(await smallPrintValues('rep_')) });
       if (HOST) await HOST.openReport(w, r.url, r.file);
       else if (w) w.location = r.url; else location.href = r.url;
       toast('Report saved: ' + r.file);
@@ -1504,6 +1533,7 @@ function sheetFill(a) {
   $('sh_notes').value = a.notes || '';
   $('sh_link').value = a.link || ''; $('sh_link').oninput && $('sh_link').oninput();
   S.sheetPhoto = a.photo || '';
+  if ($('sh_Cap')) { $('sh_Cap').value = a.photoCaption || ''; if (a.name) $('sh_Note').value = a.linkNote || ''; }
   if ($('shPhotoBox')) bindPhoto('shPhoto', 'sheetView', () => S.sheetPhoto, (v) => { S.sheetPhoto = v; });
 }
 function sheetCollect() {
@@ -1536,7 +1566,9 @@ async function openSheet() {
       <label class="wide">Notes<textarea id="sh_notes" maxlength="2000" placeholder="e.g. 3D-printed enclosure, measured in free air 1 m above the bench"></textarea></label>
       ${linkField('sh_link')}
       <div class="wide">${photoBox('shPhoto')}</div>
+      ${smallPrintFields('sh_')}
     </div>
+    <div class="stepsub measline" id="shMeas">${S.res.multi ? '<b>Measurement:</b> ' + esc(S.res.multi.text) : 'Measurement: the latest single sweep.'} ${S.res.source ? '' : measureCtl('sh')}</div>
     <div class="stepsub muted" id="shKnown"></div>
     <div class="row"><button id="shPrint" class="primary bigbtn" type="button">Print sheet</button>
       <button id="shSave" class="bigbtn" type="button">Save sheet (HTML)</button>
@@ -1546,7 +1578,8 @@ async function openSheet() {
   if (name) await sheetLoad(name, false);
   $('sh_name').onchange = () => run(() => sheetLoad($('sh_name').value.trim(), true));
   bindLink('sh_link');
-  const make = async () => { const a = sheetCollect(); S.sheetName = a.name; return api('POST', 'api/sheet', { antenna: a }); };
+  const make = async () => { const a = Object.assign(sheetCollect(), await smallPrintValues('sh_')); S.sheetName = a.name; return api('POST', 'api/sheet', { antenna: a }); };
+  bindMeasureCtl('sh', () => ({ for: 'measure' }), () => { const e = $('shMeas'); if (e && S.res && S.res.multi) e.innerHTML = '<b>Measurement:</b> ' + esc(S.res.multi.text); });
   $('shPrint').onclick = () => run(async () => {
     const w = window.open('', '_blank');
     try {
@@ -1580,10 +1613,12 @@ async function openHistory() {
     <datalist id="histNames">${list.map((x) => `<option value="${esc(x.name)}">`).join('')}</datalist>
     <div class="row"><label class="stepsub">Antenna name<br><input id="histName" class="wide" list="histNames" maxlength="80" value="${esc(name)}" placeholder="e.g. whip-A or SN 0042" style="font-size:18px;padding:8px 10px;width:100%;max-width:420px"></label></div>
     <div class="row"><button id="histLog" class="primary bigbtn" type="button" ${canLog ? '' : 'disabled'}>Log this measurement</button>
-      <span class="muted small">${canLog ? `${S.res.source ? 'file ' + esc(S.res.source.file) : 'sweep'} of ${hhmm(S.res.time)}, ${mhzR(S.res.freq[0])}–${mhzR(S.res.freq[S.res.freq.length - 1])} MHz` : 'sweep a profile first'}</span></div>
+      <span class="muted small" id="histWhat">${canLog ? `${S.res.source ? 'file ' + esc(S.res.source.file) : S.res.multi ? esc(S.res.multi.text) : 'sweep'} of ${hhmm(S.res.time)}, ${mhzR(S.res.freq[0])}–${mhzR(S.res.freq[S.res.freq.length - 1])} MHz` : 'sweep a profile first'}</span>
+      ${canLog && !S.res.source ? `<span class="small">or first ${measureCtl('hi')}</span>` : ''}</div>
     <div id="histInfo"></div>`;
   $('histView').hidden = false; lockBody();
   $('histName').onchange = () => run(() => loadHistory($('histName').value.trim()));
+  bindMeasureCtl('hi', () => ({ for: 'measure' }), () => { const e = $('histWhat'); if (e && S.res && S.res.multi) e.textContent = S.res.multi.text + ' of ' + hhmm(S.res.time) + ': tap Log this measurement'; });
   $('histLog').onclick = () => run(async () => {
     const n = $('histName').value.trim();
     if (!n) throw new Error('give the antenna a name');
@@ -1625,7 +1660,7 @@ function renderHistory() {
   drawHistSpark($('histRes'), group.map((e) => e.resFreq / 1e6), 'resonance (MHz)', last.target ? [{ y: last.target / 1e6, label: 'target ' + mhzR(last.target) }] : [], 2);
   const hasWorst = group.some((e) => e.worstSWR);
   drawHistSpark($('histSWR'), group.map((e) => (hasWorst ? e.worstSWR : e.swrAtTarget)), hasWorst ? 'worst SWR in band' : 'SWR at target',
-    [{ y: 1.5, label: '1.5' }, { y: 2, label: '2' }], 2);
+    [{ y: goodLim(lim()), label: String(+goodLim(lim()).toFixed(2)) }, { y: lim(), label: String(+lim().toFixed(2)) }], 2);
 }
 // drawHistSpark draws one small series (one point per logged measurement).
 function drawHistSpark(cv, ys, title, lines, dec) {
@@ -1658,7 +1693,8 @@ $('histClose').onclick = () => { $('histView').hidden = true; lockBody(); };
 // The server keeps the batches (batches/<id>.json), computes every figure
 // (tuning of each antenna against TUNE's target, lot statistics, outliers)
 // and runs auto-capture on the live sweeps; this view shows it.
-const BSTATUS = { tuned: 'good', shorten: 'ok', lengthen: 'ok', bad: 'bad', none: 'bad' };
+const BSTATUS = { tuned: 'good', ok: 'good', shorten: 'ok', lengthen: 'ok', bad: 'bad', none: 'bad' };
+const BGRADE = { fine: 'FINE', worth: 'WORTH CORRECTING', must: 'MUST CORRECT' };
 function bview() { return !$('batchView').hidden; }
 function hexA(c, a) { // '#2a78d6' → rgba with alpha
   const m = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(c.trim());
@@ -1692,13 +1728,13 @@ async function renderBatchHome() {
   const okProf = p && !p.identify && (st.config.bands || []).length;
   const def = (p && !p.identify ? p.label + ' ' : '') + 'lot ' + new Date().toISOString().slice(0, 10);
   const rows = list.map((b) => `<tr><td><b>${esc(b.name)}</b></td><td>${esc(b.label)}</td><td class="num">${b.n}</td>
-      <td class="num">${b.n ? `${b.tuned}/${b.n}` : '–'}</td><td>${new Date(b.updated).toLocaleString()}</td>
+      <td class="num">${b.n ? `${b.ok}/${b.n}` : '–'}</td><td>${b.grade ? `<span class="bgrade ${b.grade}">${BGRADE[b.grade]}</span>` : '–'}</td><td>${new Date(b.updated).toLocaleString()}</td>
       <td><span class="bact"><button type="button" class="primary" data-open="${esc(b.id)}">Open</button>
       <button type="button" class="ghost" data-del="${esc(b.id)}" data-name="${esc(b.name)}">Delete</button></span></td></tr>`).join('');
   $('batchBody').innerHTML = `<div class="step">Test a lot of antennas</div>
     <div class="stepsub">Measure each antenna of a lot (made or bought together) one after the other on one band profile.
-      You see whether each one is tuned (TUNE's target and tolerance, with the trim to make), and how consistent the lot is: mean offset, spread, outliers.</div>
-    ${list.length ? `<div class="bwrap"><table class="bants blist"><thead><tr><th>Batch</th><th>Profile</th><th class="num">Antennas</th><th class="num">Tuned</th><th>Updated</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>` : ''}
+      You see whether each one covers the band at the SWR limit of the acceptance setting and with how much margin (with the trim that would centre it), and how consistent the lot is: mean offset, spread, outliers.</div>
+    ${list.length ? `<div class="bwrap"><table class="bants blist"><thead><tr><th>Batch</th><th>Profile</th><th class="num">Antennas</th><th class="num">OK</th><th>Lot</th><th>Updated</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>` : ''}
     <h3 style="margin:10px 0 0">New batch on the ${okProf ? esc(p.label + ' MHz profile') : 'current profile'}</h3>
     ${okProf ? '' : '<div class="wbanner warn"><span class="wi">!</span><div><b>Pick a band profile first</b>Tap 433, 869 or 915: a batch is measured on one band profile (Wide and Survey only identify antennas).</div></div>'}
     <div class="bnew">
@@ -1708,6 +1744,7 @@ async function renderBatchHome() {
       <label class="wide">Notes<textarea id="bnNotes" maxlength="2000" placeholder="e.g. 25 pcs bought 2026-10, measured in free air on a 10 cm RG316 pigtail"></textarea></label>
       ${linkField('bnLink')}
       <div class="wide">${photoBox('bnPhoto', 'Photo of the lot (optional)')}</div>
+      ${smallPrintFields('bn_')}
     </div>
     <div class="row"><button id="bnGo" class="primary bigbtn" type="button" ${okProf ? '' : 'disabled'}>Start batch</button>
       <button id="bnImport" class="ghost" type="button">Import a batch (JSON)</button></div>`;
@@ -1717,7 +1754,7 @@ async function renderBatchHome() {
   $('bnGo').onclick = () => run(async () => {
     const len = parseFloat($('bnLen').value);
     S.batch = await api('POST', 'api/batches', { name: $('bnName').value.trim(), notes: $('bnNotes').value, lengthMm: len > 0 ? len : 0, trim: $('bnTrim').value,
-      link: linkValue('bnLink'), photo: S.bnPhoto || '' });
+      link: linkValue('bnLink'), photo: S.bnPhoto || '', ...(await smallPrintValues('bn_')) });
     S.batchKey = ''; renderBatch();
     toast('Batch started: connect the first antenna and tap Capture');
   });
@@ -1758,7 +1795,7 @@ function renderBatch() {
   const key = JSON.stringify([b.id, b.version, b.updated, b.antennas.length, b.hasUndo]);
   if (key === S.batchKey && $('bvCapture')) { updateBatchLive(); return; }
   S.batchKey = key;
-  const sm = b.summary, n = b.antennas.length, tol = sm.toleranceHz / 1e6;
+  const sm = b.summary, n = b.antennas.length, tol = sm.toleranceHz / 1e6, auto = sm.window.mode === 'auto';
   const st = S.state;
   const lot = st.mockScenarios && st.mockScenarios.includes('lot' + b.profile);
   const outl = (m, k) => (m.outliers.includes(k) ? ' bout' : '');
@@ -1772,18 +1809,20 @@ function renderBatch() {
       <td class="num${outl(m, 'res')}">${m.found ? sgn(m.offset / 1e6, 2) + ` <span class="muted">(${sgn(m.offsetPct, 2)} %)</span>` : '–'}</td>
       <td class="num${outl(m, 'swrTarget')}">${swrText(m.swrTarget)}</td><td class="num${outl(m, 'worstSWR')}">${m.worstSWR ? swrText(m.worstSWR) : '–'}</td>
       <td class="num${outl(m, 'bw2')}">${m.bw2 ? (m.bw2Open ? '≥ ' : '') + (m.bw2 / 1e6).toFixed(1) : '–'}</td><td class="num${outl(m, 'rlTarget')}">${m.rlTarget.toFixed(1)}</td>
-      <td>${badge(m.verdict).replace('? CHECK', VLABEL[m.verdict] || m.verdict)} <span class="muted">${m.pctBelow2.toFixed(0)} %</span></td>
-      <td class="${a.calOK ? '' : 'bad'}" style="${a.calOK ? '' : 'color:var(--bad-ink)'}">${esc(a.cal)}${a.auto ? ' <span class="muted">· auto</span>' : ''}${a.redone ? ` <span class="muted">· redone ${a.redone}×</span>` : ''}</td>
+      <td>${badge(m.verdict).replace('? CHECK', VLABEL[m.verdict] || m.verdict)} <span class="muted">${(m.pctBelowLimit != null ? m.pctBelowLimit : m.pctBelow2).toFixed(0)} %</span></td>
+      <td class="num">${m.margin && m.margin.ok ? Math.min(999, Math.round(m.margin.usedPct)) + ' %' : '–'}</td>
+      <td class="${a.calOK ? '' : 'bad'}" style="${a.calOK ? '' : 'color:var(--bad-ink)'}">${esc(a.cal)}${a.auto ? ' <span class="muted">· auto</span>' : ''}${a.redone ? ` <span class="muted">· redone ${a.redone}×</span>` : ''}${a.rep ? ` <span class="muted brep">· ×${a.rep.n}${a.rep.mode === 'reseat' ? ' re-seated' : ''}, σ ${(a.rep.resSD / 1e6).toFixed(2)} MHz</span>` : ''}</td>
       <td><span class="bact"><button type="button" class="ghost" data-redo="${a.id}" title="Measure this antenna again (connect it first)">Redo</button>
       <button type="button" class="ghost" data-rm="${a.id}" aria-label="Delete ${esc(a.label)}">×</button></span></td></tr>`;
   }).join('');
   const stats = sm.stats.map((s) => `<tr><td>${esc(s.label)}${s.unit ? ` <span class="muted">(${esc(s.unit)})</span>` : ''}</td><td class="num">${s.n}</td>
       ${s.n ? `<td class="num">${s.mean.toFixed(s.dec)}</td><td class="num">${s.n > 1 ? s.sd.toFixed(s.dec + 1) : '–'}</td><td class="num">${s.min.toFixed(s.dec)}</td><td class="num">${s.max.toFixed(s.dec)}</td><td class="num">${s.spread.toFixed(s.dec)}</td>` : '<td class="num">–</td>'.repeat(5)}
       <td>${s.outliers.length ? s.outliers.map((id) => '<b>' + esc((b.antennas.find((a) => a.id === id) || { label: '#' + id }).label) + '</b>').join(', ') : '–'}</td></tr>`).join('');
-  const tcls = !n ? '' : sm.tuned === n ? 'good' : sm.bad ? 'bad' : 'ok';
+  const tcls = !n ? '' : sm.grade === 'fine' ? 'good' : sm.grade === 'must' ? 'bad' : 'ok';
   $('batchBody').innerHTML = `<div class="bhead"><div style="flex:1;min-width:260px">
       <input id="bvName" class="bname" value="${esc(b.name)}" maxlength="80" aria-label="Batch name" title="Click to rename">
-      <div class="stepsub">${esc(b.label)} · ${mhzR(b.start)}–${mhzR(b.stop)} MHz · target <b>${mhz(b.target)} MHz ± ${tol.toFixed(2)}</b> (TUNE's ✓ on target)${b.lengthMm ? ` · element ${b.lengthMm} mm` : ''}${b.trim ? ` · MHz/mm from ${esc(b.trim)}` : ''}${b.link ? ' · ' + linkHTML(b.link, b.linkText) : ''}</div></div>
+      <div class="stepsub">${esc(b.label)} · ${mhzR(b.start)}–${mhzR(b.stop)} MHz · target <b>${mhz(b.target)} MHz</b> (TUNE's fine aim ± ${(sm.aimHz / 1e6).toFixed(2)})${b.lengthMm ? ` · element ${b.lengthMm} mm` : ''}${b.trim ? ` · MHz/mm from ${esc(b.trim)}` : ''}${b.link ? ' · ' + linkHTML(b.link, b.linkText) : ''}</div>
+      <div class="bcrit" id="bvCrit">${esc(sm.criteria)} <button type="button" class="ghost small" id="bvAcc">Acceptance…</button></div></div>
     ${b.photo ? `<img class="bphoto" src="${esc(b.photo)}" alt="Photo of the lot">` : ''}
     <div class="row"><button id="bvSheet" class="primary" type="button" ${n ? '' : 'disabled'} title="One printable page: Ctrl+P here does the same">Batch sheet</button>
       <a class="btn ghost small" href="api/batches/${encodeURIComponent(b.id)}/csv" download>CSV</a>
@@ -1792,24 +1831,25 @@ function renderBatch() {
     <div id="bvProblem" class="wbanner warn" hidden></div>
     <div class="bcap"><button id="bvCapture" class="primary bigbtn" type="button">Capture #${(b.antennas.reduce((m, a) => Math.max(m, a.id), 0)) + 1}</button>
       <input id="bvLabel" maxlength="40" placeholder="label / serial (optional)" aria-label="Label of the next antenna">
+      <span class="mctl" title="Measure each antenna several times and keep the average (the repeatability is shown)"><select id="bvN" aria-label="Sweeps per antenna">${[1, 3, 5, 10].map((v) => `<option value="${v}" ${v === batchN() ? 'selected' : ''}>×${v}</option>`).join('')}</select>
+        <label class="small check"><input type="checkbox" id="bvReseat" ${store('measureReseat') === '1' ? 'checked' : ''}> re-seat</label></span>
       <button id="bvAuto" class="toggle" type="button" aria-pressed="${st.batch.auto}" title="Capture each new antenna by itself once it is steady (uses LIVE and HOLD's motion detector)"><i class="led"></i>Auto-capture</button>
       ${lot ? '<button id="bvNext" class="ghost" type="button" title="Simulator: unscrew this antenna and connect the next one of the lot">Next simulated antenna</button>' : ''}
       ${b.hasUndo ? '<button id="bvUndo" class="ghost small" type="button">Undo last change</button>' : ''}
       <span id="bvAutoStatus" class="hstatus"></span><span class="muted small">Key <b>C</b>: capture</span></div>
-    <div class="bsum"><div class="btally ${tcls}"><div class="tl">Tuned</div><div class="hv" id="bvTally">${sm.tuned}<small> / ${n}</small></div>
-        <div class="small muted">PASS ${sm.yield.good} · OK ${sm.yield.ok} · FAIL ${sm.yield.bad}</div></div>
-      <div class="bconcl">${sm.conclusion.map((l) => `<p>${esc(l)}</p>`).join('')}<p class="tl">${esc(sm.tuningLine)}.</p></div></div>
+    <div class="bsum"><div class="btally ${tcls}"><div class="tl">${auto ? 'Cover the band' : 'Tuned'}</div><div class="hv" id="bvTally">${auto ? sm.ok : sm.tuned}<small> / ${n}</small></div>
+        <div class="small muted">PASS ${sm.yield.good} · OK ${sm.yield.ok} · FAIL ${sm.yield.bad}${auto ? ` · ${sm.tuned} on the aim` : ''}</div></div>
+      <div class="bconcl">${sm.grade ? `<span class="bgrade ${sm.grade}" id="bvGrade">${BGRADE[sm.grade]}</span>` : ''}${sm.conclusion.map((l) => `<p>${esc(l)}</p>`).join('')}<p class="tl">${esc(sm.tuningLine)}.</p></div></div>
     <canvas id="bvPlot" class="plot batchplot" aria-label="SWR of every captured antenna with the live trace"></canvas>
     <canvas id="bvStrip" class="plot batchstrip" aria-label="Resonance of each antenna, target and tolerance window"></canvas>
-    <div class="blegend"><span>thin: captured antennas · band: min / max of the lot · thick: live</span><span style="color:var(--series2)">dashed: statistical outlier</span>
-      <span class="t">● tuned</span><span class="o">▼ shorten · ▲ lengthen</span><span class="x">✕ bad</span><span>◯ outlier · green window: target ± ${tol.toFixed(2)} MHz</span></div>
+    <div class="blegend"><span>thin: captured antennas · band: min / max of the lot · thick: live</span><span style="color:var(--series2)">dashed: statistical outlier</span></div>
     <h3 style="margin:4px 0 0">Antennas</h3>
-    ${n ? `<div class="bwrap"><table class="bants"><thead><tr><th>#</th><th>Label</th><th>Tuning</th><th class="num">Resonance</th><th class="num">Offset MHz</th><th class="num">SWR@tgt</th><th class="num">Worst</th><th class="num">BW&lt;2</th><th class="num">RL dB</th><th>Band</th><th>Calibration</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>
+    ${n ? `<div class="bwrap"><table class="bants"><thead><tr><th>#</th><th>Label</th><th>Tuning</th><th class="num">Resonance</th><th class="num">Offset MHz</th><th class="num">SWR@tgt</th><th class="num">Worst</th><th class="num">BW&lt;2</th><th class="num">RL dB</th><th>Band</th><th class="num">Margin used</th><th>Calibration</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>
       <div class="small muted">${esc(sm.slope)}. ◆ = statistical outlier for that figure (|x − median| &gt; 3.5 × 1.4826 × MAD, from 3 antennas on): unlike the rest of the lot, which is not the same as off target.</div>` : '<div class="empty">No antenna yet: connect the first one and tap <b>Capture #1</b>.</div>'}
     <h3 style="margin:4px 0 0">Lot statistics</h3>
     <div class="bwrap"><table class="bstats"><thead><tr><th>Statistic</th><th class="num">n</th><th class="num">mean</th><th class="num">SD</th><th class="num">min</th><th class="num">max</th><th class="num">spread</th><th>outliers</th></tr></thead><tbody>${stats}</tbody></table></div>
     <label class="stepsub">Notes<textarea id="bvNotes" maxlength="2000">${esc(b.notes || '')}</textarea></label>
-    <details class="panel" id="bvMore"><summary>Photo &amp; link of the lot</summary><div class="sheetform">${linkField('bvLink', b.link)}<div class="wide">${photoBox('bvPhoto', 'Photo of the lot (optional)')}</div></div>
+    <details class="panel" id="bvMore"><summary>Photo &amp; link of the lot</summary><div class="sheetform">${linkField('bvLink', b.link)}<div class="wide">${photoBox('bvPhoto', 'Photo of the lot (optional)')}</div>${smallPrintFields('bv_', b.photoCaption, b.linkNote || '')}</div>
       <div class="row"><button id="bvMoreSave" class="primary" type="button">Save photo &amp; link</button></div></details>`;
   const bid = encodeURIComponent(b.id);
   $('bvName').onchange = () => run(async () => { S.batch = await api('PUT', 'api/batches/' + bid, { name: $('bvName').value }); toast('Batch renamed'); renderTiles(); });
@@ -1817,11 +1857,14 @@ function renderBatch() {
   bindLink('bvLink');
   bindPhoto('bvPhoto', 'batchView', () => S.bvPhoto, (v) => { S.bvPhoto = v; });
   $('bvMoreSave').onclick = () => run(async () => {
-    S.batch = await api('PUT', 'api/batches/' + bid, { link: linkValue('bvLink'), photo: S.bvPhoto || '' });
+    S.batch = await api('PUT', 'api/batches/' + bid, { link: linkValue('bvLink'), photo: S.bvPhoto || '', ...(await smallPrintValues('bv_')) });
     S.batchKey = ''; renderBatch(); toast('Photo and link saved');
   });
   $('bvNotes').onchange = () => run(async () => { S.batch = await api('PUT', 'api/batches/' + bid, { notes: $('bvNotes').value }); toast('Notes saved'); });
-  $('bvCapture').onclick = () => run(batchCapture);
+  $('bvCapture').onclick = () => run(() => batchCapture());
+  $('bvN').onchange = () => store('batchN', $('bvN').value);
+  $('bvReseat').onchange = () => store('measureReseat', $('bvReseat').checked ? '1' : '0');
+  $('bvAcc').onclick = openAccept;
   $('bvAuto').onclick = () => run(async () => {
     const on = !S.state.batch.auto;
     const r = await api('POST', 'api/batch', { auto: on });
@@ -1848,8 +1891,17 @@ function renderBatch() {
   });
   updateBatchLive();
 }
+function batchN() { const v = Number(store('batchN')); return [1, 3, 5, 10].includes(v) ? v : 1; }
 async function batchCapture(replace) {
   const b = S.batch; if (!b) return;
+  const n = $('bvN') ? Number($('bvN').value) : 1;
+  if (n > 1) { // Measure ×N: the server captures the average with its repeatability (progress in the measure bar)
+    const body = { n, reseat: !!($('bvReseat') && $('bvReseat').checked), for: 'batch' };
+    if (replace) body.replace = replace; else body.label = ($('bvLabel') && $('bvLabel').value.trim()) || '';
+    S.state = await api('POST', 'api/measure', body);
+    renderMeasureBar(); updateBatchLive();
+    return;
+  }
   const btn = $('bvCapture');
   if (btn) { btn.disabled = true; btn.textContent = 'Measuring…'; }
   try {
@@ -1894,7 +1946,7 @@ function updateBatchLive() {
     pb.innerHTML = `<span class="wi">!</span><div><b>${title}</b>${esc(prob)}${btn}</div>`;
     const sw = $('bvSwitch'); if (sw) sw.onclick = () => selectProfile(b.profile);
   }
-  $('bvCapture').disabled = !!prob || !!S.state.busy;
+  $('bvCapture').disabled = !!prob || !!S.state.busy || !!(S.state.measure && S.state.measure.running);
   const auto = S.state.batch.auto, a = $('bvAuto');
   a.setAttribute('aria-pressed', String(auto));
   const live = S.res && S.res.batch;
@@ -1930,81 +1982,384 @@ function drawBatch() {
   for (const a of b.antennas) if (a.metrics.outliers.length) ys.push({ y: a.swr, color: c2, width: 1.6, dash: [6, 3] });
   if (liveOK && base.freq.length === r.freq.length) ys.push({ y: r.derived.swr, color: css('--ink'), width: 2.6 });
   if (!base.freq.length) { const { ctx, w, h } = setup(cv); ctx.fillStyle = css('--muted'); ctx.textAlign = 'center'; ctx.font = '13px system-ui, sans-serif'; ctx.fillText(`Sweep the ${b.profile} profile to see the live trace`, w / 2, h / 2); }
-  else drawLine(cv, { r: base, ys, ymin: 1, ymax: 5, yticks: swrTicks(5), yfmt: String, hlines: [{ y: 1.5, label: 'SWR 1.5' }, { y: 2, label: 'SWR 2' }],
+  else drawLine(cv, { r: base, ys, ymin: 1, ymax: 5, yticks: swrTicks(5), yfmt: String, hlines: [{ y: goodLim(b.summary.window.limit), label: 'SWR ' + +goodLim(b.summary.window.limit).toFixed(2) }, { y: b.summary.window.limit, label: 'SWR ' + +b.summary.window.limit.toFixed(2) }],
     envelope: b.antennas.length > 1 ? { min: b.envMin, max: b.envMax } : null, vline: { f: b.target, label: 'target ' + mhzR(b.target) }, noCursor: true, noBandLabels: true });
   drawBatchStrip(liveOK ? r : null);
 }
-// drawBatchStrip: one mark per antenna on a frequency axis, with the band,
-// the target and its tolerance window, the lot's mean ± 1σ and the live
-// resonance (hollow ring).
+// drawBatchStrip: the resonance of each antenna on a frequency axis, in
+// lanes so nothing overlaps: (a) the band bracket, (b) the acceptance
+// window (Auto: the lot's own margin, asymmetric) with TUNE's fine aim and
+// the target, (c) one labelled mark per antenna (colour and shape by
+// status, stacked when close, outliers ringed), (d) the lot summary: the
+// mean, with its 95 % confidence interval for 3–4 antennas or ± σ from 5
+// on (just the mean below 3). The axis covers all of it; the live
+// resonance is a vertical line, with an arrow when it is off the axis.
+const STRIP_SHAPE = { tuned: '●', ok: '◆', shorten: '▼', lengthen: '▲', bad: '✕', none: '✕' };
 function drawBatchStrip(live) {
   const b = S.batch, cv = $('bvStrip'); if (!cv) return;
-  const { ctx, w, h } = setup(cv);
-  const sm = b.summary, tol = sm.toleranceHz, band = b.bands[0] || { lo: b.target, hi: b.target, name: '' };
-  const res = b.antennas.filter((a) => a.metrics.found).map((a) => a.metrics.resFreq);
+  const sm = b.summary, band = b.bands[0] || { lo: b.target, hi: b.target, name: '' };
+  const win = sm.window || { hz: sm.toleranceHz, mode: 'tight' };
+  const wlo = sm.offMin < 0 ? b.target + sm.offMin : b.target - sm.toleranceHz, whi = sm.offMax > 0 ? b.target + sm.offMax : b.target + sm.toleranceHz;
+  const hasWin = whi > wlo;
+  const found = b.antennas.filter((a) => a.metrics.found);
   let liveRes = 0;
-  if (live && live.summary && live.summary.dips.length) {
-    liveRes = live.summary.dips.reduce((x, d) => (Math.abs(d.freq - b.target) < Math.abs(x.freq - b.target) ? d : x)).freq;
-  }
-  let lo = Math.min(band.lo, b.target - tol, ...res, ...(liveRes ? [liveRes] : [])), hi = Math.max(band.hi, b.target + tol, ...res, ...(liveRes ? [liveRes] : []));
-  const pad = (hi - lo) * 0.06; lo -= pad; hi += pad;
-  const x0 = 46, x1 = w - 14, axis = h - 26, top = 22;
+  if (live && live.summary && live.summary.dips.length) liveRes = live.summary.dips.reduce((x, d) => (Math.abs(d.freq - b.target) < Math.abs(x.freq - b.target) ? d : x)).freq;
+  const nRes = sm.nRes || 0, mean = b.target + sm.biasHz;
+  const half = nRes >= 5 ? sm.sigmaHz : nRes >= 3 ? sm.biasCIHz : 0;
+  // Range: everything but an extreme summary bar (that one gets arrow caps).
+  const core = [band.lo, band.hi, b.target, ...found.map((a) => a.metrics.resFreq)];
+  if (hasWin) core.push(wlo, whi);
+  if (nRes) core.push(mean);
+  let lo = Math.min(...core), hi = Math.max(...core);
+  if (half > 0) { const sp = hi - lo; lo = Math.min(lo, Math.max(mean - half, lo - sp)); hi = Math.max(hi, Math.min(mean + half, hi + sp)); }
+  const pad = Math.max((hi - lo) * 0.05, b.target * 0.001); lo -= pad; hi += pad;
+  // Stack the antenna marks: label to the right, the lowest free level.
+  cv.style.height = '';
+  let { ctx, w } = setup(cv);
+  const F = '12px system-ui, sans-serif', FB = '600 12px system-ui, sans-serif';
+  ctx.font = F;
+  const x0 = 18, x1 = w - 18;
   const fx = (f) => x0 + (f - lo) / (hi - lo) * (x1 - x0);
-  ctx.font = '11px system-ui, sans-serif';
-  ctx.fillStyle = css('--band'); ctx.fillRect(fx(band.lo), top, fx(band.hi) - fx(band.lo), axis - top);
-  ctx.fillStyle = hexA(css('--good'), 0.18); ctx.fillRect(fx(b.target - tol), top, fx(b.target + tol) - fx(b.target - tol), axis - top);
-  ctx.strokeStyle = css('--good'); ctx.setLineDash([3, 2]); ctx.lineWidth = 1; ctx.strokeRect(fx(b.target - tol) + 0.5, top + 0.5, fx(b.target + tol) - fx(b.target - tol), axis - top);
-  ctx.strokeStyle = css('--ink'); ctx.setLineDash([5, 3]); ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(fx(b.target), top); ctx.lineTo(fx(b.target), axis); ctx.stroke(); ctx.setLineDash([]);
-  ctx.strokeStyle = css('--baseline'); ctx.beginPath(); ctx.moveTo(x0, axis + 0.5); ctx.lineTo(x1, axis + 0.5); ctx.stroke();
-  ctx.fillStyle = css('--axis'); ctx.textAlign = 'center'; ctx.textBaseline = 'top';
-  for (const t of niceTicks(lo / 1e6, hi / 1e6, Math.floor((x1 - x0) / 70))) { const x = fx(t * 1e6); ctx.fillText(String(+t.toFixed(2)), x, axis + 5); }
-  ctx.textAlign = 'left'; ctx.fillText('MHz', 4, axis + 5);
-  ctx.fillStyle = css('--ink2'); ctx.textBaseline = 'top';
-  const title = `Resonance of each antenna · target ${mhz(b.target)} ± ${(tol / 1e6).toFixed(2)} MHz`;
-  ctx.fillText(ctx.measureText(title).width + (liveRes ? 150 : 0) < x1 - x0 ? title : `target ${mhz(b.target)} ± ${(tol / 1e6).toFixed(2)}`, x0, 4);
-  if (sm.n >= 2 && sm.sigmaHz > 0) {
-    const mean = b.target + sm.biasHz, y = top + 6, a = fx(mean - sm.sigmaHz), z = fx(mean + sm.sigmaHz);
-    ctx.strokeStyle = css('--ink'); ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(a, y); ctx.lineTo(z, y); ctx.moveTo(a, y - 4); ctx.lineTo(a, y + 4); ctx.moveTo(z, y - 4); ctx.lineTo(z, y + 4); ctx.stroke();
-    ctx.fillStyle = css('--ink'); ctx.beginPath(); ctx.moveTo(fx(mean), y - 5); ctx.lineTo(fx(mean) + 5, y); ctx.lineTo(fx(mean), y + 5); ctx.lineTo(fx(mean) - 5, y); ctx.fill();
-    ctx.textBaseline = 'middle'; const lbl = `mean ${mhz(mean)} ± σ ${(sm.sigmaHz / 1e6).toFixed(2)} MHz`;
-    if (z + 8 + ctx.measureText(lbl).width < x1) { ctx.textAlign = 'left'; ctx.fillText(lbl, z + 8, y); } else { ctx.textAlign = 'right'; ctx.fillText(lbl, a - 8, y); }
-  }
-  const marks = b.antennas.filter((a) => a.metrics.found).map((a) => ({ x: fx(a.metrics.resFreq), a, lv: 0 })).sort((p, q) => p.x - q.x);
-  const maxLv = Math.max(1, Math.floor((axis - 12 - (top + 16)) / 11));
-  marks.forEach((m, i) => { for (let lv = 0; ; lv++) { if (lv >= maxLv || !marks.slice(0, i).some((o) => o.lv === lv && Math.abs(o.x - m.x) < 10)) { m.lv = lv; break; } } });
-  const col = { tuned: css('--good'), shorten: css('--warn'), lengthen: css('--warn') };
-  const boxes = [];
+  const marks = found.map((a) => ({ x: fx(a.metrics.resFreq), a, lw: ctx.measureText(a.label).width, lv: 0 })).sort((p, q) => p.x - q.x);
+  const levels = [];
   for (const m of marks) {
-    const x = m.x, y = axis - 10 - m.lv * 11, s = m.a.metrics.tuning.status;
-    ctx.fillStyle = col[s] || css('--bad'); ctx.strokeStyle = css('--bad'); ctx.lineWidth = 2.4;
+    let lv = 0;
+    const span = [m.x - 8, m.x + 10 + m.lw + 4];
+    while (levels[lv] && levels[lv].some(([a, z]) => span[0] < z && span[1] > a)) lv++;
+    (levels[lv] = levels[lv] || []).push(span); m.lv = lv;
+    if (m.x + 10 + m.lw > x1) m.left = true; // label on the left at the right edge
+  }
+  const nLv = Math.max(1, levels.length), LH = 17;
+  const yTitle = 4, yBand = 30, yWin = 52, yAnt0 = 76, yAnt1 = yAnt0 + nLv * LH, ySum = yAnt1 + 12, axis = ySum + 16;
+  const H = axis + 34;
+  cv.style.height = H + 'px';
+  ({ ctx, w } = setup(cv));
+  ctx.font = F; ctx.textBaseline = 'middle';
+  const ink = css('--ink'), ink2 = css('--ink2'), muted = css('--muted');
+  // title row
+  ctx.fillStyle = ink2; ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+  ctx.fillText(`Resonance of each antenna (${found.length})`, x0, yTitle);
+  ctx.textBaseline = 'middle';
+  // (a) band bracket
+  if (band.name) {
+    const a = fx(band.lo), z = fx(band.hi);
+    ctx.strokeStyle = ink2; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(a, yBand - 5); ctx.lineTo(a, yBand + 3); ctx.lineTo(z, yBand + 3); ctx.lineTo(z, yBand - 5); ctx.stroke();
+    const lbl = `${band.name} band ${mhz(band.lo)}–${mhz(band.hi)} MHz`, lw = ctx.measureText(lbl).width;
+    ctx.fillStyle = ink2; ctx.textAlign = 'left';
+    let lx = (a + z) / 2 - lw / 2; lx = Math.max(x0, Math.min(x1 - lw, lx));
+    if (z - a < lw) lx = z + 6 + lw < x1 ? z + 6 : Math.max(x0, a - 6 - lw);
+    ctx.fillText(lbl, lx, z - a < lw ? yBand : yBand - 12);
+  }
+  // (b) acceptance window, the aim and the target
+  const good = css('--good');
+  if (hasWin) {
+    const a = fx(wlo), z = fx(whi);
+    ctx.fillStyle = hexA(good, 0.28); ctx.fillRect(a, yWin - 7, z - a, 14);
+    ctx.strokeStyle = css('--good-ink'); ctx.lineWidth = 1; ctx.strokeRect(a + 0.5, yWin - 6.5, z - a - 1, 13);
+    const aa = fx(b.target - sm.aimHz), az = fx(b.target + sm.aimHz);
+    ctx.fillStyle = css('--good-ink'); ctx.fillRect(aa, yWin - 3, Math.max(2, az - aa), 6);
+    const lbl = win.mode === 'auto' ? `acceptance Auto ${sm.offMin < 0 ? `${(sm.offMin / 1e6).toFixed(1)} / +${(sm.offMax / 1e6).toFixed(1)}` : '± ' + (win.hz / 1e6).toFixed(2)} MHz · aim ± ${(sm.aimHz / 1e6).toFixed(2)}`
+      : `acceptance ± ${(win.hz / 1e6).toFixed(2)} MHz`;
+    const lw = ctx.measureText(lbl).width;
+    ctx.fillStyle = ink2;
+    if (z + 8 + lw < x1) { ctx.textAlign = 'left'; ctx.fillText(lbl, z + 8, yWin); } else if (a - 8 - lw > x0) { ctx.textAlign = 'right'; ctx.fillText(lbl, a - 8, yWin); }
+    else { ctx.textAlign = 'left'; ctx.fillText(lbl, x0, yWin - 14); }
+  } else {
+    ctx.fillStyle = muted; ctx.textAlign = 'left'; ctx.fillText('acceptance: ' + (win.note || 'no window yet'), x0, yWin);
+  }
+  // The target and the live resonance cross the window and antenna lanes
+  // only (behind the marks), never the summary lane and its label.
+  const xt = fx(b.target);
+  ctx.strokeStyle = ink; ctx.lineWidth = 1.5; ctx.setLineDash([5, 3]); ctx.beginPath(); ctx.moveTo(xt, yWin - 9); ctx.lineTo(xt, yAnt1); ctx.stroke(); ctx.setLineDash([]);
+  ctx.beginPath(); ctx.moveTo(xt, axis - 5); ctx.lineTo(xt, axis); ctx.stroke();
+  if (liveRes) {
+    const x = Math.max(x0, Math.min(x1, fx(liveRes)));
+    ctx.strokeStyle = ink; ctx.globalAlpha = 0.45; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(x, yBand + 8); ctx.lineTo(x, yAnt1); ctx.stroke(); ctx.globalAlpha = 1;
+  }
+  // (c) antennas
+  const col = { tuned: css('--good-ink'), ok: '#1b8a6b', shorten: css('--warn-ink'), lengthen: css('--warn-ink') };
+  for (const m of marks) {
+    const x = m.x, y = yAnt1 - LH / 2 - m.lv * LH, st = m.a.metrics.tuning.status;
+    ctx.fillStyle = col[st] || css('--bad-ink'); ctx.strokeStyle = ctx.fillStyle; ctx.lineWidth = 2.6;
     ctx.beginPath();
-    if (s === 'tuned') { ctx.arc(x, y, 4.5, 0, 2 * Math.PI); ctx.fill(); }
-    else if (s === 'shorten') { ctx.moveTo(x - 5, y - 4.5); ctx.lineTo(x + 5, y - 4.5); ctx.lineTo(x, y + 4.5); ctx.fill(); }
-    else if (s === 'lengthen') { ctx.moveTo(x - 5, y + 4.5); ctx.lineTo(x + 5, y + 4.5); ctx.lineTo(x, y - 4.5); ctx.fill(); }
-    else { ctx.moveTo(x - 4.5, y - 4.5); ctx.lineTo(x + 4.5, y + 4.5); ctx.moveTo(x + 4.5, y - 4.5); ctx.lineTo(x - 4.5, y + 4.5); ctx.stroke(); }
-    if (m.a.metrics.outliers.length) {
-      ctx.strokeStyle = css('--ink'); ctx.lineWidth = 1.3; ctx.beginPath(); ctx.arc(x, y, 7.6, 0, 2 * Math.PI); ctx.stroke();
-      ctx.fillStyle = css('--ink'); ctx.textAlign = 'left'; ctx.textBaseline = 'middle'; ctx.font = '600 10.5px system-ui, sans-serif';
-      const lw = ctx.measureText(m.a.label).width; let ly = y;
-      for (let k = 0; k < 4 && boxes.some((bx) => Math.abs(bx.y - ly) < 10 && x + 10 < bx.x1 && x + 10 + lw > bx.x0); k++) ly -= 11;
-      boxes.push({ x0: x + 10, x1: x + 10 + lw, y: ly });
-      ctx.fillText(m.a.label, x + 10, ly); ctx.font = '11px system-ui, sans-serif';
+    if (st === 'tuned') { ctx.arc(x, y, 5.5, 0, 2 * Math.PI); ctx.fill(); }
+    else if (st === 'ok') { ctx.moveTo(x, y - 6.5); ctx.lineTo(x + 6.5, y); ctx.lineTo(x, y + 6.5); ctx.lineTo(x - 6.5, y); ctx.fill(); }
+    else if (st === 'shorten') { ctx.moveTo(x - 6, y - 5); ctx.lineTo(x + 6, y - 5); ctx.lineTo(x, y + 6); ctx.fill(); }
+    else if (st === 'lengthen') { ctx.moveTo(x - 6, y + 5); ctx.lineTo(x + 6, y + 5); ctx.lineTo(x, y - 6); ctx.fill(); }
+    else { ctx.moveTo(x - 5, y - 5); ctx.lineTo(x + 5, y + 5); ctx.moveTo(x + 5, y - 5); ctx.lineTo(x - 5, y + 5); ctx.stroke(); }
+    if (m.a.metrics.outliers.length) { ctx.strokeStyle = ink; ctx.lineWidth = 1.4; ctx.beginPath(); ctx.arc(x, y, 9, 0, 2 * Math.PI); ctx.stroke(); }
+    ctx.fillStyle = ink; ctx.font = m.a.metrics.outliers.length ? FB : F;
+    if (m.left) { ctx.textAlign = 'right'; ctx.fillText(m.a.label, x - 11, y); } else { ctx.textAlign = 'left'; ctx.fillText(m.a.label, x + 11, y); }
+    ctx.font = F;
+  }
+  // (d) lot summary
+  if (nRes) {
+    ctx.strokeStyle = ink; ctx.fillStyle = ink; ctx.lineWidth = 2;
+    let a = mean, z = mean;
+    if (half > 0) {
+      a = mean - half; z = mean + half;
+      const xa = Math.max(x0, fx(a)), xz = Math.min(x1, fx(z));
+      ctx.beginPath(); ctx.moveTo(xa, ySum); ctx.lineTo(xz, ySum); ctx.stroke();
+      for (const [xe, cut, dir] of [[xa, fx(a) < x0, -1], [xz, fx(z) > x1, 1]]) {
+        ctx.beginPath();
+        if (cut) { ctx.moveTo(xe - dir * 6, ySum - 5); ctx.lineTo(xe, ySum); ctx.lineTo(xe - dir * 6, ySum + 5); } else { ctx.moveTo(xe, ySum - 5); ctx.lineTo(xe, ySum + 5); }
+        ctx.stroke();
+      }
     }
+    const xm = fx(mean);
+    ctx.beginPath(); ctx.moveTo(xm, ySum - 6); ctx.lineTo(xm + 6, ySum); ctx.lineTo(xm, ySum + 6); ctx.lineTo(xm - 6, ySum); ctx.fill();
+    const what = nRes >= 5 ? ` ± σ ${(sm.sigmaHz / 1e6).toFixed(2)}` : nRes >= 3 ? ` ± ${(sm.biasCIHz / 1e6).toFixed(2)} (95 % CI)` : '';
+    const lbl = `mean ${mhz(mean)}${what} MHz${nRes < 5 ? ` · n = ${nRes}` : ''}`, lw = ctx.measureText(lbl).width;
+    const xr = Math.min(x1, fx(z)) + 10, xl = Math.max(x0, fx(a)) - 10;
+    ctx.textAlign = 'left';
+    if (xr + lw < x1) ctx.fillText(lbl, xr, ySum); else if (xl - lw > x0) { ctx.textAlign = 'right'; ctx.fillText(lbl, xl, ySum); } else ctx.fillText(lbl, x0, ySum + 13);
   }
-  if (liveRes) { // the antenna on the cable now: a vertical line, its value in the title row
+  // axis, with the target value
+  ctx.strokeStyle = css('--baseline'); ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(x0, axis + 0.5); ctx.lineTo(x1, axis + 0.5); ctx.stroke();
+  ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+  const tl = mhz(b.target); ctx.font = FB; const tw = ctx.measureText(tl).width; ctx.font = F;
+  for (const t of niceTicks(lo / 1e6, hi / 1e6, Math.max(2, Math.floor((x1 - x0) / 80)))) {
+    const x = fx(t * 1e6), txt = String(+t.toFixed(2)), hw = ctx.measureText(txt).width / 2;
+    if (x - hw < x0 - 4 || x + hw > x1 + 4) continue;
+    ctx.strokeStyle = css('--axis'); ctx.beginPath(); ctx.moveTo(x, axis); ctx.lineTo(x, axis + 4); ctx.stroke();
+    if (Math.abs(x - xt) > tw / 2 + hw + 6) { ctx.fillStyle = css('--axis'); ctx.fillText(txt, x, axis + 6); }
+  }
+  ctx.fillStyle = ink; ctx.font = FB; ctx.fillText(tl, Math.max(x0 + tw / 2, Math.min(x1 - tw / 2, xt)), axis + 6); ctx.font = F;
+  ctx.fillStyle = muted; ctx.textAlign = 'right'; ctx.fillText('MHz', x1, axis + 20);
+  // legend (shapes)
+  ctx.textAlign = 'left';
+  const leg = [['●', css('--good-ink'), 'tuned (aim)'], ['◆', '#1b8a6b', 'OK, in margin'], ['▼▲', css('--warn-ink'), 'shorten / lengthen'], ['✕', css('--bad-ink'), 'fails the SWR limit'], ['◯', ink, 'outlier']];
+  let lx = x0;
+  for (const [sym, c, t] of leg) {
+    ctx.fillStyle = c; ctx.fillText(sym, lx, axis + 20); lx += ctx.measureText(sym).width + 4;
+    ctx.fillStyle = muted; ctx.fillText(t, lx, axis + 20); lx += ctx.measureText(t).width + 12;
+    if (lx > x1 - 80) break;
+  }
+  if (liveRes) { // the antenna on the cable now: its value in the title row
     const x = fx(liveRes);
-    ctx.strokeStyle = css('--ink'); ctx.globalAlpha = 0.7; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(x, top); ctx.lineTo(x, axis); ctx.stroke(); ctx.globalAlpha = 1;
-    ctx.fillStyle = css('--ink'); ctx.textAlign = 'right'; ctx.textBaseline = 'top'; ctx.font = '600 11px system-ui, sans-serif';
-    ctx.fillText('live: ' + mhz(liveRes) + ' MHz', x1, 4); ctx.font = '11px system-ui, sans-serif';
+    ctx.fillStyle = ink; ctx.textAlign = 'right'; ctx.textBaseline = 'top'; ctx.font = FB;
+    ctx.fillText(`live: ${mhz(liveRes)} MHz${x < x0 ? ' ◀' : x > x1 ? ' ▶' : ''}`, x1, yTitle); ctx.font = F;
   }
+  cv._strip = { marks: marks.length, levels: nLv, h: H };
 }
 document.addEventListener('keydown', (e) => {
   if (!bview() || !$('askView').hidden) return;
   if ((e.ctrlKey || e.metaKey) && (e.key === 'p' || e.key === 'P') && S.batch && S.batch.antennas.length) { e.preventDefault(); run(printBatchSheet); return; }
   const tag = (e.target && e.target.tagName) || '';
   if (e.ctrlKey || e.metaKey || e.altKey || /INPUT|TEXTAREA|SELECT/.test(tag)) return;
-  if ((e.key === 'c' || e.key === 'C') && $('bvCapture') && !$('bvCapture').disabled) { e.preventDefault(); run(batchCapture); }
+  if ((e.key === 'c' || e.key === 'C') && $('bvCapture') && !$('bvCapture').disabled) { e.preventDefault(); run(() => batchCapture()); }
 });
+
+// ---------- small print under the photo and the link ----------
+// Plain text (escaped everywhere), at most 200 characters, remembered with
+// the antenna or the batch. The link note can be kept as the default for
+// new antennas and batches.
+const SMALL_MAX = 200;
+function smallPrintFields(p, caption, note) {
+  const def = (S.state && S.state.cal.settings.linkNoteDefault) || '';
+  return `<label class="wide">Photo caption (optional, small print under the photo)<input id="${p}Cap" maxlength="${SMALL_MAX}" value="${esc(caption || '')}"></label>
+    <label class="wide">Link note (optional, small print under the link)<input id="${p}Note" maxlength="${SMALL_MAX}" value="${esc(note == null ? def : note)}">
+      <span class="small"><label class="check"><input type="checkbox" id="${p}NoteDef" ${def && def === (note == null ? def : note) ? 'checked' : ''}> use as default for new antennas and batches</label></span></label>`;
+}
+async function smallPrintValues(p) {
+  const cap = ($(p + 'Cap').value || '').trim(), note = ($(p + 'Note').value || '').trim();
+  const def = (S.state && S.state.cal.settings.linkNoteDefault) || '', want = $(p + 'NoteDef').checked;
+  if (want && note !== def) await api('POST', 'api/settings', { linkNoteDefault: note });
+  else if (!want && def && note === def) await api('POST', 'api/settings', { linkNoteDefault: '' });
+  return { photoCaption: cap, linkNote: note };
+}
+
+// ---------- acceptance setting ----------
+// Datasheets give VSWR over the band (2:1 typical), not a resonance
+// tolerance: the band SWR limit drives GOOD / OK / BAD everywhere; the
+// resonance tolerance is a tuning goal (Auto: as far as the band stays
+// below the limit, from the antenna's own curve).
+const ACC_LIMITS = [[1.5, 'strict'], [2, 'typical datasheet'], [2.5, 'loose']];
+const ACC_TOLS = [['auto', 'Auto: as far as the band stays within the SWR limit'], ['tight', 'Tight ± 0.15 % (TUNE\'s fine aim)', 0.15], ['normal', 'Normal ± 0.5 %', 0.5], ['loose', 'Loose ± 1 %', 1], ['custom', 'Custom']];
+function accTarget() {
+  const st = S.state, p = st.profiles.find((x) => x.id === st.acceptance.profile);
+  const b = (p && p.bands && p.bands[0]) || (st.config.bands || [])[0];
+  return b ? (b.ref || (b.lo + b.hi) / 2) : 869e6;
+}
+// The Auto window measured on the latest sweep of this profile.
+function accAutoMargin() {
+  const r = S.res, prof = S.state.acceptance.profile;
+  if (r && !r.tune && r.accept && r.accept.margin && (r.config.profile === prof || (r.source && r.source.profile === prof))) return r.accept.margin;
+  return null;
+}
+function openAccept() {
+  const st = S.state, a = st.acceptance, s = a.setting, tgt = accTarget(), m = accAutoMargin();
+  const lim0 = a.limit, tol0 = s.tol || 'auto';
+  const isPreset = ACC_LIMITS.some(([v]) => v === lim0);
+  const autoTxt = m && m.ok && m.window > 0 ? `± ${(m.window / 1e6).toFixed(2)} MHz${m.open ? ' or more' : ''} at ${mhzR(tgt)} (from the latest sweep)`
+    : m && m.ok ? 'none: the band is not covered at this limit' : 'measure this profile first';
+  $('accBody').innerHTML = `<div class="step">Acceptance</div>
+    <div class="stepsub">For the <b>${esc(a.profile)}</b> profile${a.own ? ' (its own setting)' : ' (the default for every profile)'}.</div>
+    <fieldset class="accset"><legend>Band SWR limit: drives GOOD / OK / BAD and "band covered"</legend>
+      ${ACC_LIMITS.map(([v, l]) => `<label class="check"><input type="radio" name="accL" value="${v}" ${isPreset && v === lim0 ? 'checked' : ''}> SWR &lt; ${v.toFixed(1)} <span class="muted">${l}${v === 2 ? ', default' : ''}</span></label>`).join('')}
+      <label class="check"><input type="radio" name="accL" value="custom" ${isPreset ? '' : 'checked'}> custom <input id="accLc" type="number" min="1.1" max="10" step="0.05" value="${isPreset ? '' : lim0}" style="width:6em"></label>
+      <div class="small muted" id="accMap"></div></fieldset>
+    <fieldset class="accset"><legend>Resonance tolerance: the tuning goal</legend>
+      ${ACC_TOLS.map(([v, l, pct]) => `<label class="check"><input type="radio" name="accT" value="${v}" ${tol0 === v ? 'checked' : ''}> ${l}
+        <span class="muted small" id="accW_${v}">${v === 'auto' ? autoTxt : pct ? `± ${mhz2(tgt * pct / 100)} MHz at ${mhzR(tgt)}` : ''}</span>
+        ${v === 'custom' ? `<input id="accTv" type="number" min="0.001" step="0.01" style="width:6em" value="${s.tolPct || s.tolMHz || ''}"> <select id="accTu"><option value="pct" ${s.tolMHz ? '' : 'selected'}>%</option><option value="mhz" ${s.tolMHz ? 'selected' : ''}>MHz</option></select>` : ''}</label>`).join('')}
+    </fieldset>
+    <fieldset class="accset"><legend>Use it for</legend>
+      <label class="check"><input type="radio" name="accScope" value="profile" ${a.own ? 'checked' : ''}> the ${esc(a.profile)} profile only</label>
+      <label class="check"><input type="radio" name="accScope" value="default" ${a.own ? '' : 'checked'}> every profile (the default)</label></fieldset>
+    <div class="row"><button id="accSave" class="primary bigbtn" type="button">Save</button>
+      ${a.own ? '<button id="accReset" class="ghost" type="button">Use the default for this profile</button>' : ''}
+      <button id="accCancel" class="ghost" type="button">Cancel</button></div>
+    <div class="acchelp"><b>Why these settings?</b> Antenna datasheets do not give a resonance tolerance: they give the VSWR over the whole band, usually 2:1 (return loss ≥ 9.5 dB), 1.5:1 for good antennas, 2.2–2.5:1 for cheap ones. So the band SWR limit is what decides PASS / OK / FAIL.
+      A narrower resonance window still matters as a margin: the case, a hand, temperature or the spread of a batch move the resonance (an 868 MHz antenna 1 mm from a plastic case can shift about 5 MHz, and much more in a hand), while a whip's SWR &lt; 2 bandwidth is about 50 MHz wide.
+      <b>Auto</b> measures that margin on the antenna's own curve: how far the resonance may move before the band edges reach the limit. GOOD is half the limit's excess over 1:1 (1.5 for a limit of 2).</div>`;
+  $('accView').hidden = false; lockBody();
+  const upd = () => {
+    const l = accLimit();
+    $('accMap').textContent = l ? `GOOD: worst in-band SWR below ${(1 + (l - 1) / 2).toFixed(2)} · OK: below ${l.toFixed(2)} · BAD: ${l.toFixed(2)} or more` : 'give a limit between 1.1 and 10';
+    const v = parseFloat($('accTv').value), u = $('accTu').value;
+    $('accW_custom').textContent = v > 0 ? (u === 'pct' ? `± ${mhz2(tgt * v / 100)} MHz at ${mhzR(tgt)}` : `± ${(v / (tgt / 1e6) * 100).toFixed(3)} % at ${mhzR(tgt)}`) : '';
+  };
+  for (const i of document.querySelectorAll('#accBody input, #accBody select')) i.oninput = upd;
+  $('accLc').onfocus = () => { document.querySelector('input[name=accL][value=custom]').checked = true; };
+  $('accTv').onfocus = () => { document.querySelector('input[name=accT][value=custom]').checked = true; };
+  upd();
+  $('accSave').onclick = () => run(async () => {
+    const l = accLimit(); if (!l) throw new Error('give an SWR limit between 1.1 and 10');
+    const t = document.querySelector('input[name=accT]:checked').value, acc = { swrLimit: l, tol: t };
+    if (t === 'custom') { const v = parseFloat($('accTv').value); if (!(v > 0)) throw new Error('give the custom tolerance'); if ($('accTu').value === 'pct') acc.tolPct = v; else acc.tolMHz = v; }
+    const scope = document.querySelector('input[name=accScope]:checked').value;
+    S.state = await api('POST', 'api/acceptance', { profile: a.profile, scope, accept: acc });
+    closeAccept(); renderState(); toast('Acceptance saved: verdicts and batch statuses use it now');
+  });
+  if ($('accReset')) $('accReset').onclick = () => run(async () => { S.state = await api('POST', 'api/acceptance', { profile: a.profile, reset: true }); closeAccept(); renderState(); toast('This profile uses the default acceptance again'); });
+  $('accCancel').onclick = closeAccept;
+}
+function accLimit() {
+  const r = document.querySelector('input[name=accL]:checked');
+  const v = r && r.value === 'custom' ? parseFloat($('accLc').value) : Number(r && r.value);
+  return v >= 1.1 && v <= 10 ? v : 0;
+}
+function closeAccept() { $('accView').hidden = true; lockBody(); }
+$('accClose').onclick = closeAccept;
+
+// accBar is the line under the verdict: the criteria, the margin, and the
+// Acceptance / Setup check / Measure ×N controls.
+function accBar(r) {
+  const b0 = r.summary.bands[0], l = (b0 && b0.limit) || lim();
+  let txt = `band SWR &lt; ${fmtL(l)}`;
+  const a = r.accept;
+  if (a) {
+    txt = esc(a.window.text);
+    const m = a.margin;
+    if (m && m.ok && !suspect()) txt += m.covered ? ` · margin used <b>${Math.round(m.usedPct)} %</b>` : ' · <b class="badtxt">band not covered at the limit</b>';
+  }
+  const live = !r.source;
+  return `<div class="accbar" id="accBar"><span class="acctext"><b>Acceptance:</b> ${txt}</span><span class="sp"></span>
+    <button type="button" class="ghost small" id="accOpen" title="Band SWR limit and resonance tolerance">Acceptance…</button>
+    ${live ? `<button type="button" class="ghost small" id="setupOpen" title="Is the cable part of the antenna? Compare hands off with a hand on the cable">Setup check</button>${measureCtl('mm')}` : ''}</div>
+    ${r.multi ? `<div class="multiline" id="multiLine"><b>Measurement:</b> ${esc(r.multi.text)}</div>` : ''}`;
+}
+function bindAccBar() {
+  if ($('accOpen')) $('accOpen').onclick = openAccept;
+  if ($('setupOpen')) $('setupOpen').onclick = () => run(openSetup);
+  bindMeasureCtl('mm', () => ({ for: 'measure' }));
+}
+
+// ---------- Measure ×N ----------
+// N fresh sweeps of one antenna, vector-averaged by the server, with their
+// repeatability; optionally re-seated between sweeps. One control per
+// place (main view, sheet, report, history), one progress bar for all.
+function measureN() { const v = Number(store('measureN')); return [3, 5, 10].includes(v) ? v : 5; }
+function measureCtl(p) {
+  const n = measureN(), rs = store('measureReseat') === '1';
+  return `<span class="mctl"><select id="${p}MN" aria-label="Number of sweeps">${[3, 5, 10].map((v) => `<option value="${v}" ${v === n ? 'selected' : ''}>×${v}</option>`).join('')}</select>
+    <label class="small check" title="Unscrew and reconnect (or move) the antenna between sweeps: the spread then includes the connector and the placement"><input type="checkbox" id="${p}MR" ${rs ? 'checked' : ''}> re-seat</label>
+    <button type="button" class="small" id="${p}MGo">Measure ×${n}</button></span>`;
+}
+function bindMeasureCtl(p, opts, done) {
+  const sel = $(p + 'MN'), cb = $(p + 'MR'), go = $(p + 'MGo'); if (!go) return;
+  sel.onchange = () => { store('measureN', sel.value); go.textContent = 'Measure ×' + sel.value; };
+  cb.onchange = () => store('measureReseat', cb.checked ? '1' : '0');
+  go.onclick = () => run(async () => {
+    const o = opts();
+    S.measureDone = done || null;
+    S.state = await api('POST', 'api/measure', Object.assign({ n: Number(sel.value), reseat: cb.checked }, o));
+    renderMeasureBar();
+  });
+}
+const RESEAT = { waiting: 'waiting: unscrew and reconnect it, or move it', noantenna: 'open cable: reconnect the antenna', moving: '<b class="mv">moving…</b>', settling: 'steady %r/%n: keep still', ready: 'steady: measuring' };
+function renderMeasureBar() {
+  const m = S.state && S.state.measure, box = $('measureBar');
+  if (m && !m.running && S.measureSeen !== m.id && S.measureStarted === m.id) {
+    S.measureSeen = m.id;
+    toast(m.message || m.status, { err: m.status === 'error' });
+    const cb = S.measureDone; S.measureDone = null;
+    if (m.status === 'done' && cb) run(() => cb(m));
+    if (m.for === 'batch' && bview() && S.batch) run(() => loadBatch(S.batch.id));
+    if (m.for === 'setup') renderSetup();
+  }
+  if (m && m.running) S.measureStarted = m.id;
+  box.hidden = !(m && m.running);
+  if (box.hidden) { box.innerHTML = ''; return; }
+  const re = m.reseat && m.phase && m.phase !== 'sweeping';
+  const what = m.for === 'batch' ? 'Batch capture' : m.for === 'setup' ? 'Setup check ' + m.step : 'Measure';
+  const mock = S.state.mockScenarios && S.state.mockScenarios.length;
+  box.innerHTML = `<div class="mrow"><b>${what} ×${m.n}${m.reseat ? ' · re-seat' : ''}</b> <span class="mcount" id="measureCount">${m.done}/${m.n}</span>
+      <progress max="${m.n}" value="${m.done}"></progress>
+      ${re ? `<button type="button" class="small" id="measureCont" title="Take the next sweep now">Continue</button>${mock ? '<button type="button" class="ghost small" id="measureSim" title="Simulator: unscrew the antenna and screw it on again">Simulate re-seat</button>' : ''}` : ''}
+      <button type="button" class="ghost small" id="measureCancel">Cancel</button></div>
+    ${re ? `<div class="mmsg">${esc(m.message)} <span class="hstatus">${(RESEAT[m.phase] || esc(m.phase)).replace('%r', m.run).replace('%n', m.need)}</span></div>` : '<div class="mmsg muted">fresh sweeps, vector-averaged</div>'}`;
+  $('measureCancel').onclick = () => run(() => api('POST', 'api/measure/cancel'));
+  if ($('measureCont')) $('measureCont').onclick = () => run(() => api('POST', 'api/measure/continue'));
+  if ($('measureSim')) $('measureSim').onclick = () => run(() => api('POST', 'api/mock/action', { action: 'reseat' }));
+}
+
+// ---------- setup check: is the cable part of the antenna? ----------
+const SETUP_STEPS = [['A', 'Hands off, cable as installed', 'Leave the antenna and its cable exactly as they will be used. Nobody touches them.'],
+  ['B', 'Hold the cable 10–20 cm below the antenna', 'Hold the coax in your hand, 10–20 cm below the antenna, and keep still.'],
+  ['C', 'Touch the cable near the VNA (optional)', 'Hold the cable near the NanoVNA instead.']];
+const SETUP_CLASS = { quiet: 'good', slight: 'ok', coupled: 'bad' };
+async function openSetup() {
+  if (S.state.tune.active) throw new Error('close TUNE first');
+  $('setupView').hidden = false; lockBody();
+  renderSetup();
+}
+function renderSetup() {
+  const box = $('setupBody'); if (!box || $('setupView').hidden) return;
+  const st = S.state, sv = st.setup, m = st.measure, busy = m && m.running;
+  const steps = (sv && sv.steps) || [];
+  const got = (k) => steps.find((x) => x.step === k);
+  const mock = st.mockScenarios && st.mockScenarios.length;
+  const res = sv && sv.result;
+  const rows = SETUP_STEPS.map(([k, t, help]) => {
+    const c = got(k), can = !busy && (k === 'A' || got('A'));
+    return `<div class="sstep ${c ? 'done' : ''}"><div class="sk">${k}</div><div class="sb"><b>${t}</b><div class="small muted">${help}</div>
+      ${c ? `<div class="small">resonance <b>${c.found ? mhz(c.resFreq) + ' MHz' : '–'}</b> · SWR at target ${swrText(c.swrTarget)}${c.bandWorst ? ' · worst in band ' + swrText(c.bandWorst) : ''} · average of ${c.n} (${c.time})</div>` : ''}</div>
+      <button type="button" class="${k === 'A' || got('A') ? 'primary' : 'ghost'} small" data-setup="${k}" ${can ? '' : 'disabled'}>${c ? 'Again' : 'Capture ' + k}</button></div>`;
+  }).join('');
+  const diff = res ? res.steps.map((d) => `<li>${esc(d.text)}</li>`).join('') : '';
+  box.innerHTML = `<div class="step">Setup check: is the cable part of the antenna?</div>
+    <div class="stepsub">A whip or monopole without a proper ground plane uses the coax shield as its other half: the cable radiates, and touching it changes the reading.
+      Capture the antenna hands off (A), then with a hand on the cable (B); each step averages a few fresh sweeps.</div>
+    ${mock ? `<label class="check mockhand"><input type="checkbox" id="setupHand" ${st.mockHand ? 'checked' : ''}> Simulated hand on the cable <span class="muted small">(simulator; try the <b>cm869</b> antenna, a whip whose cable radiates)</span></label>` : ''}
+    <div class="ssteps">${rows}</div>
+    ${res ? `<div class="vcard ${SETUP_CLASS[res.verdict]} wide setupres" id="setupResult"><div class="vtitle"><h3>${esc(res.title)}</h3></div>
+      <div class="vline">${esc(res.advice)}</div><ul class="small">${diff}</ul>
+      <div class="small muted">Thresholds: a change counts only above 3 σ of the measurement noise (from the sweeps of each step). Quiet: the resonance moved less than 10 % of the tolerance window (± ${(sv.window / 1e6).toFixed(2)} MHz) and the curve less than 0.01 RMS |ΔΓ|. The cable is part of the antenna from half the window, 0.03 RMS |ΔΓ|, or a quarter of the SWR limit's excess in the band's worst SWR.
+      The result is kept with the antenna on its next sheet${st.batch.active ? ' and noted in the active batch' : ''}.</div></div>` : ''}
+    <div class="row"><button type="button" class="ghost small" id="setupReset" ${sv ? '' : 'disabled'}>Start over</button></div>
+    <div class="acchelp"><b>My antenna looks better when I hold the cable.</b> A hand on the coax is a lossy load and changes the counterpoise: the resonance shifts and the SWR can look better because loss hides the mismatch, while less is radiated.
+      A PETG or other plastic mast is nearly transparent to RF unless the element touches it. Fix: a choke at the feed point (clip-on ferrites or a sleeve balun), and measure in the final installation.</div>`;
+  for (const b of box.querySelectorAll('[data-setup]')) b.onclick = () => run(async () => {
+    S.state = await api('POST', 'api/measure', { n: 4, for: 'setup', step: b.dataset.setup });
+    renderMeasureBar(); renderSetup();
+  });
+  if ($('setupHand')) $('setupHand').onchange = (e) => run(async () => { S.state = await api('POST', 'api/mock/action', { action: e.target.checked ? 'hand-on' : 'hand-off' }); });
+  $('setupReset').onclick = () => run(async () => { S.state = await api('POST', 'api/setup', { reset: true }); renderSetup(); });
+}
+function closeSetup() { $('setupView').hidden = true; lockBody(); }
+$('setupClose').onclick = closeSetup;
 
 // ---------- start ----------
 selectTab('smith');

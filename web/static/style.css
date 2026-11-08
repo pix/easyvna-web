@@ -442,7 +442,7 @@ body.locked { overflow: hidden; }
 .bconcl { border: 1px solid var(--border); border-radius: 12px; padding: 10px 14px; background: var(--surface); font-size: 14px; }
 .bconcl p { margin: 0 0 4px; } .bconcl p:first-child { font-weight: 700; } .bconcl .tl { font-weight: 700; margin: 6px 0 0; }
 canvas.batchplot { height: 260px; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; }
-canvas.batchstrip { height: 120px; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; }
+canvas.batchstrip { height: 150px; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; }
 .blegend { display: flex; gap: 4px 14px; flex-wrap: wrap; font-size: 12.5px; color: var(--ink2); }
 .blegend .t { color: var(--good-ink); } .blegend .o { color: var(--warn-ink); } .blegend .x { color: var(--bad-ink); }
 .bwrap { overflow-x: auto; }
@@ -515,3 +515,39 @@ tr.blast td { background: var(--band); }
   #printInfo { display: block; font-size: 9pt; color: #333; }
   .foot { display: block; margin-top: 4mm; }
 }
+
+/* acceptance bar under the verdict, Measure ×N, setup check */
+.accbar { grid-column: 1 / -1; display: flex; gap: 6px 10px; flex-wrap: wrap; align-items: center; padding: 8px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); font-size: 13.5px; }
+.accbar .sp { flex: 1; }
+.accbar .acctext { color: var(--ink2); }
+.badtxt { color: var(--bad-ink); }
+.multiline { grid-column: 1 / -1; font-size: 13px; color: var(--ink2); padding: 0 12px; }
+.mctl { display: inline-flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.mctl select { padding: 3px 4px; }
+.measline { display: flex; gap: 6px 12px; align-items: center; flex-wrap: wrap; }
+.measurebar { position: fixed; left: 50%; transform: translateX(-50%); bottom: 64px; z-index: 31; width: min(620px, calc(100% - 24px));
+  background: var(--raised); color: var(--ink); border: 2px solid var(--accent); border-radius: 12px; padding: 10px 14px; box-shadow: 0 6px 24px rgba(0, 0, 0, 0.22); }
+.measurebar .mrow { display: flex; gap: 8px 10px; align-items: center; flex-wrap: wrap; }
+.measurebar progress { flex: 1; min-width: 80px; height: 10px; }
+.measurebar .mcount { font-variant-numeric: tabular-nums; font-weight: 700; }
+.measurebar .mmsg { font-size: 13px; margin-top: 4px; }
+.taccept { display: flex; gap: 4px 16px; flex-wrap: wrap; font-size: 14px; color: var(--ink2); }
+.taccept:empty { display: none; }
+.taccept .good { color: var(--good-ink); }
+fieldset.accset { border: 1px solid var(--border); border-radius: 10px; padding: 8px 12px; margin: 10px 0; display: flex; flex-direction: column; gap: 6px; max-width: 760px; }
+fieldset.accset legend { font-weight: 700; padding: 0 4px; }
+.acchelp { font-size: 13.5px; color: var(--ink2); max-width: 820px; border-left: 3px solid var(--accent); padding: 4px 12px; margin-top: 12px; }
+.ssteps { display: flex; flex-direction: column; gap: 8px; max-width: 820px; margin: 10px 0; }
+.sstep { display: grid; grid-template-columns: 36px 1fr auto; gap: 10px; align-items: center; border: 1px solid var(--border); border-radius: 10px; padding: 8px 12px; background: var(--surface); }
+.sstep .sk { font-size: 22px; font-weight: 800; color: var(--muted); text-align: center; }
+.sstep.done .sk { color: var(--good-ink); }
+.setupres { max-width: 820px; }
+.setupres ul { margin: 6px 0; padding-left: 20px; }
+.mockhand { margin: 6px 0; }
+.bgrade { font-weight: 800; letter-spacing: .04em; padding: 2px 10px; border-radius: 999px; border: 1.5px solid currentColor; display: inline-block; margin-bottom: 4px; font-size: 13px; }
+.bgrade.fine { color: var(--good-ink); } .bgrade.worth { color: var(--warn-ink); } .bgrade.must { color: var(--bad-ink); }
+.bcrit { font-size: 13px; color: var(--ink2); }
+@media print { .measurebar, .accbar button, .accbar .mctl { display: none !important; } }
+.measurebar .hstatus { font-size: 13px; font-weight: 600; }
+.mctl label.check { display: inline-flex; flex-direction: row; gap: 4px; align-items: center; width: auto; margin: 0; }
+.mctl input[type="checkbox"] { width: auto; margin: 0; }
