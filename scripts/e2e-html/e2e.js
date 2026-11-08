@@ -855,8 +855,8 @@ async function startMeasure(page, sel) {
   await page.click(sel);
   await page.waitForFunction((b) => S.state.measure && S.state.measure.id > b, before, { timeout: 10000 });
 }
-const LONG_CAP = 'Photo caption <b>x</b> ' + 'taken on the bench, free air, 1 m above the table, RG316 pigtail '.repeat(4);
-const LONG_NOTE = 'Link note <b>x</b> ' + 'small print under the link, plain text only, wraps in its block '.repeat(4);
+const LONG_CAP = 'Photo caption <b>x</b> <script>s</script> ' + 'taken on the bench, free air, 1 m above the table, RG316 pigtail '.repeat(4);
+const LONG_NOTE = 'Link note <b>x</b><br><i>y</i> ' + 'small print under the link, wraps across the photo and QR block '.repeat(4);
 async function toleranceFlow(browser, base, label, shots) {
   const url = base + '?demo&antenna=869';
   const ctx = await newCtx(browser, url, label);
@@ -1027,12 +1027,18 @@ async function toleranceFlow(browser, base, label, shots) {
     check(`${label}: the sheet states its criteria, the measurement and the last setup check`, /Acceptance: band SWR < 2\.0, resonance Auto ±/.test(txt) &&
       /Measurement: average of 3/.test(txt) && /Setup check/.test(txt) && /PASS = worst in-band SWR < 1\.5, OK < 2/.test(txt));
     const sp1 = await sp.evaluate(() => {
-      const c = document.querySelector('.pbox .smallprint.photocaption'), n = document.querySelector('.qrbox .smallprint.linknote');
+      const fp = document.querySelector('.fineprint');
+      const c = fp && fp.querySelector('.smallprint.photocaption'), n = fp && fp.querySelector('.smallprint.linknote');
+      const sheet = document.querySelector('.sheet');
       const fs = c && parseFloat(getComputedStyle(c).fontSize);
-      return c && n ? [c.textContent, n.textContent, fs, !!c.querySelector('b'), c.closest('.pbox').querySelector('.photo') !== null, n.closest('.qrbox').querySelector('svg.qr') !== null] : null;
+      const w = (e) => e.getBoundingClientRect().width;
+      return c && n ? [c.textContent, n.textContent, fs, c.querySelector('b') && c.querySelector('b').textContent, !!c.querySelector('script'),
+        !!n.querySelector('br') && !!n.querySelector('i'), w(fp) > 0.9 * w(sheet) && fp.nextElementSibling && fp.nextElementSibling.matches('footer.sfoot'),
+        !document.querySelector('.side .smallprint')] : null;
     });
-    check(`${label}: photo caption under the photo and link note under the QR code, small and escaped`, !!sp1 && sp1[0].startsWith('Photo caption <b>x</b>') && sp1[1].startsWith('Link note <b>x</b>') &&
-      sp1[0].length === 200 && sp1[2] < 9.5 && !sp1[3] && sp1[4] && sp1[5], JSON.stringify(sp1 && sp1.slice(2)));
+    check(`${label}: photo caption and link note in the fine print above the footer, full width, small; <b> <i> <br> render, other tags stay text`, !!sp1 &&
+      sp1[0].startsWith('Photo caption x <script>s</script>') && sp1[1].startsWith('Link note xy') && sp1[2] < 9.5 && sp1[3] === 'x' && !sp1[4] && sp1[5] && sp1[6] && sp1[7],
+      JSON.stringify(sp1 && sp1.slice(2)));
     for (const paper of ['a4', 'letter']) {
       await sp.evaluate((p) => setPaper(p, false), paper);
       await sp.emulateMedia({ media: 'print' });

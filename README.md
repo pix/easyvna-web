@@ -384,9 +384,10 @@ antenna fits on two pages. See the A4 sample:
 Give it a name; type, band, connector, length, ground plane, cable, maker,
 owner, notes, a product or source link and a photo are optional. They are
 remembered for that name, and so are a **photo caption** and a **link
-note**: optional plain text (up to 200 characters) printed in small type
-under the photo and under the link's QR code (the link note can be kept as
-the default for new antennas and batches). Add the photo by pasting it (**Ctrl+V**, or
+note**: optional text (up to 200 characters) printed in small type at the
+foot of the sheet, above the footer line; `<b>bold</b>`, `<i>italic</i>`
+and `<br>` work, any other markup is shown as typed (the link note can be
+kept as the default for new antennas and batches). Add the photo by pasting it (**Ctrl+V**, or
 **Paste image** where the browser allows it), dropping a file on it, or
 choosing one; large phone photos are reduced to 1600 px (JPEG) before
 they are stored. The link must be an `http://` or `https://` address;

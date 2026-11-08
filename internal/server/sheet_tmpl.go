@@ -29,11 +29,12 @@ h1 { font-size: 19pt; line-height: 1.05; margin: .5mm 0 .8mm; overflow-wrap: any
 .calbad { color: var(--fail); font-weight: 700; } .calok { color: var(--pass); }
 .photo { width: 44mm; height: 31mm; border: .3mm solid var(--line); border-radius: 1mm; overflow: hidden; display: flex; align-items: center; justify-content: center; background: var(--soft); }
 .photo img { max-width: 100%; max-height: 100%; display: block; }
-.side { display: flex; gap: 2.5mm; align-items: flex-start; }
+.side { display: flex; flex-direction: column; gap: .8mm; }
+.siderow { display: flex; gap: 2.5mm; align-items: flex-start; }
+.fineprint { margin: 1.5mm 0 .8mm; display: flex; flex-direction: column; gap: .3mm; }
 .side .photo { width: 36mm; }
 .pbox { width: 36mm; display: flex; flex-direction: column; gap: .5mm; }
 .smallprint { font-size: 6.2pt; line-height: 1.25; color: var(--muted); overflow-wrap: anywhere; }
-.qrbox .smallprint { text-align: center; width: 100%; }
 .crit { font-size: 7pt; color: var(--ink2); display: flex; flex-wrap: wrap; gap: .3mm 4mm; }
 .crit b { color: var(--ink); }
 .qrbox { display: flex; flex-direction: column; align-items: center; gap: .6mm; width: 24mm; }
@@ -107,7 +108,7 @@ td.num, th.num { text-align: right; }
       <dt>Calibration</dt><dd style="grid-column: span 3" class="{{if .CalOK}}calok{{else}}calbad{{end}}">{{.CalState}}</dd>
     </dl>
   </div>
-  {{if or .A.Photo .QR}}<div class="side">{{if .A.Photo}}<div class="pbox"><div class="photo"><img src="{{.A.Photo | photo}}" alt="Photo of {{.A.Name}}"></div>{{if .A.PhotoCaption}}<div class="smallprint photocaption">{{.A.PhotoCaption}}</div>{{end}}</div>{{end}}{{if .QR}}<div class="qrbox">{{.QR}}<a class="link" href="{{.A.Link}}" target="_blank" rel="noopener noreferrer">{{.LinkText}}</a>{{if .A.LinkNote}}<div class="smallprint linknote">{{.A.LinkNote}}</div>{{end}}</div>{{end}}</div>{{end}}
+  {{if or .A.Photo .QR}}<div class="side"><div class="siderow">{{if .A.Photo}}<div class="pbox"><div class="photo"><img src="{{.A.Photo | photo}}" alt="Photo of {{.A.Name}}"></div></div>{{end}}{{if .QR}}<div class="qrbox">{{.QR}}<a class="link" href="{{.A.Link}}" target="_blank" rel="noopener noreferrer">{{.LinkText}}</a></div>{{end}}</div></div>{{end}}
 </header>
 
 {{range .Warnings}}<div class="warn"><b>{{.Title}}</b>: {{.Text}}</div>{{end}}
@@ -142,6 +143,7 @@ td.num, th.num { text-align: right; }
   </div>{{end}}
 </div>
 
+{{if or (and .A.Photo .A.PhotoCaption) (and .QR .A.LinkNote)}}<div class="fineprint">{{if and .A.Photo .A.PhotoCaption}}<div class="smallprint photocaption">{{.A.PhotoCaption | smallprint}}</div>{{end}}{{if and .QR .A.LinkNote}}<div class="smallprint linknote">{{.A.LinkNote | smallprint}}</div>{{end}}</div>{{end}}
 <footer class="sfoot"><span>{{.App}} · by PiX (and the Claude, OpenAI and Deepseek AI band)</span><span>{{.URL}}</span></footer>
 </div></div>
 </body></html>`

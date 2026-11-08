@@ -34,7 +34,7 @@ func sheetServer(t *testing.T) *Server {
 // (every antenna's curve and the lot average), then the statistics.
 func TestBatchSheetTwoPages(t *testing.T) {
 	s := sheetServer(t)
-	long := strings.Repeat("small print ", 20)[:190] + " <b>x</b>"
+	long := strings.Repeat("small print ", 20)[:180] + " <b>x</b> <u>u</u>"
 	for _, n := range []int{5, 8, 20} {
 		b := lotBatch(n, 1.5e6)
 		b.Link = "https://example.com/antenna?id=42"
@@ -84,8 +84,9 @@ func TestBatchSheetTwoPages(t *testing.T) {
 			t.Fatalf("n=%d: criteria %q missing", n, crit)
 		}
 		// Small print under the photo and the link, escaped.
-		if strings.Contains(h, "<b>x</b>") || !strings.Contains(page1, `<div class="smallprint photocaption">`) ||
-			!strings.Contains(page1, `<div class="smallprint linknote">`) || strings.Count(page1, "&lt;b&gt;x&lt;/b&gt;") != 2 {
+		// <b> renders as bold, other markup (<u>) stays text.
+		if !strings.Contains(page1, `<div class="smallprint photocaption">`) || !strings.Contains(page1, `<div class="smallprint linknote">`) ||
+			strings.Count(page1, "<b>x</b>") != 2 || strings.Count(page1, "&lt;u&gt;u&lt;/u&gt;") != 2 || strings.Contains(h, "<u>") {
 			t.Fatalf("n=%d: small print", n)
 		}
 		// Page 2: the statistics, the strip and every antenna.

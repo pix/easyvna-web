@@ -108,19 +108,20 @@ func signed1(v float64) string {
 }
 
 var reportFuncs = template.FuncMap{
-	"mhz":     mhzF,
-	"mhz3":    func(f float64) string { return fmt.Sprintf("%.3f", f/1e6) },
-	"f1":      func(v float64) string { return fmt.Sprintf("%.1f", v) },
-	"f2":      func(v float64) string { return fmt.Sprintf("%.2f", v) },
-	"sgn1":    signed1,
-	"swr":     swrF,
-	"neg":     func(v float64) float64 { return -v },
-	"time":    func(t time.Time) string { return t.Format("2006-01-02 15:04") },
-	"hms":     func(t time.Time) string { return t.Format("15:04:05") },
-	"inc":     func(i int) int { return i + 1 },
-	"dmhz":    func(f, t float64) string { return signed1((f - t) / 1e6) },
-	"refname": refName,
-	"mhzOf":   func(f float64) float64 { return f / 1e6 },
+	"smallprint": smallPrintHTML,
+	"mhz":        mhzF,
+	"mhz3":       func(f float64) string { return fmt.Sprintf("%.3f", f/1e6) },
+	"f1":         func(v float64) string { return fmt.Sprintf("%.1f", v) },
+	"f2":         func(v float64) string { return fmt.Sprintf("%.2f", v) },
+	"sgn1":       signed1,
+	"swr":        swrF,
+	"neg":        func(v float64) float64 { return -v },
+	"time":       func(t time.Time) string { return t.Format("2006-01-02 15:04") },
+	"hms":        func(t time.Time) string { return t.Format("15:04:05") },
+	"inc":        func(i int) int { return i + 1 },
+	"dmhz":       func(f, t float64) string { return signed1((f - t) / 1e6) },
+	"refname":    refName,
+	"mhzOf":      func(f float64) float64 { return f / 1e6 },
 	"z": func(r, x float64) string {
 		sign := "+"
 		if x < 0 {

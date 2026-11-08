@@ -454,10 +454,9 @@ func (s *Server) buildSheet(id string, a AntennaInfo) ([]byte, *HistoryEntry, er
 	for _, dp := range r.Summary.Dips {
 		marks = append(marks, svgMark{F: dp.Freq, Label: fmt.Sprintf("%.1f", dp.Freq/1e6)})
 	}
-	// Small print under the photo / the link takes room from the SWR plot,
-	// so the sheet stays one page.
-	side := math.Max(31+smallPrintMm(a.PhotoCaption, 36), 26+smallPrintMm(a.LinkNote, 24))
-	swrH := math.Max(40, 50-math.Max(0, side-45))
+	// The fine print above the footer takes room from the SWR plot, so the
+	// sheet stays one page.
+	swrH := math.Max(40, 50-finePrintMm(a.PhotoCaption, a.LinkNote))
 	d.SWR = svgPlot{Wmm: 190, Hmm: swrH, Freq: r.Freq, Series: swrSeries, YMin: 1, YMax: maxSWR, YTicks: niceTicks(1, maxSWR, 4),
 		YFmt: func(v float64) string { return fmt.Sprintf("%g", v) }, YUnit: "SWR", Bands: r.Config.Bands, HLines: thr, Marks: marks,
 		Title: "SWR", Class: "swr"}.render()

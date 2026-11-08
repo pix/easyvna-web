@@ -23,7 +23,9 @@ h1 { font-size: 20pt; line-height: 1.1; margin: 1mm 0 2mm; }
 .meta { display: grid; grid-template-columns: auto 1fr auto 1fr; gap: .6mm 4mm; font-size: 8.5pt; }
 .meta dt { color: var(--muted); }
 .meta dd { margin: 0; }
-.side { display: flex; gap: 2.5mm; align-items: flex-start; }
+.side { display: flex; flex-direction: column; gap: .8mm; }
+.siderow { display: flex; gap: 2.5mm; align-items: flex-start; }
+.fineprint { margin: 1.5mm 0 .8mm; display: flex; flex-direction: column; gap: .3mm; }
 .photo { width: 40mm; height: 28mm; border: .3mm solid var(--line); border-radius: 1mm; overflow: hidden; display: flex; align-items: center; justify-content: center; background: var(--soft); }
 .photo img { max-width: 100%; max-height: 100%; display: block; }
 .qrbox { display: flex; flex-direction: column; align-items: center; gap: .5mm; font-size: 6.5pt; color: var(--muted); }
@@ -31,7 +33,6 @@ h1 { font-size: 20pt; line-height: 1.1; margin: 1mm 0 2mm; }
 .pbox { width: 40mm; display: flex; flex-direction: column; gap: .5mm; }
 .qrbox { max-width: 30mm; }
 .smallprint { font-size: 6.2pt; line-height: 1.25; color: var(--muted); overflow-wrap: anywhere; }
-.qrbox .smallprint { text-align: center; }
 .link a { color: var(--ink); text-decoration: none; overflow-wrap: anywhere; }
 @media screen { .link a { color: #1d4f91; text-decoration: underline; } }
 .credit { text-align: right; font-size: 7.5pt; color: var(--muted); }
@@ -110,7 +111,7 @@ table.dips td:nth-child(-n+8) { white-space: nowrap; }
       {{if .Link}}<dt>Link</dt><dd style="grid-column: span 3" class="link"><a href="{{.Link}}" target="_blank" rel="noopener noreferrer">{{.LinkText}}</a></dd>{{end}}
     </dl>
   </div>
-  {{if or .Photo .QR}}<div class="side">{{if .Photo}}<div class="pbox"><div class="photo"><img src="{{.Photo | photo}}" alt="Photo of {{.Name}}"></div>{{if .PhotoCaption}}<div class="smallprint photocaption">{{.PhotoCaption}}</div>{{end}}</div>{{end}}{{if .QR}}<div class="qrbox">{{.QR}}<span>scan: product link</span>{{if .LinkNote}}<div class="smallprint linknote">{{.LinkNote}}</div>{{end}}</div>{{end}}</div>{{end}}
+  {{if or .Photo .QR}}<div class="side"><div class="siderow">{{if .Photo}}<div class="pbox"><div class="photo"><img src="{{.Photo | photo}}" alt="Photo of {{.Name}}"></div></div>{{end}}{{if .QR}}<div class="qrbox">{{.QR}}<span>scan: product link</span></div>{{end}}</div></div>{{end}}
   <div class="credit"><b>EasyVNA Web</b><br>by PiX<br>{{if .Simulated}}<span class="sim">SIMULATED DATA</span>{{end}}</div>
 </header>
 
@@ -181,6 +182,7 @@ table.dips td:nth-child(-n+8) { white-space: nowrap; }
 </section>{{end}}
 
 <p class="vrange" style="margin-top:4mm">Grades: PASS = worst in-band SWR &lt; 1.5, OK &lt; 2, FAIL otherwise (band edges interpolated). Q is estimated from the SWR &lt; 2 bandwidth assuming a match at resonance. Mismatch loss = −10·log10(1−|Γ|²).</p>
+{{if or (and .Photo .PhotoCaption) (and .QR .LinkNote)}}<div class="fineprint">{{if and .Photo .PhotoCaption}}<div class="smallprint photocaption">{{.PhotoCaption | smallprint}}</div>{{end}}{{if and .QR .LinkNote}}<div class="smallprint linknote">{{.LinkNote | smallprint}}</div>{{end}}</div>{{end}}
 <div class="foot"><span>EasyVNA Web · by PiX (and the Claude, OpenAI and Deepseek AI band)</span><span>report {{.ReportID}} · generated {{time .Generated}}</span></div>
 </div></body></html>`
 

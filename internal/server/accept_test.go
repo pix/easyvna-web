@@ -299,17 +299,18 @@ func TestSmallPrintAndDefault(t *testing.T) {
 	call(t, ts, "POST", "/api/sweep", "", nil)
 	long := strings.Repeat("<b>x</b> ", 40)
 	var sh map[string]string
-	body := `{"antenna":{"name":"sp","link":"https://example.com/a","photoCaption":"` + long + `","linkNote":"<b>x</b> note"}}`
+	body := `{"antenna":{"name":"sp","link":"https://example.com/a","photoCaption":"` + long + `","linkNote":"<b>x</b> note <script>y</script>"}}`
 	if c := call(t, ts, "POST", "/api/sheet", body, &sh); c != 200 {
 		t.Fatalf("sheet %d", c)
 	}
 	a, _ := s.store.LoadAntenna("sp")
-	if len([]rune(a.PhotoCaption)) != maxSmallPrint || a.LinkNote != "<b>x</b> note" {
+	if len([]rune(a.PhotoCaption)) != maxSmallPrint || a.LinkNote != "<b>x</b> note <script>y</script>" {
 		t.Fatalf("%q %q", a.PhotoCaption, a.LinkNote)
 	}
 	html, _ := get(t, ts, "/"+sh["url"])
-	if !strings.Contains(html, `class="smallprint linknote">&lt;b&gt;x&lt;/b&gt; note`) || strings.Contains(html, "<b>x</b>") {
-		t.Fatal("small print not escaped / missing")
+	// <b> renders as bold; any other markup stays text.
+	if !strings.Contains(html, `class="smallprint linknote"><b>x</b> note &lt;script&gt;y&lt;/script&gt;`) || strings.Contains(html, "<script>y") {
+		t.Fatal("small print markup / escaping")
 	}
 	var st State
 	call(t, ts, "POST", "/api/settings", `{"linkNoteDefault":"  default   note "}`, &st)

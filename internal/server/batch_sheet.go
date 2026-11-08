@@ -422,9 +422,8 @@ func (s *Server) buildBatchSheet(id string, b *Batch) ([]byte, error) {
 	d.Spread = spreadSVG(d.V, 190, 0)
 	// Page 1: the plots shrink when the header's small print or the legend
 	// take more room, so the page stays one page (see smallPrintMm).
-	side := math.Max(31+smallPrintMm(c.PhotoCaption, 36), 26+smallPrintMm(c.LinkNote, 24))
 	legendRows := math.Ceil(float64(len(c.Antennas)+1) / 8)
-	swrH := 50 - 0.7*math.Max(0, side-35) - math.Max(0, legendRows-3)*3.4
+	swrH := 50 - finePrintMm(c.PhotoCaption, c.LinkNote) - math.Max(0, legendRows-3)*3.4
 	lotPlots(&d, c, math.Max(30, swrH))
 	d.Figs = lotFigures(d.V)
 	if g, ok := gradeLabel[sm.Grade]; ok {
@@ -500,14 +499,15 @@ h1 { font-size: 18pt; line-height: 1.05; margin: .5mm 0 1mm; overflow-wrap: anyw
 .meta dt { color: var(--muted); } .meta dd { margin: 0; }
 .calbad { color: var(--fail); font-weight: 700; } .calok { color: var(--pass); }
 .sim { display: inline-block; font-size: 7pt; font-weight: 700; letter-spacing: .08em; padding: .2mm 1.5mm; border: .3mm solid var(--ok); color: var(--ok); border-radius: 1mm; margin-left: 2mm; vertical-align: middle; }
-.side { display: flex; gap: 2.5mm; align-items: flex-start; }
+.side { display: flex; flex-direction: column; gap: .8mm; }
+.siderow { display: flex; gap: 2.5mm; align-items: flex-start; }
+.fineprint { margin: 1.5mm 0 .8mm; display: flex; flex-direction: column; gap: .3mm; }
 .pbox { width: 36mm; display: flex; flex-direction: column; gap: .5mm; }
 .photo { width: 36mm; height: 31mm; border: .3mm solid var(--line); border-radius: 1mm; overflow: hidden; display: flex; align-items: center; justify-content: center; background: var(--soft); }
 .photo img { max-width: 100%; max-height: 100%; display: block; }
 .qrbox { display: flex; flex-direction: column; align-items: center; gap: .6mm; width: 24mm; }
 .qrbox svg { display: block; }
 .smallprint { font-size: 6.2pt; line-height: 1.25; color: var(--muted); overflow-wrap: anywhere; }
-.qrbox .smallprint { text-align: center; width: 100%; }
 a.link { font-size: 6.2pt; line-height: 1.2; color: var(--ink2); text-decoration: none; overflow-wrap: anywhere; text-align: center; }
 @media screen { a.link { color: #1d4f91; text-decoration: underline; } }
 /* page 1: key figures */
@@ -604,7 +604,7 @@ td.lbl { max-width: 30mm; overflow: hidden; text-overflow: ellipsis; }
       <dt>Calibration</dt><dd style="grid-column: span 3" class="{{if .V.Summary.CalOK}}calok{{else}}calbad{{end}}">{{.V.Summary.CalNote}}</dd>
     </dl>
   </div>
-  {{if or .V.Photo .QR}}<div class="side">{{if .V.Photo}}<div class="pbox"><div class="photo"><img src="{{.V.Photo | photo}}" alt="Photo of {{.V.Name}}"></div>{{if .V.PhotoCaption}}<div class="smallprint photocaption">{{.V.PhotoCaption}}</div>{{end}}</div>{{end}}{{if .QR}}<div class="qrbox">{{.QR}}<a class="link" href="{{.V.Link}}" target="_blank" rel="noopener noreferrer">{{.V.LinkText}}</a>{{if .V.LinkNote}}<div class="smallprint linknote">{{.V.LinkNote}}</div>{{end}}</div>{{end}}</div>{{end}}
+  {{if or .V.Photo .QR}}<div class="side"><div class="siderow">{{if .V.Photo}}<div class="pbox"><div class="photo"><img src="{{.V.Photo | photo}}" alt="Photo of {{.V.Name}}"></div></div>{{end}}{{if .QR}}<div class="qrbox">{{.QR}}<a class="link" href="{{.V.Link}}" target="_blank" rel="noopener noreferrer">{{.V.LinkText}}</a></div>{{end}}</div></div>{{end}}
 </header>
 
 <section class="kf" aria-label="Key figures of the lot">
@@ -622,6 +622,7 @@ td.lbl { max-width: 30mm; overflow: hidden; text-overflow: ellipsis; }
   <div><h3>Notes</h3>{{if .V.Notes}}<div class="notes">{{.V.Notes}}</div>{{else}}<p class="muted">–</p>{{end}}</div>
 </div>
 
+{{if or (and .V.Photo .V.PhotoCaption) (and .QR .V.LinkNote)}}<div class="fineprint">{{if and .V.Photo .V.PhotoCaption}}<div class="smallprint photocaption">{{.V.PhotoCaption | smallprint}}</div>{{end}}{{if and .QR .V.LinkNote}}<div class="smallprint linknote">{{.V.LinkNote | smallprint}}</div>{{end}}</div>{{end}}
 <footer class="sfoot"><span>{{.App}} · by PiX (and the Claude, OpenAI and Deepseek AI band)</span><span>page 1 of 2 · {{.URL}}</span></footer>
 </div></div>
 
