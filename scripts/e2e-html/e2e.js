@@ -28,6 +28,7 @@ const { chromium } = require(process.env.PLAYWRIGHT_DIR
 
 const HTML = path.resolve(process.argv[2] || 'dist/easyvna-web.html');
 const SHOTS = process.argv[3] ? path.resolve(process.argv[3]) : '';
+const ONLY = process.env.E2E_ONLY || ''; // "flasher": only the FIRMWARE dialog checks
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'easyvna-e2e-'));
 const sha = (b) => crypto.createHash('sha256').update(b).digest('hex');
 const PAGE_SHA = sha(fs.readFileSync(HTML));
@@ -69,22 +70,26 @@ function serve() {
 const strip = (u) => u.split('#')[0].split('?')[0];
 // newContext with error and network watchers. Only the page URL itself may
 // be requested; anything else is aborted and reported.
+// opts.allowPrefix also allows every URL under that prefix (the native
+// program's own server).
 async function newCtx(browser, pageURL, label, opts = {}) {
-  const ctx = await browser.newContext({ acceptDownloads: true, viewport: { width: 1360, height: 900 }, colorScheme: 'light', ...opts });
+  const { allowPrefix, ...ctxOpts } = opts;
+  const ctx = await browser.newContext({ acceptDownloads: true, viewport: { width: 1360, height: 900 }, colorScheme: 'light', ...ctxOpts });
   // print() would open a dialog: count the calls instead.
   await ctx.addInitScript(() => { window.print = () => { window.__printed = (window.__printed || 0) + 1; }; });
   const errors = [], extra = [];
   const own = new Set([strip(pageURL)]);
   ctx.allow = (u) => own.add(strip(u));
+  const ok = (u) => own.has(strip(u)) || (!!allowPrefix && u.startsWith(allowPrefix));
   await ctx.route('**/*', (route) => {
     const u = route.request().url();
-    if (own.has(strip(u))) return route.continue();
+    if (ok(u)) return route.continue();
     extra.push(u);
     return route.abort();
   });
   ctx.on('request', (r) => {
     const u = r.url();
-    if (u.startsWith('blob:') || u.startsWith('data:') || own.has(strip(u))) return;
+    if (u.startsWith('blob:') || u.startsWith('data:') || ok(u)) return;
     if (!extra.includes(u)) extra.push(u);
   });
   const watch = (pg, who) => {
@@ -470,7 +475,7 @@ const FAKE_SERIAL = `(() => {
       log.push('open ' + o.baudRate);
       const sh = this.sh = window.EasyVNAHost.goMockShell('869');
       this.readable = new ReadableStream({ async pull(c) { const b = await sh.read(); if (b) c.enqueue(b); else c.close(); } });
-      this.writable = new WritableStream({ write(ch) { log.push('tx ' + ch.length); sh.write(ch); } });
+      this.writable = new WritableStream({ write(ch) { log.push('tx ' + ch.length); if (ch.length < 64) log.push('cmd ' + new TextDecoder().decode(ch).trim()); sh.write(ch); } });
     }
     async close() { log.push('close'); if (this.sh) this.sh.close(); this.sh = null; this.readable = this.writable = null; }
   }
@@ -617,6 +622,280 @@ async function noSerialFlow(browser, base, label, shots) {
   await ctx.close();
 }
 
+// ---------- FIRMWARE dialog (flasher.js) with a simulated DFU device ----------
+// navigator.usb is replaced by scripts/flasher/dfuse-sim.js (an STM32
+// bootloader in DFU mode with 256 KB or 128 KB of flash, a fake firmware and
+// a recognisable calibration area). No real USB device is ever opened.
+const SIM = require('../flasher/dfuse-sim.js');
+const SIM_SRC = fs.readFileSync(path.join(__dirname, '..', 'flasher', 'dfuse-sim.js'), 'utf8') + '\n;DfuSeSim.installFakeUSB(window);';
+const FW_DIR = path.join(__dirname, '..', '..', 'web', 'static', 'firmware');
+const FW_MANIFEST = JSON.parse(fs.readFileSync(path.join(FW_DIR, 'manifest.json'), 'utf8'));
+const FW_BIN = fs.readFileSync(path.join(FW_DIR, FW_MANIFEST.file));
+function intelHex(data, base) {
+  const out = [];
+  const rec = (type, addr, bytes) => {
+    const b = [bytes.length, (addr >> 8) & 0xff, addr & 0xff, type, ...bytes];
+    b.push((0x100 - (b.reduce((x, v) => x + v, 0) & 0xff)) & 0xff);
+    out.push(':' + b.map((v) => v.toString(16).toUpperCase().padStart(2, '0')).join(''));
+  };
+  let upper = -1;
+  for (let o = 0; o < data.length; o += 16) {
+    const a = base + o;
+    if (a >>> 16 !== upper) { upper = a >>> 16; rec(4, 0, [upper >> 8, upper & 0xff]); }
+    rec(0, a & 0xffff, Array.from(data.subarray(o, o + 16)));
+  }
+  rec(1, 0, []);
+  return out.join('\n') + '\n';
+}
+// simSha returns the SHA-256 of the current simulated device's flash [a, b).
+const simSha = (page, a = 0, b) => page.evaluate(async ([a, b]) => {
+  const f = window.__d.flash.slice(a, b === null ? undefined : b);
+  return Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', f)), (v) => v.toString(16).padStart(2, '0')).join('');
+}, [a, b === undefined ? null : b]);
+const sim = (page, expr) => page.evaluate(expr);
+async function plug(page, opts) {
+  await page.evaluate((o) => { window.__d = __usbSim.plug(o); }, opts);
+}
+async function fwConnect(page) {
+  await page.click('#fwConnect');
+  await page.waitForSelector('#fwTarget', { timeout: 10000 });
+}
+async function fwFlash(page, confirmCheck) {
+  await page.click('#fwFlash');
+  await page.waitForSelector('#fwAsk', { timeout: 5000 });
+  const text = await page.textContent('#fwAsk');
+  if (confirmCheck) await page.check('#fwAskCheck');
+  await page.click('#fwAskYes');
+  return text;
+}
+// fwShot photographs the FIRMWARE dialog: the whole of it when full (the
+// viewport grows to its height), else what is in view.
+async function fwShot(page, name, full) {
+  if (!SHOTS) return;
+  const vp = page.viewportSize();
+  if (full) {
+    const h = await page.evaluate(() => { const v = document.getElementById('fwView'); v.scrollTop = 0; return v.scrollHeight; });
+    await page.setViewportSize({ width: vp.width, height: Math.max(vp.height, h) });
+  }
+  await shot(page, name, false);
+  if (full) await page.setViewportSize(vp);
+}
+const fwIdle = (page) => page.waitForFunction(() => !EasyVNAFlasherUI.state.busy, null, { timeout: 60000 });
+
+async function flasherFlow(browser, base, label, shots, ctxOpts = {}) {
+  const ctx = await newCtx(browser, base, label, ctxOpts);
+  await ctx.addInitScript({ content: SIM_SRC });
+  const page = await ctx.newPage();
+  await page.goto(base);
+  await ready(page, false);
+  const H4_FW_END = 0x23800;
+
+  await step(`${label}: open the dialog`, async () => {
+    await page.click('#btnFirmware');
+    await page.waitForSelector('#fwView:not([hidden])');
+    await page.waitForFunction(() => EasyVNAFlasherUI.state.fw || EasyVNAFlasherUI.state.fwErr, null, { timeout: 10000 });
+    const t = await page.textContent('#fwBody');
+    const fwErr = await page.evaluate(() => EasyVNAFlasherUI.state.fwErr);
+    check(`${label}: bundled EasyVNA ${FW_MANIFEST.version} loaded, SHA-256 checked`, !fwErr && t.includes(`EasyVNA ${FW_MANIFEST.version} (bundled)`), fwErr);
+    const lic = await page.getAttribute('.fwlic a', 'href');
+    check(`${label}: GPL-3.0 notice links to the source tag`, /GPL-3\.0/.test(await page.textContent('.fwlic')) && lic === FW_MANIFEST.source, lic);
+    check(`${label}: help: DFU entry, udev rule, Zadig, serial connection`, (await page.getAttribute('#fwHelp', 'open')) !== null &&
+      /hold the jog wheel pushed in and switch it on/.test(t) && /reset dfu/.test(t) && /TAG\+="uaccess"/.test(t) && /Zadig/.test(t) && /WinUSB/.test(t) && /macOS/.test(t));
+    if (shots) await fwShot(page, 'flasher-idle.png', true);
+  });
+  await step(`${label}: Connect without a device`, async () => {
+    await page.click('#fwConnect');
+    await page.waitForSelector('#fwError');
+    check(`${label}: no device chosen: says how to enter DFU`, /No device chosen.*STM32 BOOTLOADER/.test(await page.textContent('#fwError')));
+  });
+  let dump = null, origSha = '';
+  await step(`${label}: connect an H4 in DFU mode`, async () => {
+    await plug(page, { variant: 'f303', pollErase: 2 });
+    origSha = await simSha(page);
+    await fwConnect(page);
+    const log = await page.evaluate(() => __usbSim.log.slice());
+    check(`${label}: requestDevice during the click, filter 0483:df11`, log.some((l) => l === 'requestDevice active=true filters=[{"vendorId":1155,"productId":57105}]'), log.join(' | '));
+    check(`${label}: layout read: NanoVNA-H4, STM32F303, 256 KB`, (await page.textContent('#fwTarget')) === 'NanoVNA-H4 · STM32F303 · 256 KB' &&
+      /128 × 2 KB = 256 KB · transfers of 2048 bytes/.test(await page.textContent('#fwLayout')));
+    const checks = await page.$$eval('#fwChecks li', (li) => li.map((x) => x.className));
+    check(`${label}: the bundled image passes every check on the H4`, checks.length >= 5 && checks.every((c) => c === 'ok'), checks.join());
+    check(`${label}: plan: 60 pages`, /erase 60 pages \(120 KB\)/.test(await page.textContent('#fwPlan')));
+    if (shots) await fwShot(page, 'flasher-connected.png', true);
+    if (shots) {
+      const vp = page.viewportSize();
+      await page.setViewportSize({ width: 390, height: 844 });
+      await fwShot(page, 'flasher-phone.png', true);
+      await page.setViewportSize(vp);
+    }
+  });
+  await step(`${label}: back up`, async () => {
+    dump = await download(page, () => page.click('#fwBackup'));
+    await fwIdle(page);
+    check(`${label}: backup file name`, /^nanovna-backup-f303-256k-\d{4}-\d\d-\d\d-\d{6}\.bin$/.test(dump.name), dump.name);
+    check(`${label}: backup == simulated flash (256 KB)`, dump.body.length === 262144 && sha(dump.body) === origSha, `${dump.body.length} ${sha(dump.body)}`);
+    check(`${label}: backup kept in the browser`, (await page.$$('.fwbackups tr')).length === 1 && /backed up in this session/.test(await page.textContent('#fwBackupState')));
+    const again = await download(page, () => page.click('.fwbackups [data-dl]'));
+    check(`${label}: stored backup downloads again, same bytes`, again.name === dump.name && sha(again.body) === origSha);
+  });
+  await step(`${label}: flash the bundled EasyVNA`, async () => {
+    const calBefore = await simSha(page, H4_FW_END);
+    await page.evaluate(() => { __d.opts.pollWrite = 25; });
+    const dl = [];
+    page.on('download', (d) => dl.push(d.suggestedFilename()));
+    const ask = await fwFlash(page);
+    check(`${label}: confirmation: target, image, version, size, pages, calibration kept, already backed up`,
+      /NanoVNA-H4 \(STM32F303, 256 KB\)/.test(ask) && ask.includes(`${FW_MANIFEST.file} · ${FW_MANIFEST.version} · ${FW_MANIFEST.size.toLocaleString('en-US')} bytes`) &&
+      /Erase: 60 pages of 2 KB, 0x08000000–0x0801E000/.test(ask) && /Calibration and configuration are kept/.test(ask) && /Backed up in this session/.test(ask), ask);
+    if (shots) {
+      await page.waitForFunction(() => EasyVNAFlasherUI.state.phase === 'write' && EasyVNAFlasherUI.state.prog && EasyVNAFlasherUI.state.prog.done > 40000, null, { timeout: 20000 });
+      await shot(page, 'flasher-progress.png', false);
+    }
+    await page.waitForSelector('#fwDone', { timeout: 60000 });
+    await page.evaluate(() => { __d.opts.pollWrite = 1; });
+    const st = await sim(page, () => ({ erased: __d.erased.slice(), mass: __d.massErase, unprot: __d.unprotect, viol: __d.pollViolations }));
+    check(`${label}: flash == EasyVNA image`, (await simSha(page, 0, FW_BIN.length)) === FW_MANIFEST.sha256);
+    check(`${label}: calibration and config area untouched`, (await simSha(page, H4_FW_END)) === calBefore);
+    check(`${label}: only the 60 pages of the image erased, no mass erase`, st.erased.length === 60 && st.erased.every((a, i) => a === 0x08000000 + i * 2048) && st.mass === 0 && st.unprot === 0, JSON.stringify(st).slice(0, 200));
+    check(`${label}: bwPollTimeout honoured`, st.viol === 0, String(st.viol));
+    check(`${label}: no second backup (already done this session)`, dl.length === 0, dl.join());
+    check(`${label}: done: verified, calibration kept`, /Flashed and verified: EasyVNA/.test(await page.textContent('#fwDone')) && /Calibration and configuration were kept/.test(await page.textContent('#fwDone')));
+    if (shots) await fwShot(page, 'flasher-done.png', false);
+  });
+  await step(`${label}: start firmware`, async () => {
+    await page.click('#fwStart2');
+    await page.waitForSelector('#fwConnect', { timeout: 10000 });
+    check(`${label}: Start firmware leaves DFU (set address, zero-length DNLOAD)`, await sim(page, () => __d.left && __d.gone && __d.log.includes('setaddr 0x8000000')));
+  });
+  await step(`${label}: flash a user .hex (mandatory backup first)`, async () => {
+    await plug(page, { variant: 'f303', serial: 'SIM-HEX', pollErase: 1 });
+    const before = await simSha(page);
+    await fwConnect(page);
+    const img = SIM.fakeFirmware(50000, 99);
+    await page.setInputFiles('#fwFile', { name: 'my-firmware.hex', mimeType: 'text/plain', buffer: Buffer.from(intelHex(img, 0x08000000)) });
+    await page.waitForSelector('#fwChecks');
+    check(`${label}: .hex read: name, size, format`, /my-firmware\.hex · 50,000 bytes · hex/.test(await page.textContent('.fwchoices')));
+    const [d] = await Promise.all([page.waitForEvent('download', { timeout: 20000 }), fwFlash(page)]);
+    const p = path.join(TMP, 'auto-' + d.suggestedFilename());
+    await d.saveAs(p);
+    await page.waitForSelector('#fwDone', { timeout: 60000 });
+    check(`${label}: automatic backup before writing == original flash`, sha(fs.readFileSync(p)) === before && /^nanovna-backup-f303-256k-/.test(d.suggestedFilename()));
+    check(`${label}: flash == .hex image`, (await simSha(page, 0, 50000)) === sha(img) && (await sim(page, () => __d.erased.length)) === 25);
+  });
+  await step(`${label}: refuse an image overlapping the save area`, async () => {
+    await page.setInputFiles('#fwFile', { name: 'too-big.bin', mimeType: 'application/octet-stream', buffer: Buffer.from(SIM.fakeFirmware(H4_FW_END + 2048)) });
+    await page.waitForSelector('#fwChecks li.bad');
+    check(`${label}: overlap refused, Flash disabled`, /inside the calibration and configuration area \(0x08023800/.test(await page.textContent('#fwChecks')) && await page.isDisabled('#fwFlash'));
+  });
+  await step(`${label}: verify failure`, async () => {
+    await page.click('#fwDisconnect');
+    await plug(page, { variant: 'f303', serial: 'SIM-BAD', corruptAt: 0x08001234, pollErase: 1 });
+    await fwConnect(page);
+    await page.check('input[name=fwChoice][value=easyvna]');
+    await Promise.all([page.waitForEvent('download', { timeout: 20000 }), fwFlash(page)]);
+    await page.waitForSelector('#fwError', { timeout: 60000 });
+    const e = await page.textContent('#fwError');
+    check(`${label}: verify failure reported with its address`, /Firmware update failed/.test(e) && /Verify failed: 1 byte differ.*0x08001234/.test(e) && /bootloader is in ROM/.test(e), e);
+    if (shots) await fwShot(page, 'flasher-error-verify.png', false);
+  });
+  await step(`${label}: restore a full backup`, async () => {
+    await page.click('#fwDisconnect');
+    await plug(page, { variant: 'f303', serial: 'SIM-RESTORE', pollErase: 1 });
+    await page.evaluate(() => { __d.flash.fill(0x00, 0x23800, 0x24000); __d.flash.fill(0x00, 0, 0x100); });
+    await fwConnect(page);
+    await page.setInputFiles('#fwBackupFile', dump.file);
+    await page.waitForSelector('#fwChecks');
+    check(`${label}: full backup accepted for restore`, (await page.textContent('#fwFlash')) === 'Restore…' && /restores the whole flash/.test(await page.textContent('#fwChecks')));
+    await page.click('#fwFlash');
+    await page.waitForSelector('#fwAsk');
+    const ask = await page.textContent('#fwAsk');
+    const locked = await page.isDisabled('#fwAskYes');
+    if (shots) await fwShot(page, 'flasher-confirm-restore.png', false);
+    await page.check('#fwAskCheck');
+    await Promise.all([page.waitForEvent('download', { timeout: 20000 }), page.click('#fwAskYes')]);
+    await page.waitForSelector('#fwDone', { timeout: 60000 });
+    check(`${label}: restore needs the explicit checkbox, says the calibration is replaced`, locked && /calibration and configuration are replaced/.test(ask), ask);
+    check(`${label}: restored flash == backup, 128 pages`, (await simSha(page)) === origSha && (await sim(page, () => __d.erased.length)) === 128);
+  });
+  await step(`${label}: 128 KB NanoVNA-H refuses the H4 image`, async () => {
+    await page.click('#fwDisconnect');
+    await plug(page, { variant: 'f072' });
+    await fwConnect(page);
+    await page.check('input[name=fwChoice][value=easyvna]');
+    await page.waitForSelector('#fwChecks li.bad');
+    check(`${label}: F072 detected, H4 image refused`, (await page.textContent('#fwTarget')) === 'NanoVNA-H · STM32F072 · 128 KB' &&
+      /for the NanoVNA-H4 \(STM32F303, 256 KB\); this device has 128 KB/.test(await page.textContent('#fwChecks')) && await page.isDisabled('#fwFlash'));
+    if (shots) await fwShot(page, 'flasher-f072-refused.png', false);
+  });
+  await step(`${label}: read-protected device`, async () => {
+    await page.click('#fwDisconnect');
+    await plug(page, { variant: 'f303', serial: 'SIM-RDP', protected: true });
+    await fwConnect(page);
+    await fwFlash(page);
+    await page.waitForSelector('#fwError', { timeout: 20000 });
+    const e = await page.textContent('#fwError');
+    const st = await sim(page, () => ({ w: __d.writes, e: __d.erased.length, u: __d.unprotect, m: __d.massErase }));
+    check(`${label}: read protection: clear message, nothing erased or written, no unprotect`, /read-protected \(RDP\)/.test(e) && /does not offer it/.test(e) && !st.w && !st.e && !st.u && !st.m, e + JSON.stringify(st));
+    if (shots) await fwShot(page, 'flasher-error-protected.png', false);
+  });
+  await step(`${label}: close`, async () => {
+    await page.keyboard.press('Escape');
+    check(`${label}: Escape closes the dialog`, await page.isHidden('#fwView'));
+  });
+  ctx.report();
+  await ctx.close();
+
+  const c2 = await newCtx(browser, base, label + ' no-webusb', ctxOpts);
+  await c2.addInitScript(() => { delete Navigator.prototype.usb; });
+  const p2 = await c2.newPage();
+  await p2.goto(base);
+  await ready(p2, false);
+  await step(`${label}: no WebUSB`, async () => {
+    await p2.click('#btnFirmware');
+    await p2.waitForSelector('#fwNoUSB');
+    check(`${label}: no WebUSB: "needs WebUSB: Chrome or Edge"`, /Firmware update needs WebUSB: Chrome or Edge on a computer/.test(await p2.textContent('#fwNoUSB')) && !(await p2.$('#fwConnect')));
+    if (shots) await fwShot(p2, 'flasher-no-webusb.png', false);
+  });
+  c2.report();
+  await c2.close();
+}
+
+// "Reboot into DFU" over the app's Web Serial connection, then flash and
+// Start firmware: the app reconnects by itself.
+async function flasherSerialFlow(browser, base, label, shots) {
+  const ctx = await newCtx(browser, base, label);
+  await ctx.addInitScript(FAKE_SERIAL);
+  await ctx.addInitScript({ content: SIM_SRC });
+  const page = await ctx.newPage();
+  await page.goto(base);
+  await ready(page, false);
+  await step(`${label}: reboot into DFU`, async () => {
+    await page.click('#btnConnect');
+    await page.waitForFunction(() => S.state.connected, null, { timeout: 20000 });
+    await page.click('#btnFirmware');
+    await page.waitForSelector('#fwRebootDFU');
+    check(`${label}: step 1 says EasyVNA Web is connected, offers Reboot into DFU`, /EasyVNA Web is connected to NanoVNA-H 4 over USB serial now/.test(await page.textContent('#fwSerial')));
+    if (shots) await fwShot(page, 'flasher-help-serial.png', false);
+    await page.click('#fwRebootDFU');
+    await page.waitForSelector('#askYes:visible');
+    const askText = await page.textContent('#askText');
+    await page.click('#askYes');
+    await page.waitForFunction(() => !S.state.connected && /DFU/.test(S.state.error || ''), null, { timeout: 15000 });
+    const log = await page.evaluate(() => __fake.log.slice());
+    check(`${label}: confirmed first, then "reset dfu" sent over the serial port and the connection dropped`, /reset dfu/.test(askText) && log.includes('cmd reset dfu') && log.includes('close'), log.slice(-6).join(' | '));
+  });
+  await step(`${label}: flash, then Start firmware reconnects`, async () => {
+    await plug(page, { variant: 'f303', serial: 'SIM-SERIAL', pollErase: 1 });
+    await fwConnect(page);
+    await Promise.all([page.waitForEvent('download', { timeout: 20000 }), fwFlash(page)]);
+    await page.waitForSelector('#fwDone', { timeout: 60000 });
+    await page.click('#fwStart2');
+    await page.waitForFunction(() => S.state.connected, null, { timeout: 20000 });
+    check(`${label}: after Start firmware the app reconnects over Web Serial`, await sim(page, () => __d.left));
+  });
+  ctx.report();
+  await ctx.close();
+}
+
 async function offlineFlow(browser, base, label) {
   const ctx = await newCtx(browser, base, label);
   const page = await ctx.newPage();
@@ -654,6 +933,25 @@ async function phone(browser, base) {
   await ctx.close();
 }
 
+// The native program (go:embed UI and firmware), when NATIVE_BIN is set:
+// started with -mock on a free port, the flasher flow runs against it.
+async function nativeFlasher(browser) {
+  const bin = process.env.NATIVE_BIN;
+  if (!bin) { console.log('\n(NATIVE_BIN not set: native FIRMWARE flow skipped)'); return; }
+  const port = await new Promise((resolve) => { const s = http.createServer().listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => resolve(p)); }); });
+  const base = `http://127.0.0.1:${port}/`;
+  const child = require('child_process').spawn(bin, ['-mock', '-no-browser', '-listen', `127.0.0.1:${port}`, '-data', path.join(TMP, 'native-data')], { stdio: 'ignore' });
+  try {
+    for (let i = 0; i < 100; i++) {
+      const up = await new Promise((resolve) => http.get(base + 'api/state', (r) => { r.resume(); resolve(r.statusCode === 200); }).on('error', () => resolve(false)));
+      if (up) break;
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    console.log(`\n== FIRMWARE (simulated DFU device) in the native program (${base})`);
+    await flasherFlow(browser, base, 'native flasher', false, { allowPrefix: base });
+  } finally { child.kill(); }
+}
+
 (async () => {
   if (SHOTS) fs.mkdirSync(SHOTS, { recursive: true });
   const browser = await chromium.launch({ headless: true });
@@ -664,6 +962,12 @@ async function phone(browser, base) {
   try {
     // A fresh copy for file:// keeps its IndexedDB origin apart from other runs.
     for (const [base, label] of [[fileBase, 'file'], [httpBase, 'http']]) {
+      if (ONLY === 'flasher') { // E2E_ONLY=flasher: just the FIRMWARE dialog
+        console.log(`\n== FIRMWARE (simulated DFU device) over ${label}`);
+        await flasherFlow(browser, base, label + ' flasher', label === 'http' && !!SHOTS);
+        await flasherSerialFlow(browser, base, label + ' flasher-serial', label === 'http' && !!SHOTS);
+        continue;
+      }
       console.log(`\n== simulator over ${label}`);
       await demoFlow(browser, base, label, label === 'http' && !!SHOTS);
       console.log(`\n== Web Serial (fake port) over ${label}`);
@@ -672,10 +976,16 @@ async function phone(browser, base) {
       await v2Flow(browser, base, label + ' v2', label === 'http' && !!SHOTS);
       console.log(`\n== no Web Serial over ${label}`);
       await noSerialFlow(browser, base, label + ' no-serial', label === 'http' && !!SHOTS);
+      console.log(`\n== FIRMWARE (simulated DFU device) over ${label}`);
+      await flasherFlow(browser, base, label + ' flasher', label === 'http' && !!SHOTS);
+      await flasherSerialFlow(browser, base, label + ' flasher-serial', label === 'http' && !!SHOTS);
     }
-    console.log('\n== offline download (http)');
-    await offlineFlow(browser, httpBase, 'offline');
-    await phone(browser, httpBase);
+    await nativeFlasher(browser);
+    if (ONLY !== 'flasher') {
+      console.log('\n== offline download (http)');
+      await offlineFlow(browser, httpBase, 'offline');
+      await phone(browser, httpBase);
+    }
   } finally {
     await browser.close();
     srv.close();
