@@ -14,6 +14,8 @@ scripts/screenshots.sh mock                # README screenshots + doc/sample-rep
 scripts/screenshots.sh hardware [PORT]     # same against a real NanoVNA, server in -readonly
 scripts/build-html.sh [VERSION]            # browser version: dist/easyvna-web.html (one file)
 scripts/e2e-html.sh [SHOT_DIR]             # its end-to-end test in headless Chromium
+scripts/test-js.sh                         # flasher unit tests (node, no dependency)
+scripts/update-firmware.sh [TAG]           # bundle the latest EasyVNA firmware release
 GOOS=js GOARCH=wasm go vet ./...           # the WebAssembly target (also checked in CI)
 ```
 
@@ -84,7 +86,7 @@ How the pieces fit:
   *Download for offline use*, hidden on `file://`. Sources are normalised
   to LF first; `.gitattributes` keeps LF in checkouts.
 * **Size.** The module is about 13.7 MB, 3.4 MB gzipped (most of it is
-  `net/http`); the page is about 4.8 MB. `wasm-opt -Oz` saves under 1 %
+  `net/http`); the page is about 4.9 MB (the bundled firmware, gzipped, about 0.15 MB of it). `wasm-opt -Oz` saves under 1 %
   after gzip, so it is not used.
 
 `scripts/e2e-html.sh` covers it over `file://` and a local Pages-like
@@ -97,13 +99,49 @@ server:
 * opening measurement files (an exported `.s1p` again, a CSV with S21),
   their export, and "Back to live";
 * the no-Web-Serial notice and opening a file from it, and the offline copy
-  (byte-identical, runs from disk).
+  (byte-identical, runs from disk);
+* the FIRMWARE dialog with a fake `navigator.usb` whose device is the
+  simulated DfuSe bootloader of `scripts/flasher/dfuse-sim.js`: backup
+  (bytes == flash), flashing the bundled EasyVNA image (only its pages
+  erased, calibration untouched, verified), a user `.hex` with the automatic
+  backup, refusals (save-area overlap, H4 image on a 128 KB NanoVNA-H),
+  verify failure, restore of a full backup, read protection, no WebUSB,
+  *Reboot into DFU* over the fake serial port; and the same flasher flow in
+  the native program (`-mock`, firmware served from `go:embed`).
+  `E2E_ONLY=flasher` runs only those.
 
 It fails on any console error, and on any request other than the page itself.
 
 Publishing: `.github/workflows/pages.yml` builds and deploys on every push
 to `main` (Settings → Pages → Source: *GitHub Actions*). The release
 workflow also attaches `easyvna-web.html` to each release.
+
+## Firmware flasher (FIRMWARE dialog)
+
+`web/static/flasher.js` is plain browser code shared by the program's page
+and the single-file HTML (which inlines it, plus `firmware/manifest.json`
+and the firmware, gzip + base64, read back by `EasyVNAHost.firmware()`).
+It talks WebUSB to the STM32 system bootloader (`0483:df11`, DfuSe):
+
+* the memory layout comes from the "@Internal Flash" alternate setting's
+  name (`/0x08000000/128*0002Kg`: 256 KB = NanoVNA-H4 / F303, `064*`:
+  128 KB = NanoVNA-H / F072), the transfer size from the DFU functional
+  descriptor (2048 if absent);
+* DNLOAD block 0 carries set-address (0x21) and page-erase (0x41); data
+  blocks are 2 + n at pointer + n × transfer size; UPLOAD after a
+  set-address and an ABORT; GETSTATUS is polled honouring bwPollTimeout,
+  dfuERROR cleared with CLRSTATUS; leaving is set-address 0x08000000 then a
+  zero-length DNLOAD;
+* the firmware area ends at 0x08023800 on the H4 and 0x08018000 on the H
+  (`SAVE_PROP_CONFIG_ADDR` in the firmware's `hardware.h`): a normal image
+  must end there; only a full-size backup restore writes the save area.
+  Never a mass erase, never read-unprotect (0x92).
+
+`scripts/flasher/dfuse-sim.js` simulates that bootloader as a WebUSB device
+(DFU state machine, poll timeouts, erase-before-write flash, F303 / F072,
+read protection, a corrupted byte, empty interface names, no functional
+descriptor); `scripts/flasher/flasher.test.js` (node --test) and the e2e
+use it.
 
 ## HTTP API
 
@@ -112,6 +150,7 @@ workflow also attaches `easyvna-web.html` to each release.
 | `GET /api/state` | device, config, calibration, profiles |
 | `GET /api/events` | SSE: `state`, `sweep`, `snapshots` |
 | `POST /api/connect` | (re)connect |
+| `POST /api/dfu` | send `reset dfu` (FIRMWARE dialog's *Reboot into DFU*), drop the connection |
 | `POST /api/profile` `{"id":"869"}` | apply a profile (wide, 433, 869, 915, or custom = range saved in slot 2) |
 | `POST /api/config` `{"start","stop","points","s21","portExtPs"}` | custom sweep |
 | `POST /api/sweep` | single sweep, returns the result |
@@ -141,7 +180,10 @@ Example: `curl -s -XPOST localhost:8080/api/sweep | jq .summary.bands`
 
 ```
 main.go, platform.go         flags, data dir per OS, port choice, browser, wiring
-web/                         embedded UI (index.html, app.js, style.css; vanilla JS + canvas)
+web/                         embedded UI (index.html, app.js, style.css; vanilla JS + canvas),
+                             flasher.js / flasher.css (FIRMWARE: WebUSB, STM32 DfuSe) and
+                             firmware/ (bundled EasyVNA release + manifest.json)
+scripts/flasher/             simulated DfuSe bootloader + flasher unit tests (node --test)
 internal/rf/                 RF math: SWR, RL, mismatch loss, Z, Q, port extension,
                              bandwidth, dips, band verdicts, warnings, REF deltas,
                              TUNE readout, trim learning, Touchstone/CSV

@@ -12,8 +12,9 @@ NanoVNA needed: <https://pix.github.io/easyvna-web/?demo>)
 > the direction of PiX.** It is largely AI-generated. It has been tested in
 > simulation and on one NanoVNA-H4 under Linux. The Windows build is
 > untested on real hardware unless stated. The browser version (Web Serial)
-> has been tested with the simulator and a simulated serial port only. Use
-> at your own risk.
+> has been tested with the simulator and a simulated serial port only. The
+> firmware flasher (**Firmware**) has been tested against a simulated STM32
+> DFU bootloader only, not on a real NanoVNA yet. Use at your own risk.
 
 > [!CAUTION]
 > **NanoVNA V2 / LiteVNA support is EXPERIMENTAL.** Its driver was written
@@ -46,6 +47,9 @@ NanoVNA needed: <https://pix.github.io/easyvna-web/?demo>)
 - **Open measurement files.** Load a `.s1p`, `.s2p` or CSV from any VNA
   program and get the same verdict, plots, report and sheet, clearly
   marked *not live*. No NanoVNA needed, so it works in every browser.
+- **Firmware update in the browser.** **Firmware** backs up the whole
+  flash and installs the bundled EasyVNA firmware (or any `.bin` / `.hex` /
+  `.dfu`) over USB, keeping your calibration.
 - **Works on a phone** at the bench, in light or dark mode.
 - **Runs as a single `.exe` on Windows.** Double-click it and the browser
   opens. Nothing to install, no internet needed.
@@ -260,6 +264,40 @@ reference for live sweeps (last month's measurement against today's), and
 **Back to live** to sweep again. **Snapshots & export** saves the current
 sweep as `.s1p`, `.s2p` (when S21 was measured) or CSV.
 
+### 11. Back up and update the firmware
+
+**Firmware** (top right) backs up and updates the NanoVNA's firmware over
+USB, in Chrome or Edge on a computer (WebUSB), in the program and in the
+browser version alike. *Tested against a simulated DFU device only.*
+
+1. **Put the NanoVNA in DFU mode.** H4 with stock firmware: power it off,
+   hold the jog wheel pushed in and switch it on (the screen stays blank).
+   EasyVNA firmware: `reset dfu` in the USB serial shell, CONFIG > DFU, or
+   **Reboot into DFU** in the dialog while EasyVNA Web is connected to it.
+   Then press **Connect (DFU)** and pick *STM32 BOOTLOADER* (`0483:df11`).
+2. **Back up the flash** saves all of it (firmware, calibration,
+   configuration) as `nanovna-backup-<model>-<date>.bin`; the last four
+   backups are also kept in the browser.
+3. **Flash** writes the bundled EasyVNA firmware, a `.bin`, `.hex` or
+   `.dfu` file, or restores a full backup. It is checked first (vector
+   table, size, H4 image on an H4 only), and a confirmation lists the
+   device, the image and the pages to erase. Before the first write to a
+   device, a full backup is read and downloaded by itself. Only the 2 KB
+   pages the image covers are erased, one by one; an image that would reach
+   the calibration and configuration area is refused, and only **Restore a
+   full backup** rewrites that area, after an explicit confirmation.
+   Everything written is read back and compared. **Start firmware** leaves
+   DFU mode.
+
+If it is interrupted, nothing is lost for good: the DFU bootloader is in
+ROM, so the NanoVNA can always be put back in DFU mode and flashed again.
+A read-protected NanoVNA is refused: removing the protection erases the
+whole flash, calibration included. On Linux, allow your user to open the
+device with a udev rule (`SUBSYSTEM=="usb", ATTRS{idVendor}=="0483",
+ATTRS{idProduct}=="df11", TAG+="uaccess"`); on Windows, bind the WinUSB
+driver to *STM32 BOOTLOADER* with [Zadig](https://zadig.akeo.ie/); macOS
+needs nothing. The dialog explains all of this.
+
 ### On a phone
 
 <p align="center">
@@ -289,6 +327,7 @@ sweep as `.s1p`, `.s2p` (when S21 was measured) or CSV.
 | **Files** | open `.s1p` / `.s2p` / CSV (Touchstone 1 and 2.0, any S format and unit, other reference impedances renormalised to 50 Ω) as a labelled *not live* measurement with the full analysis; export Touchstone `.s1p` / `.s2p`, CSV, named snapshots |
 | **Plots** | SWR, return loss, Smith chart, R/X, S21, with a cursor readout |
 | **NanoVNA V2 / LiteVNA** | EXPERIMENTAL, untested on hardware: binary protocol driver (USB `04b4:0008`), found automatically (also by Web Serial); the V2 sends raw data, so EasyVNA Web calibrates it with the same OPEN / SHORT / LOAD / DONE / SAVE flow (THRU / ISOLN optional for S21) and keeps each slot in its data folder |
+| **Firmware** | back up and flash over USB (WebUSB, STM32 DFU bootloader): bundled EasyVNA firmware, `.bin` / `.hex` / `.dfu`, or a full backup; automatic backup before writing, page-by-page erase, calibration area kept, read-back verify, *Reboot into DFU* over the serial connection |
 | **Anywhere** | phone layout, light and dark mode, works offline |
 
 ## Options
@@ -328,6 +367,16 @@ either side is found by the other:
 | 869 | 779–959 | 401 | 5 |
 | 915 | 825–1005 | 401 | 6 |
 | custom | as saved | as saved | 2 |
+
+**Bundled firmware.** EasyVNA Web carries a copy of the latest EasyVNA
+firmware release for the NanoVNA-H4 (currently `EasyVNA-H4-v0.1.0.bin`, in
+`web/static/firmware/`), so **Firmware** can install it without a download.
+It is the unmodified release binary, checked against the release's
+SHA-256 at build time and again before flashing. The EasyVNA firmware is
+free software under the GPL-3.0; its source code is at
+<https://github.com/pix/easyvna> (the dialog links the exact release tag).
+`scripts/update-firmware.sh` fetches the newest release, and the Pages and
+release builds run it before building.
 
 Slot 0 is left to you; stock firmware loads it at power-on. Offsets are
 measured from 433.92, 869 and 915 MHz. With the EasyVNA firmware, tapping a
@@ -395,6 +444,12 @@ the list. If opening fails, another program or tab has the port (close
 NanoVNA-Saver, a serial terminal or a second EasyVNA Web tab). On Linux your
 user needs the serial-port group (`uucp` or `dialout`), as for the program.
 
+**Firmware: Connect (DFU) finds nothing, or the device cannot be opened**
+Check that the NanoVNA is in DFU mode (blank screen; USB `0483:df11`,
+*STM32 BOOTLOADER*). On Linux add the udev rule above; on Windows bind
+WinUSB to *STM32 BOOTLOADER* with Zadig; close STM32CubeProgrammer or
+dfu-util. Firefox and Safari have no WebUSB.
+
 **"Cannot open this file"**
 EasyVNA Web reads S-parameter files only: Touchstone with one or two
 ports, or a CSV that has a frequency column and S11 with its phase (real
@@ -413,6 +468,7 @@ to choose another folder.
 ```sh
 go build -o easyvna-web .
 go test -race ./... && go vet ./...
+scripts/test-js.sh            # firmware flasher unit tests (node)
 ./easyvna-web -mock
 ```
 
@@ -429,6 +485,9 @@ EasyVNA Web is by PiX (and the Claude, OpenAI and Deepseek AI band).
 BSD-3-Clause, see [LICENSE](LICENSE). Copyright (c) 2026, Camille Moncelier
 (PiX).
 
-EasyVNA Web is a separate program that talks to the NanoVNA over USB and
-contains no firmware code. The EasyVNA firmware itself is based on
-NanoVNA-D and keeps that project's GPL-3.0 license.
+EasyVNA Web is a separate program that talks to the NanoVNA over USB. The
+EasyVNA firmware is based on NanoVNA-D and keeps that project's GPL-3.0
+license. EasyVNA Web bundles an unmodified binary of it
+(`web/static/firmware/`, also inside the program and the HTML page) only
+to install it; that binary is distributed under the GPL-3.0, with its
+source code at <https://github.com/pix/easyvna>.
