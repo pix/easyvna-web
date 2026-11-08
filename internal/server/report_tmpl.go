@@ -124,6 +124,7 @@ table.dips td:nth-child(-n+8) { white-space: nowrap; }
   <div class="card">{{.SWR}}</div>
   <div class="row2"><div><div class="card">{{.RL}}</div><div class="card zplot">{{.Z}}</div></div><div class="card">{{.Smith}}</div></div>
   <table class="kv kv4"><tbody>{{range .KeyRows}}<tr>{{range .}}<td>{{.K}}</td><td>{{.V}}</td>{{end}}</tr>{{end}}</tbody></table>
+  {{with .Res.Ref}}{{if .Effect}}<div class="drift"><b>Change vs {{refname .}}</b> (per band): {{.Effect}}</div>{{end}}{{end}}
   {{with .Drift}}<div class="drift{{if .Warnings}} dw{{end}}"><b>Antenna history:</b> {{.Line}}{{range .Warnings}}{{if ne .Level "info"}}<br><b>{{.Title}}</b>: {{.Text}}{{else}}<br><span class="vrange">{{.Text}}</span>{{end}}{{end}}</div>{{end}}
   {{if .Res.Summary.Dips}}<h3>Resonances</h3><table class="dips"><thead><tr><th>#</th><th class="num">MHz</th><th class="num">SWR</th><th class="num">RL</th><th class="num">ML</th><th>Z</th><th class="num">BW&lt;2</th><th class="num">Q</th><th>Note</th></tr></thead><tbody>
     {{range $i, $d := .Res.Summary.Dips}}<tr><td>{{inc $i}}</td><td class="num"><b>{{mhz $d.Freq}}</b></td><td class="num">{{swr $d.SWR}}</td><td class="num">{{f1 $d.RL}}</td><td class="num">{{f2 $d.ML}}</td><td>{{z $d.R $d.X}}</td><td class="num">{{bw $d.BW2}}</td><td class="num">{{q $d.Q}}</td><td>{{$d.Advice}}</td></tr>{{end}}

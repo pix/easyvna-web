@@ -163,6 +163,8 @@ async function demoFlow(browser, base, label, shots) {
     await page.evaluate(() => fetch('api/mock/antenna', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{"name":"869tuned"}' }));
     await sweepDone(page, () => page.click('#aSweep'));
     check(`${label}: REF stored and compared`, (await page.isVisible('#aRefClear')) && (await page.evaluate(() => !!S.res.ref)));
+    const eff = (await page.isVisible('#verdict .effect')) ? await page.textContent('#verdict .effect') : '';
+    check(`${label}: per-band effect vs REF in the main view`, /Per band vs REF/.test(eff) && /869: \+\d+\.\d MHz/.test(eff) && /SWR \d\.\d→\d\.\d/.test(eff), eff);
     if (shots) await shot(page, 'html-demo-main.png');
   });
   await step(`${label}: AVG`, async () => {
@@ -204,6 +206,8 @@ async function demoFlow(browser, base, label, shots) {
     await page.waitForFunction(() => S.trim && S.trim.entries.length === 2, null, { timeout: 20000 });
     check(`${label}: after a logged cut MHz/mm is learnt (no longer cautious)`, await page.evaluate(() => !S.trim.prediction.cautious && !/FIRST CUT/.test(document.getElementById('cutBig').textContent)));
     await page.waitForFunction(() => /MHz/.test(document.getElementById('tRes').textContent), null, { timeout: 10000 });
+    await page.waitForFunction(() => /869:/.test(document.getElementById('tEffect').textContent), null, { timeout: 10000 });
+    check(`${label}: per-band effect vs REF in TUNE`, true);
     if (shots) {
       await page.evaluate(() => { document.getElementById('toast').hidden = true; });
       await page.waitForTimeout(800);

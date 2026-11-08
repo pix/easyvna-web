@@ -581,9 +581,15 @@ function refRow(r) {
   if (d.df != null) parts.push(`<span>Δf <span class="big">${sgn(d.df / 1e6, 2)}</span> MHz <span class="muted">(${mhz(d.refDipFreq)} → ${mhz(d.dipFreq)})</span></span>`);
   parts.push(`<span>ΔSWR @ ${mhzR(d.at)} MHz <b>${sgn(d.dswr, 2)}</b> <span class="muted">(${swrText(d.refSWR)} → ${swrText(d.swr)})</span></span>`);
   if (d.dBandWorst != null) parts.push(`<span>band worst <b>${sgn(d.dBandWorst, 2)}</b></span>`);
-  return `<div class="refrow">${parts.join('')}</div>`;
+  return `<div class="refrow">${parts.join('')}${effectLine(d)}</div>`;
 }
 
+// effectLine shows what the change did in each band in view (and each
+// dip of a WIDE / SURVEY sweep): "433: +3.1 MHz · 869: +12.4 MHz, SWR 1.8→1.3".
+function effectLine(d) {
+  if (!d || !d.bands || !d.bands.length) return '';
+  return `<div class="effect"><span class="muted">Per band vs REF:</span> ${d.bands.map((e) => `<span class="echip">${esc(e.text)}</span>`).join(' ')}</div>`;
+}
 function edgeHint(r) {
   const sm = r.summary, n = r.freq.length;
   if (sm.minSWRIndex === 0) return `Lowest SWR is at the low edge (${mhz(r.freq[0], 1)} MHz): the resonance is below this range. Try Wide or Survey.`;
@@ -1038,6 +1044,7 @@ function renderTune() {
   $('tRl').innerHTML = `${ti.rlAtTarget.toFixed(1)}<small> dB</small>`;
   $('tMl').innerHTML = `${ti.mlAtTarget.toFixed(2)}<small> dB</small>`;
   $('tSwrRes').textContent = ti.found ? swrText(ti.swrAtRes) : '–';
+  $('tEffect').innerHTML = r.ref ? effectLine(r.ref) : '';
   toneUpdate(ti.swrAtTarget);
   renderTrim();
   updateCutBig();

@@ -188,6 +188,7 @@ type sheetData struct {
 	TrimTgt   float64
 	TrimNext  *rf.TrimPrediction
 	Drift     *DriftReport
+	Ref       *rf.RefDelta // comparison with the REF trace, if one is stored
 	Warnings  []rf.Warning
 }
 
@@ -339,6 +340,7 @@ func (s *Server) buildSheet(id string, a AntennaInfo) ([]byte, *HistoryEntry, er
 		d.Sweep += fmt.Sprintf(" · average of %d", r.AvgN)
 	}
 	d.Figs, d.Verdict, d.VClass = sheetFigures(r)
+	d.Ref = r.Ref
 	if d.Verdict == "CHECK" {
 		d.VNote = "measurement warning, see below"
 	}

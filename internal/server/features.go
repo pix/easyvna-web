@@ -88,6 +88,8 @@ func (s *Server) refDeltaLocked(res, ref *Result) *rf.RefDelta {
 	}
 	d := rf.CompareRef(res.Freq, res.Derived, res.Summary.Dips, ref.Freq, ref.Derived, ref.Summary.Dips, point, band)
 	d.RefTime = ref.Time.Format(time.RFC3339)
+	d.Bands = rf.BandEffects(res.Freq, res.Derived, res.Summary.Dips, ref.Freq, ref.Derived, ref.Summary.Dips, cfg.Identify)
+	d.Effect = rf.FormatEffects(d.Bands)
 	if ref.Source != nil {
 		d.RefFile = ref.Source.File
 	}

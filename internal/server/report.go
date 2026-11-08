@@ -99,17 +99,18 @@ func signed1(v float64) string {
 }
 
 var reportFuncs = template.FuncMap{
-	"mhz":  mhzF,
-	"mhz3": func(f float64) string { return fmt.Sprintf("%.3f", f/1e6) },
-	"f1":   func(v float64) string { return fmt.Sprintf("%.1f", v) },
-	"f2":   func(v float64) string { return fmt.Sprintf("%.2f", v) },
-	"sgn1": signed1,
-	"swr":  swrF,
-	"neg":  func(v float64) float64 { return -v },
-	"time": func(t time.Time) string { return t.Format("2006-01-02 15:04") },
-	"hms":  func(t time.Time) string { return t.Format("15:04:05") },
-	"inc":  func(i int) int { return i + 1 },
-	"dmhz": func(f, t float64) string { return signed1((f - t) / 1e6) },
+	"mhz":     mhzF,
+	"mhz3":    func(f float64) string { return fmt.Sprintf("%.3f", f/1e6) },
+	"f1":      func(v float64) string { return fmt.Sprintf("%.1f", v) },
+	"f2":      func(v float64) string { return fmt.Sprintf("%.2f", v) },
+	"sgn1":    signed1,
+	"swr":     swrF,
+	"neg":     func(v float64) float64 { return -v },
+	"time":    func(t time.Time) string { return t.Format("2006-01-02 15:04") },
+	"hms":     func(t time.Time) string { return t.Format("15:04:05") },
+	"inc":     func(i int) int { return i + 1 },
+	"dmhz":    func(f, t float64) string { return signed1((f - t) / 1e6) },
+	"refname": refName,
 	"z": func(r, x float64) string {
 		sign := "+"
 		if x < 0 {
@@ -136,6 +137,20 @@ var reportFuncs = template.FuncMap{
 }
 
 var reportTmpl = template.Must(template.New("report").Funcs(reportFuncs).Parse(reportHTML))
+
+// refName names the REF of a comparison: its file, or when it was stored.
+func refName(d *rf.RefDelta) string {
+	if d == nil {
+		return "REF"
+	}
+	if d.RefFile != "" {
+		return "REF " + d.RefFile
+	}
+	if t, err := time.Parse(time.RFC3339, d.RefTime); err == nil {
+		return "REF " + t.Format("2006-01-02 15:04")
+	}
+	return "REF"
+}
 
 func (s *Server) calNoteLocked(r *Result) (string, bool) {
 	a := s.cal.Active

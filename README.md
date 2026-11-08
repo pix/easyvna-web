@@ -146,7 +146,10 @@ Each band gets **PASS** (worst in-band SWR < 1.5), **OK** (< 2) or **FAIL**.
 Next to the grade you see the resonance and how far it is from the band,
 mismatch loss, return loss and the SWR < 2 bandwidth. **REF** stores a trace
 as a dashed overlay with Δf / ΔSWR against it, which also makes a quick
-detuning test: free air, then in your hand or the enclosure. Automatic
+detuning test: free air, then in your hand or the enclosure. A **per band**
+line says what the change did in every band in view, e.g. *433: +3.1 MHz ·
+869: +12.4 MHz, SWR 1.8→1.3* (in Wide and Survey also for every resonance
+dip); TUNE, the sheet and the report show it too. Automatic
 warnings catch *no antenna*, *bad calibration* and *lossy "fake"* antennas.
 
 ![A fake (resistive) antenna is flagged and its verdicts are marked CHECK](doc/screenshots/fake-antenna-warning.png)
@@ -265,7 +268,7 @@ sweep as `.s1p`, `.s2p` (when S21 was measured) or CSV.
 | **Calibration** | one-tap OPEN/SHORT/LOAD/DONE/SAVE per profile, with slot tracking, auto-recall, and a warning when the calibration does not fit the sweep |
 | **TUNE** | live narrow sweep, SHORTEN/LENGTHEN, SWR at the target, optional audio tone |
 | **Trim calculator** | learns MHz/mm from each cut, cautious first cut (60 %) until it has, "do not cut" when too short, per-antenna logs with undo; the next cut is on the report and the sheet |
-| **REF** | one-tap reference trace, Δf / ΔSWR, detuning test |
+| **REF** | one-tap reference trace, Δf / ΔSWR, detuning test, per-band effect of a change (resonance shift and SWR before → after for 433 / 869 / 915 and each dip of a Wide / Survey sweep) in the main view, TUNE, sheet and report |
 | **HOLD** | stable-positions envelope with motion rejection and resonance spread |
 | **AVG** | averaging over ×1 / 2 / 4 / 8 / 16 sweeps |
 | **COMPARE** | S21 against antenna A, live Δ dB in band, leaderboard |

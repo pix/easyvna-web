@@ -88,20 +88,24 @@ func Detect(freq []float64, d Derived) []Warning {
 
 // RefDelta compares a sweep against a stored reference trace.
 type RefDelta struct {
-	RefTime     string   `json:"refTime,omitempty"`
-	RefFile     string   `json:"refFile,omitempty"`    // the REF was opened from this file
-	DipFreq     *float64 `json:"dipFreq,omitempty"`    // current resonance near the reference point
-	RefDipFreq  *float64 `json:"refDipFreq,omitempty"` // reference resonance
-	DF          *float64 `json:"df,omitempty"`         // Hz, current - reference
-	At          float64  `json:"at"`                   // frequency used for ΔSWR (band reference or best match)
-	SWR         float64  `json:"swr"`
-	RefSWR      float64  `json:"refSWR"`
-	DSWR        float64  `json:"dswr"`
-	BandWorst   *float64 `json:"bandWorst,omitempty"`
-	RefBandWst  *float64 `json:"refBandWorst,omitempty"`
-	DBandWorst  *float64 `json:"dBandWorst,omitempty"`
-	SameRange   bool     `json:"sameRange"`
-	Description string   `json:"description"`
+	RefTime    string   `json:"refTime,omitempty"`
+	RefFile    string   `json:"refFile,omitempty"`    // the REF was opened from this file
+	DipFreq    *float64 `json:"dipFreq,omitempty"`    // current resonance near the reference point
+	RefDipFreq *float64 `json:"refDipFreq,omitempty"` // reference resonance
+	DF         *float64 `json:"df,omitempty"`         // Hz, current - reference
+	At         float64  `json:"at"`                   // frequency used for ΔSWR (band reference or best match)
+	SWR        float64  `json:"swr"`
+	RefSWR     float64  `json:"refSWR"`
+	DSWR       float64  `json:"dswr"`
+	BandWorst  *float64 `json:"bandWorst,omitempty"`
+	RefBandWst *float64 `json:"refBandWorst,omitempty"`
+	DBandWorst *float64 `json:"dBandWorst,omitempty"`
+	SameRange  bool     `json:"sameRange"`
+	// Bands is the effect of the change per LoRa band in view and, for
+	// identify sweeps, per resonance dip; Effect is its one-line text.
+	Bands       []BandEffect `json:"bands,omitempty"`
+	Effect      string       `json:"effect,omitempty"`
+	Description string       `json:"description"`
 }
 
 // InterpAt linearly interpolates y(freq) at f (clamped to the sweep).

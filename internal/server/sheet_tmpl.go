@@ -109,6 +109,7 @@ td.num, th.num { text-align: right; }
 <div>{{.SWR}}</div>
 <div class="prow"><div class="stack"><div>{{.RL}}</div><div>{{.Z}}</div></div><div>{{.Smith}}</div></div>
 <div class="legend">{{range .Legend}}<span>{{.}}</span>{{end}}</div>
+{{with .Ref}}{{if .Effect}}<div class="drift"><b>Change vs {{refname .}}</b> (per band): {{.Effect}}</div>{{end}}{{end}}
 {{with .Drift}}<div class="drift{{if .Warnings}} dw{{end}}"><b>History:</b> {{.Line}}{{range .Warnings}}{{if ne .Level "info"}} <b>{{.Title}}</b>: {{.Text}}{{end}}{{end}}</div>{{end}}
 
 <div class="cols{{if .Trim}} three{{end}}">
