@@ -433,13 +433,21 @@ e.g. 25 LoRa whips) on one band profile and tells you two things: whether
 2. Connect each antenna and tap **Capture #n** (or press **C**). Each
    capture keeps the whole sweep, the calibration state and the time; its
    label (#1, #2…) can be changed into a serial number. **Redo** measures
-   one again, **×** deletes it (with Undo).
+   one again (the new measurement replaces it), **×** deletes it (with
+   Undo).
 3. Or turn on **Auto-capture** (it starts LIVE): unscrew the antenna,
    screw on the next one and hold still. A new antenna is captured once
    the reading has changed (the open cable is seen, or the trace jumped and
    settled somewhere else) and stayed steady for HOLD's number of sweeps.
    Touching the antenna and letting go, or slow drift, does not capture it
    again.
+4. Trimmed, bent or re-soldered an antenna? Connect it again and tap
+   **Adjusted…** on its row: say what was changed (*cut 1 mm*, *bent 10°*)
+   and, optionally, the trim in mm (+ shortened, − lengthened). The new
+   capture is an **adjusted version** of the same physical antenna and the
+   earlier one is kept (*as received*). **Same as…** marks a capture already
+   taken as a version of another antenna (*#2 Adjusted* captured as a new
+   antenna), or unlinks it.
 
 Each antenna is judged by the **acceptance** setting of the profile
 (band SWR limit 2 and Auto by default), against TUNE's target (the band
@@ -453,10 +461,30 @@ it). With a fixed tolerance (± 0.5 %…) antennas outside it get **↓ shorten
 high: too short, do not cut). The mm come from the trim calculator: the
 learnt MHz/mm when a trim log has it, else the first estimate from the
 element length with TUNE's cautious first cut, else a percentage of the
-length. Next to it: resonance and offset (MHz and %), SWR at the target,
+length (the batch's own adjusted versions teach it too, see below). Next to it: resonance and offset (MHz and %), SWR at the target,
 worst SWR in the band, SWR < 2 bandwidth, return loss, the PASS / OK /
 FAIL band verdict, the margin used, and with Measure ×N the repeatability
 (*×5, σ 0.08 MHz*).
+
+**Adjusted versions.** The table groups the versions under their antenna:
+the # column is the antenna's position in the lot (2a as received, greyed
+and lightly struck out; 2b its current version), and under each adjusted
+version a line says what the adjustment did: *#2: cut 1 mm → resonance
++5.76 MHz (862.67 → 868.43), SWR@target 1.22 → 1.10, margin 21 % → 1 %*.
+Every capture keeps its own status, but the lot (n, statistics, outliers,
+spread and confidence interval, grade, yield, the resonance strip, the lot
+average) counts each physical antenna once, by its latest version: 3
+captures of 2 antennas are n = 2. The conclusion compares the lot as
+received (the first versions) with the lot after adjustment: *As received →
+after adjustment (#2: 1 of 2 antennas): 2 → 2 of 2 cover the band at SWR <
+2.0, 1 → 2 on the TUNE aim, worst SWR 1.24 → 1.10, mean offset −3.10 →
+−0.20 MHz.* Each trim in mm with the resonance change it caused is a MHz/mm
+sample: the batch learns it with the trim calculator's fit (pooled with the
+batch's trim log when it names one) and shows *learnt 9.9 MHz/mm from 2
+adjustments*; the trim advice of every antenna then uses it. A bend without
+a trim is a version but not a MHz/mm sample. Deleting a version joins the
+versions around it (the trims add up); Undo works as for any change.
+Batches saved before this feature load unchanged.
 
 The lot gets n, mean, standard deviation, min, max and spread of each
 figure, the yield, and a graded, plain-words conclusion. The judgement is
@@ -499,12 +527,19 @@ repeatability…), the grade, the criteria, and every antenna's SWR, return
 loss, impedance and Smith curves with the lot average (vector average of
 S11) in bold and a legend of the labels. Page 2 has the conclusion, the
 resonance strip, the statistics and every antenna (up to 40; from 11 on,
-in two compact columns). **CSV** gives one row per antenna plus the
-statistics, **JSON** the whole batch with every sweep, which **Import a
-batch** reads back. The REPORT can include a batch's statistics. Batches
+in two compact columns). With adjusted antennas, page 1 also draws each one
+as received, thin, light and dashed in its colour, and page 2 groups the
+versions with their delta lines and adds an **Adjustments** block (change,
+Δ resonance, SWR at the target, margin used, MHz/mm, what was learnt).
+**CSV** gives one row per capture (with its version, the capture it
+adjusts, the change, the trim and the resonance change) plus the
+statistics and the adjustments, **JSON** the whole batch with every sweep,
+which **Import a batch** reads back. The REPORT can include a batch's statistics. Batches
 are kept with your data (`batches/`, included in *Export data*). In the
 simulator (`?demo&antenna=lot869`, or `-mock -mock-antenna lot869`)
-**Next simulated antenna** connects the next unit of a simulated lot.
+**Next simulated antenna** connects the next unit of a simulated lot, and
+**Trim simulated antenna 0.5 mm** shortens the connected one (its resonance
+rises by about 5 MHz), to try adjusted versions.
 
 ### 11. Open a measurement file
 

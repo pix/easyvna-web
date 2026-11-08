@@ -98,7 +98,11 @@ server:
   profile, CSV / JSON export, JSON import, the batch print (exactly two
   pages on A4 and Letter with 5, 8 and 20 antennas, one trace per antenna
   plus the average, labels of the resonance strip neither overlapping nor
-  clipped), the report section, reload (`E2E_ONLY=batch` runs only those);
+  clipped), the report section, reload; adjusted versions (trim in the
+  simulator, *Adjusted…*, *Same as…*, unlink and delete with Undo, n, the
+  delta line, as received vs after, the learnt MHz/mm, the two-page print
+  with 8 antennas incl. 3 adjusted and with 20, CSV, JSON export and
+  import) (`E2E_ONLY=batch` runs only those);
 * acceptance, Measure ×N and the setup check (`E2E_ONLY=tolerance`): the
   SWR limit and tolerance change the verdicts, TUNE's aim and the batch
   statuses and are printed; Auto window; Measure ×5 with its progress,
@@ -173,9 +177,9 @@ use it.
 | `POST /api/file {"name","data"}` | open a measurement file (`.s1p`, `.s2p`, CSV) as the current result, `source` set, LIVE stopped |
 | `POST /api/avg {"n":4}` | averaging (1, 2, 4, 8, 16) |
 | `POST /api/acceptance {"profile","scope":"profile"\|"default","accept":{"swrLimit","tol","tolPct","tolMHz"}}` or `{"profile","reset":true}` | acceptance setting (band SWR limit, resonance tolerance auto / tight / normal / loose / custom), in `settings.json`; re-grades the results in memory |
-| `POST /api/measure {"n","reseat","for":"measure"\|"batch"\|"setup","step","replace","label"}`, `POST /api/measure/cancel`, `POST /api/measure/continue` | Measure ×N (progress in `state.measure`): the vector average becomes the last result with `multi` (repeatability); `batch` captures it into the active batch, `setup` is a setup-check step |
+| `POST /api/measure {"n","reseat","for":"measure"\|"batch"\|"setup","step","replace","label","adjust","change","trimMm"}`, `POST /api/measure/cancel`, `POST /api/measure/continue` | Measure ×N (progress in `state.measure`): the vector average becomes the last result with `multi` (repeatability); `batch` captures it into the active batch, `setup` is a setup-check step |
 | `GET /api/setup`, `POST /api/setup {"reset":true}` | setup check (steps A / B / C, verdict); also in `state.setup` |
-| `POST /api/mock/action {"action":"hand-on"\|"hand-off"\|"reseat"}` | mock only: a hand on the cable (the `cm869` antenna's cable radiates), unscrew and reconnect the antenna |
+| `POST /api/mock/action {"action":"hand-on"\|"hand-off"\|"reseat"}` or `{"action":"trim","mm":0.5}` | mock only: a hand on the cable (the `cm869` antenna's cable radiates), unscrew and reconnect the antenna, shorten the connected element |
 | `POST /api/tune {"on":true,"target":869000000}` / `{"on":false}` | TUNE mode |
 | `POST /api/ref`, `DELETE /api/ref`, `POST /api/ref/undo`, `GET /api/ref?profile=` | REF trace per profile |
 | `GET /api/trim`, `GET /api/trim/{name}`, `POST /api/trim/{name}/log {"lengthMm"} or {"cutMm"}`, `.../undo`, `.../target`, `.../select` | trim sessions |
@@ -192,7 +196,7 @@ use it.
 | `GET /api/batches`, `POST /api/batches {"name","notes","lengthMm","trim","link","photo","photoCaption","linkNote"}` (on the current band profile) | BATCH: list, create (and make it active) |
 | `POST /api/batch {"active":id}` / `{"auto":bool}` | choose the active batch, switch auto-capture |
 | `GET/PUT/DELETE /api/batches/{id}`, `POST .../restore` | a batch with every figure (per-antenna tuning, statistics, conclusion); rename / notes / length / trim log; delete and restore |
-| `POST /api/batches/{id}/capture {"label"}` or `{"replace":n}`, `PUT/DELETE /api/batches/{id}/antennas/{n}`, `POST .../undo` | capture (a fresh sweep, refused on another profile), redo, rename, delete, undo the last change |
+| `POST /api/batches/{id}/capture {"label"}` or `{"replace":n}` or `{"adjust":n,"change","trimMm"}`, `PUT/DELETE /api/batches/{id}/antennas/{n}`, `POST .../undo` | capture (a fresh sweep, refused on another profile), redo, an adjusted version of antenna n (kept with the earlier ones); PUT `{"label"}` renames, `{"adjustedFrom":m}` makes it a version of m's antenna (0 unlinks), `{"change","trimMm"}` edits the adjustment; delete (a version's chain is joined), undo the last change |
 | `GET /api/batches/{id}/csv`, `GET .../json`, `POST /api/batches/import`, `POST .../sheet` | exports, import, one-page batch sheet (saved with the reports); `POST /api/report {"batch":id}` adds the statistics to the report |
 | `GET /api/backup`, `POST /api/backup` | browser version only: every stored file as one JSON document |
 
@@ -296,7 +300,11 @@ pasted link; nothing added), `LinkText` and the QR code on the sheet,
 report and batch sheet. BATCH has tests of the lot statistics and the outlier rule
 (n = 1, 2, identical values, non-finite values), the tuning status and trim
 advice, the conclusion, the next-antenna detector (hand touch, drift,
-swaps), persistence and the whole API on the simulated lot. Acceptance: the
+swaps), persistence and the whole API on the simulated lot; adjusted
+versions: the chains (missing capture, loop, two later versions), link,
+unlink, delete with its splice and Undo, the current version in every lot
+figure (n, outliers), the lot as received, MHz/mm learnt from the trims
+(`rf.LearnSlope`, pooled logs), CSV / JSON round trip and older batches. Acceptance: the
 SWR-limit mapping, the presets and the Auto window (synthetic curves), the
 API and its persistence in `settings.json` / *Export data*; the
 margin-based lot grades (n = 2 with its confidence interval, 0.7 % offset
