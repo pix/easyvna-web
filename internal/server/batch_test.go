@@ -508,7 +508,7 @@ func TestBatchAPI(t *testing.T) {
 		t.Fatal(c)
 	}
 	html, _ := get(t, ts, "/"+sh["url"])
-	for _, want := range []string{"Batch sheet", "869 whip lot A (2026)", "SN 0042", "Lot statistics", "svg class=\"plot overlay\"", "svg class=\"plot spread\"", "◆"} {
+	for _, want := range []string{"Batch sheet", "869 whip lot A (2026)", "SN 0042", "Lot statistics", "svg class=\"plot overlay lotswr\"", "svg class=\"plot spread\"", "cover the band at SWR &lt; 2", "on the ± 1.30 MHz TUNE aim", "◆"} {
 		if want == "◆" {
 			if !strings.Contains(html, "out\">") && !strings.Contains(html, " out\"") {
 				t.Fatalf("no outlier cell")

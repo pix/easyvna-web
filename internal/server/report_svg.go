@@ -32,6 +32,8 @@ type svgSeries struct {
 	Color string
 	Width float64
 	Dash  string
+	Attr  string  // extra attributes of the polyline, e.g. ` data-ant="3"`
+	Op    float64 // stroke opacity (0: opaque)
 }
 
 type svgHLine struct {
@@ -182,7 +184,10 @@ func (p svgPlot) render() template.HTML {
 		if s.Dash != "" {
 			dash = ` stroke-dasharray="` + s.Dash + `"`
 		}
-		fmt.Fprintf(&sb, `<polyline points="%s" fill="none" stroke="%s" stroke-width="%.1f" stroke-linejoin="round"%s/>`, pts.String(), s.Color, w, dash)
+		if s.Op > 0 && s.Op < 1 {
+			dash += fmt.Sprintf(` stroke-opacity="%.2f"`, s.Op)
+		}
+		fmt.Fprintf(&sb, `<polyline points="%s" fill="none" stroke="%s" stroke-width="%.1f" stroke-linejoin="round"%s%s/>`, pts.String(), s.Color, w, dash, s.Attr)
 	}
 	sb.WriteString(`</svg>`)
 	for _, v := range p.VLines {
@@ -212,32 +217,8 @@ func (p svgPlot) render() template.HTML {
 // smithSVG draws a print-friendly Smith chart, sizeMm wide, with an
 // optional REF trace (dashed).
 func smithSVG(res *Result, sizeMm float64, ref ...*Result) template.HTML {
-	S := sizeMm * 4
-	c, R := S/2, S/2-30
-	cy := c + 8
 	var sb strings.Builder
-	fmt.Fprintf(&sb, `<svg class="plot smith" viewBox="0 0 %.0f %.0f" width="%.0fmm" height="%.0fmm" role="img" aria-label="Smith chart" font-family="Helvetica, Arial, sans-serif">`, S, S, sizeMm, sizeMm)
-	fmt.Fprintf(&sb, `<text x="6" y="18" font-size="%.0f" font-weight="700" fill="%s">Smith chart</text>`, svgFont+1, svgInk)
-	id := fmt.Sprintf("uc%d", res.Seq)
-	fmt.Fprintf(&sb, `<defs><clipPath id="%s"><circle cx="%.1f" cy="%.1f" r="%.1f"/></clipPath></defs><g clip-path="url(#%s)">`, id, c, cy, R, id)
-	for _, r := range []float64{0.2, 0.5, 1, 2, 5} {
-		fmt.Fprintf(&sb, `<circle cx="%.1f" cy="%.1f" r="%.1f" fill="none" stroke="%s" stroke-width="1"/>`, c+R*r/(1+r), cy, R/(1+r), svgGrid)
-	}
-	for _, x := range []float64{0.2, 0.5, 1, 2, 5} {
-		for _, sg := range []float64{1, -1} {
-			fmt.Fprintf(&sb, `<circle cx="%.1f" cy="%.1f" r="%.1f" fill="none" stroke="%s" stroke-width="1"/>`, c+R, cy-sg*R/x, R/x, svgGrid)
-		}
-	}
-	fmt.Fprintf(&sb, `<line x1="%.1f" x2="%.1f" y1="%.1f" y2="%.1f" stroke="%s" stroke-width="1"/>`, c-R, c+R, cy, cy, svgGrid)
-	fmt.Fprintf(&sb, `<circle cx="%.1f" cy="%.1f" r="%.1f" fill="none" stroke="%s" stroke-width="1.4" stroke-dasharray="8 5"/></g>`, c, cy, R/3, svgMuted)
-	fmt.Fprintf(&sb, `<circle cx="%.1f" cy="%.1f" r="%.1f" fill="none" stroke="%s" stroke-width="1.4"/>`, c, cy, R, svgFrame)
-	for _, r := range []float64{0.2, 0.5, 1, 2} {
-		g := (r - 1) / (r + 1)
-		fmt.Fprintf(&sb, `<text x="%.1f" y="%.1f" font-size="%.0f" fill="%s" text-anchor="middle">%g</text>`, c+g*R, cy+14, svgFont-1, svgMuted, r*50)
-	}
-	fmt.Fprintf(&sb, `<text x="%.1f" y="%.1f" font-size="%.0f" fill="%s" text-anchor="middle">+j50</text><text x="%.1f" y="%.1f" font-size="%.0f" fill="%s" text-anchor="middle">−j50</text>`,
-		c, cy-R-6, svgFont-1, svgMuted, c, cy+R+16, svgFont-1, svgMuted)
-	fmt.Fprintf(&sb, `<text x="%.1f" y="%.1f" font-size="%.0f" fill="%s">SWR 2</text>`, c+R/3*0.72+3, cy-R/3*0.72-2, svgFont-1, svgMuted)
+	S, c, cy, R := smithFrame(&sb, sizeMm, "smith", fmt.Sprintf("uc%d", res.Seq))
 	for _, rr := range ref {
 		if rr == nil {
 			continue
@@ -268,6 +249,38 @@ func smithSVG(res *Result, sizeMm float64, ref ...*Result) template.HTML {
 	}
 	sb.WriteString(`</svg>`)
 	return template.HTML(sb.String())
+}
+
+// smithFrame opens a Smith chart SVG sizeMm wide (class "plot <class>")
+// and draws its grid, labels and the SWR 2 circle. It returns the size and
+// the centre and radius of the unit circle in SVG units; the caller adds
+// the traces and closes the </svg>.
+func smithFrame(sb *strings.Builder, sizeMm float64, class, id string) (S, c, cy, R float64) {
+	S = sizeMm * 4
+	c, R = S/2, S/2-30
+	cy = c + 8
+	fmt.Fprintf(sb, `<svg class="plot %s" viewBox="0 0 %.0f %.0f" width="%.0fmm" height="%.0fmm" role="img" aria-label="Smith chart" font-family="Helvetica, Arial, sans-serif">`, class, S, S, sizeMm, sizeMm)
+	fmt.Fprintf(sb, `<text x="6" y="18" font-size="%.0f" font-weight="700" fill="%s">Smith chart</text>`, svgFont+1, svgInk)
+	fmt.Fprintf(sb, `<defs><clipPath id="%s"><circle cx="%.1f" cy="%.1f" r="%.1f"/></clipPath></defs><g clip-path="url(#%s)">`, id, c, cy, R, id)
+	for _, r := range []float64{0.2, 0.5, 1, 2, 5} {
+		fmt.Fprintf(sb, `<circle cx="%.1f" cy="%.1f" r="%.1f" fill="none" stroke="%s" stroke-width="1"/>`, c+R*r/(1+r), cy, R/(1+r), svgGrid)
+	}
+	for _, x := range []float64{0.2, 0.5, 1, 2, 5} {
+		for _, sg := range []float64{1, -1} {
+			fmt.Fprintf(sb, `<circle cx="%.1f" cy="%.1f" r="%.1f" fill="none" stroke="%s" stroke-width="1"/>`, c+R, cy-sg*R/x, R/x, svgGrid)
+		}
+	}
+	fmt.Fprintf(sb, `<line x1="%.1f" x2="%.1f" y1="%.1f" y2="%.1f" stroke="%s" stroke-width="1"/>`, c-R, c+R, cy, cy, svgGrid)
+	fmt.Fprintf(sb, `<circle cx="%.1f" cy="%.1f" r="%.1f" fill="none" stroke="%s" stroke-width="1.4" stroke-dasharray="8 5"/></g>`, c, cy, R/3, svgMuted)
+	fmt.Fprintf(sb, `<circle cx="%.1f" cy="%.1f" r="%.1f" fill="none" stroke="%s" stroke-width="1.4"/>`, c, cy, R, svgFrame)
+	for _, r := range []float64{0.2, 0.5, 1, 2} {
+		g := (r - 1) / (r + 1)
+		fmt.Fprintf(sb, `<text x="%.1f" y="%.1f" font-size="%.0f" fill="%s" text-anchor="middle">%g</text>`, c+g*R, cy+14, svgFont-1, svgMuted, r*50)
+	}
+	fmt.Fprintf(sb, `<text x="%.1f" y="%.1f" font-size="%.0f" fill="%s" text-anchor="middle">+j50</text><text x="%.1f" y="%.1f" font-size="%.0f" fill="%s" text-anchor="middle">−j50</text>`,
+		c, cy-R-6, svgFont-1, svgMuted, c, cy+R+16, svgFont-1, svgMuted)
+	fmt.Fprintf(sb, `<text x="%.1f" y="%.1f" font-size="%.0f" fill="%s">SWR 2</text>`, c+R/3*0.72+3, cy-R/3*0.72-2, svgFont-1, svgMuted)
+	return S, c, cy, R
 }
 
 // sparkSVG plots logged resonance per trim entry against the target.
