@@ -73,6 +73,7 @@
     <button id="aReport" class="tile" type="button"><b>REPORT</b><span>printable page</span></button>
     <button id="aPrint" class="tile" type="button" title="Print a one-page antenna sheet: key figures and all graphs"><b>PRINT</b><span>antenna sheet</span></button>
     <button id="aHist" class="tile" type="button" title="Log this measurement and follow the antenna over time: drift, loss, detuning"><b>HISTORY</b><span>log &amp; drift</span></button>
+    <button id="aBatch" class="tile" type="button" title="Measure a lot of antennas one after the other: is each one tuned, how consistent is the lot"><b>BATCH</b><span>test a lot</span></button>
   </section>
   <div id="hint" class="hint"></div>
   <section id="holdPanel" class="panel holdpanel" hidden aria-label="HOLD stable positions"></section>
@@ -239,6 +240,18 @@
     <button id="histClose" class="close" type="button" aria-label="Close history">✕</button>
   </div>
   <div class="repbody" id="histBody"></div>
+</div>
+
+<!-- BATCH: a lot of antennas, one after the other -->
+<div id="batchView" class="overlay" hidden role="dialog" aria-modal="true" aria-label="Batch">
+  <div class="ovbar">
+    <b class="ovtitle">BATCH</b>
+    <span class="muted small">a lot of antennas: is each one tuned, how consistent is the lot</span>
+    <div class="spacer"></div>
+    <button id="batchClose" class="close" type="button" aria-label="Close batch">✕</button>
+  </div>
+  <div class="repbody batchbody" id="batchBody"></div>
+  <input id="batchImportFile" type="file" accept=".json,application/json" hidden>
 </div>
 
 <!-- FIRMWARE: back up and flash over USB (WebUSB, STM32 DFU), see flasher.js -->

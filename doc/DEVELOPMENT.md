@@ -93,6 +93,11 @@ How the pieces fit:
 server:
 * the simulator flows, Ctrl+P and the antenna sheet (one page on A4 and
   Letter), the report, Export/Import data and reload persistence;
+* BATCH on a simulated lot (`?demo&antenna=lot869`): captures by button,
+  key and auto-capture, rename, redo, delete + undo, the refusal on another
+  profile, CSV / JSON export, JSON import, the batch sheet (one page on A4
+  and Letter with 8 and 20 antennas), the report section, reload
+  (`E2E_ONLY=batch` runs only those);
 * Web Serial through a fake `navigator.serial` whose port is backed by the
   Go simulator (`goMockShell`): request, open, driver, unplug, replug,
   reconnect after reload;
@@ -172,6 +177,11 @@ use it.
 | `POST /api/sheet {"antenna":{name,type,band,connector,lengthMm,ground,cable,maker,owner,notes,photo}}` | one-page antenna sheet from the last sweep (saved with the reports); the antenna record is remembered |
 | `GET /api/antennas`, `GET /api/antennas/{name}` | remembered antenna records (`antennas/<name>.json`) |
 | `GET /api/antennas/{name}/history`, `POST /api/antennas/{name}/history` (log the current result), `POST .../history/undo`, `GET .../history.csv` | antenna history (kept in the antenna record) with the drift report |
+| `GET /api/batches`, `POST /api/batches {"name","notes","lengthMm","trim"}` (on the current band profile) | BATCH: list, create (and make it active) |
+| `POST /api/batch {"active":id}` / `{"auto":bool}` | choose the active batch, switch auto-capture |
+| `GET/PUT/DELETE /api/batches/{id}`, `POST .../restore` | a batch with every figure (per-antenna tuning, statistics, conclusion); rename / notes / length / trim log; delete and restore |
+| `POST /api/batches/{id}/capture {"label"}` or `{"replace":n}`, `PUT/DELETE /api/batches/{id}/antennas/{n}`, `POST .../undo` | capture (a fresh sweep, refused on another profile), redo, rename, delete, undo the last change |
+| `GET /api/batches/{id}/csv`, `GET .../json`, `POST /api/batches/import`, `POST .../sheet` | exports, import, one-page batch sheet (saved with the reports); `POST /api/report {"batch":id}` adds the statistics to the report |
 | `GET /api/backup`, `POST /api/backup` | browser version only: every stored file as one JSON document |
 
 Example: `curl -s -XPOST localhost:8080/api/sweep | jq .summary.bands`
@@ -194,7 +204,8 @@ internal/vna/mock/           byte-level shell and V2 simulators + multi-mode ant
 internal/serialport/         serial ports: termios (Linux/macOS), Win32 comm API (Windows);
                              detection via sysfs / registry / cu.usbmodem; busy-port check
 internal/server/             HTTP API, SSE hub, sweep loop, profiles, averaging, TUNE,
-                             REF, trim, compare, report and antenna sheet (SVG), store
+                             REF, trim, compare, report and antenna sheet (SVG), BATCH
+                             (batch*.go: lots, tuning per antenna, statistics, sheet), store
                              (Backend: directory or memory), backup
 cmd/easyvna-wasm/, web/browser/, internal/{bridge,webserial,jsutil,htmlpack}/
                              browser version (see above)
@@ -265,5 +276,8 @@ profiles), sysfs detection with a fake tree, Windows registry detection
 with a fake registry (phantom ports, composite devices, COM10+), the
 per-OS data dir, port choice and port fallback, and the HTTP API end to end
 (profiles, cal, REF, TUNE/trim, HOLD, compare, report, snapshots, export,
-SSE). Simulations of a trim session and of a hand-bent antenna check that
+SSE, BATCH). BATCH has tests of the lot statistics and the outlier rule
+(n = 1, 2, identical values, non-finite values), the tuning status and trim
+advice, the conclusion, the next-antenna detector (hand touch, drift,
+swaps), persistence and the whole API on the simulated lot. Simulations of a trim session and of a hand-bent antenna check that
 the trim fit and the HOLD motion rejection work.

@@ -5,6 +5,10 @@
 //
 // For both file:// and http:// (a local static server that mimics GitHub
 // Pages) it checks:
+//   * BATCH (?demo&antenna=lot869): a lot of simulated antennas captured by
+//     hand, by key and by auto-capture; rename, redo, delete + undo, the
+//     profile refusal, CSV / JSON export, JSON import, the one-page batch
+//     sheet (A4 / Letter, 8 and 20 antennas), the report section, reload;
 //   * the simulator (?demo): profiles, sweep, REF, AVG, HOLD, TUNE + trim,
 //     COMPARE, snapshots and exports, report (A4/Letter, download),
 //     Export data / Import data, persistence across a reload;
@@ -28,7 +32,7 @@ const { chromium } = require(process.env.PLAYWRIGHT_DIR
 
 const HTML = path.resolve(process.argv[2] || 'dist/easyvna-web.html');
 const SHOTS = process.argv[3] ? path.resolve(process.argv[3]) : '';
-const ONLY = process.env.E2E_ONLY || ''; // "flasher": only the FIRMWARE dialog checks
+const ONLY = process.env.E2E_ONLY || ''; // "flasher": only the FIRMWARE dialog checks; "batch": only BATCH
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'easyvna-e2e-'));
 const sha = (b) => crypto.createHash('sha256').update(b).digest('hex');
 const PAGE_SHA = sha(fs.readFileSync(HTML));
@@ -458,6 +462,262 @@ async function demoFlow(browser, base, label, shots) {
     c2.report();
     await c2.close();
   });
+}
+
+// ---------- BATCH: a lot of antennas ----------
+const nAnt = (page) => page.evaluate(() => (S.batch ? S.batch.antennas.length : -1));
+async function waitAnt(page, n) { await page.waitForFunction((k) => S.batch && S.batch.antennas.length === k && document.querySelectorAll('#batchBody tr[data-id]').length === k, n, { timeout: 20000 }); }
+async function batchShot(page, name, h) {
+  if (!SHOTS) return;
+  await page.evaluate(() => { const t = document.getElementById('toast'); if (t) t.hidden = true; });
+  const vp = page.viewportSize();
+  if (h) await page.setViewportSize({ width: vp.width, height: h });
+  await page.waitForTimeout(400);
+  await page.screenshot({ path: path.join(SHOTS, name) });
+  console.log('  saved ' + path.join(SHOTS, name));
+  if (h) await page.setViewportSize(vp);
+}
+async function calibrate(page) { // the simulated H4 calibrates itself: OPEN, SHORT, LOAD, DONE for this profile
+  for (const s of ['open', 'short', 'load', 'done']) await api(page, 'POST', 'api/cal/step/' + s, s === 'open' ? { fresh: true } : {});
+}
+async function batchFlow(browser, base, label, shots) {
+  const url = base + '?demo&antenna=lot869';
+  const ctx = await newCtx(browser, url, label);
+  const page = await ctx.newPage();
+  await page.goto(url);
+  await ready(page, true);
+  await sweepDone(page, () => page.locator('.profile', { hasText: '869' }).first().click());
+  await calibrate(page);
+  await sweepDone(page, () => page.click('#aSweep'));
+  let id = '', csvFile = '', jsonFile = '';
+  await step(`${label}: create a batch`, async () => {
+    await page.click('#aBatch');
+    await page.waitForSelector('#bnGo', { timeout: 10000 });
+    check(`${label}: BATCH opens on the new-batch form for the 869 profile`, /869 MHz profile/.test(await page.textContent('#batchBody')) && !(await page.isDisabled('#bnGo')));
+    await page.fill('#bnName', '869 whip lot A');
+    await page.fill('#bnLen', '82');
+    await page.fill('#bnNotes', 'e2e lot: 25 pcs bought 2026-10.');
+    await page.click('#bnGo');
+    await page.waitForSelector('#bvCapture', { timeout: 10000 });
+    id = await page.evaluate(() => S.batch.id);
+    const s = await st(page);
+    check(`${label}: batch created and active, tile shows it`, s.batch.active === id && /869 whip lot A/.test(await page.textContent('#aBatch')) && /Capture #1/.test(await page.textContent('#bvCapture')));
+  });
+  await step(`${label}: capture varied antennas`, async () => {
+    for (let i = 1; i <= 6; i++) {
+      if (i > 1) { await page.click('#bvNext'); await page.waitForTimeout(250); }
+      await page.click('#bvCapture');
+      await waitAnt(page, i);
+    }
+    const b = await page.evaluate(() => S.batch);
+    const res = b.antennas.map((a) => a.metrics.resFreq);
+    const statuses = b.antennas.map((a) => a.metrics.tuning.status);
+    check(`${label}: 6 captures, each with its sweep, calibration state and figures`, b.antennas.every((a) => a.swr.length === 401 && a.cal === 'calibrated' && a.metrics.found) && new Set(res.map((f) => f.toFixed(1))).size >= 5,
+      res.map((f) => (f / 1e6).toFixed(2)).join(' '));
+    check(`${label}: unit #3 is flagged as a statistical outlier and as bad (out of band)`, b.summary.stats[0].outliers.join() === '3' && statuses[2] === 'bad' &&
+      (await page.isVisible('#batchBody tr[data-id="3"] td.bout')), JSON.stringify(b.summary.stats[0].outliers));
+    const tl = await page.textContent('.bconcl');
+    check(`${label}: tuning status per antenna and a summary line ("n of 6 tuned")`, statuses.every((x) => ['tuned', 'shorten', 'lengthen', 'bad'].includes(x)) &&
+      /\d of 6 tuned/.test(tl) && /(shorten|tuned)/.test(await page.textContent('#batchBody table.bants')), tl);
+    check(`${label}: plain-words conclusion separates offset and spread`, /(Systematic offset|On target on average|On average the lot)/.test(tl) && /(Consistent lot|Spread σ|manufacturing variance)/.test(tl) && /outlier/.test(tl), tl);
+    const shortOK = b.antennas.filter((a) => a.metrics.tuning.status === 'shorten').every((a) => /↓ shorten \d+\.\d mm/.test(a.metrics.tuning.text) && a.metrics.tuning.method === 'ratio');
+    check(`${label}: trim advice in mm from the element length (TUNE's calculator)`, shortOK, JSON.stringify(b.antennas.map((a) => a.metrics.tuning.text)));
+    const ink = await page.evaluate(() => ['bvPlot', 'bvStrip'].map((cid) => { const c = document.getElementById(cid), d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data; let k = 0; for (let i = 0; i < d.length; i += 16) if (d[i + 3] > 0) k++; return k; }));
+    check(`${label}: overlay and resonance strip drawn`, ink.every((k) => k > 500), String(ink));
+    if (shots) await batchShot(page, 'batch-light.png', 1900);
+  });
+  await step(`${label}: rename, redo, delete + undo, keyboard`, async () => {
+    await page.fill('#batchBody input[data-label="2"]', 'SN 0042');
+    await page.dispatchEvent('#batchBody input[data-label="2"]', 'change');
+    await page.waitForFunction(() => S.batch.antennas[1].label === 'SN 0042', null, { timeout: 10000 });
+    check(`${label}: rename an antenna`, true);
+    await page.click('#bvNext'); await page.waitForTimeout(250);
+    await page.click('#batchBody [data-redo="4"]');
+    await page.click('#askYes');
+    await page.waitForFunction(() => S.batch.antennas[3].redone === 1, null, { timeout: 15000 });
+    check(`${label}: redo (measure #4 again) keeps its number and label`, await page.evaluate(() => S.batch.antennas[3].label === '#4' && S.batch.antennas.length === 6));
+    await page.click('#batchBody [data-rm="5"]');
+    await waitAnt(page, 5);
+    await page.click('#toastUndo');
+    await waitAnt(page, 6);
+    check(`${label}: delete #5, then Undo brings it back`, await page.evaluate(() => S.batch.antennas.some((a) => a.id === 5)));
+    await page.click('#bvNext'); await page.waitForTimeout(250);
+    await page.waitForFunction(() => !document.getElementById('bvCapture').disabled, null, { timeout: 10000 });
+    await page.evaluate(() => document.activeElement && document.activeElement.blur());
+    await page.keyboard.press('c');
+    await waitAnt(page, 7);
+    check(`${label}: key C captures #7`, true);
+  });
+  await step(`${label}: auto-capture`, async () => {
+    await page.click('#bvAuto');
+    await page.waitForFunction(() => S.state.batch.auto && S.state.continuous, null, { timeout: 10000 });
+    await page.waitForTimeout(1500);
+    const before = await nAnt(page);
+    await page.click('#bvNext');
+    await waitAnt(page, before + 1);
+    const a = await page.evaluate(() => S.batch.antennas[S.batch.antennas.length - 1]);
+    await page.waitForTimeout(2500); // steady on the same antenna: nothing more
+    const after = await nAnt(page);
+    check(`${label}: auto-capture takes the next antenna once steady, and only once`, a.auto && after === before + 1, `${before} → ${after}`);
+    if (shots) await batchShot(page, 'batch-auto.png');
+    await page.click('#bvAuto');
+    await page.waitForFunction(() => !S.state.batch.auto, null, { timeout: 10000 });
+    await api(page, 'POST', 'api/continuous', { on: false });
+    await page.waitForFunction(() => !S.state.continuous, null, { timeout: 10000 });
+  });
+  await step(`${label}: refused when the profile differs`, async () => {
+    await sweepDone(page, () => api(page, 'POST', 'api/profile', { id: '433' }).then(() => api(page, 'POST', 'api/sweep')));
+    await page.waitForSelector('#bvProblem:not([hidden])', { timeout: 10000 });
+    const txt = await page.textContent('#bvProblem');
+    const r = await api(page, 'POST', `api/batches/${id}/capture`, {});
+    check(`${label}: another profile is refused (banner, disabled button, API 409 message)`, /this batch uses the 869 MHz profile/.test(txt) && (await page.isDisabled('#bvCapture')) &&
+      /this batch uses the 869 MHz profile/.test(r.error || ''), txt);
+    if (shots) await batchShot(page, 'batch-refused.png');
+    await page.click('#bvSwitch');
+    await page.waitForFunction(() => S.state.config.profile === '869' && document.getElementById('bvProblem').hidden, null, { timeout: 15000 });
+    check(`${label}: "Switch to 869" from the banner`, true);
+  });
+  await step(`${label}: export CSV and JSON`, async () => {
+    const c = await download(page, () => page.click('#batchBody a:has-text("CSV")'));
+    const lines = c.body.toString().trim().split('\n');
+    check(`${label}: batch CSV: one row per antenna and the statistics`, c.name === '869_whip_lot_A-batch.csv' && lines.filter((l) => /^\d+,/.test(l)).length === 8 &&
+      /SN 0042/.test(c.body) && /^statistic,unit,n,mean,sd,min,max,spread,median,outliers/m.test(c.body) && /^Resonance,MHz,8,/m.test(c.body) && /tuned|shorten/.test(c.body), c.name);
+    csvFile = c.file;
+    const j = await download(page, () => page.click('#batchBody a:has-text("JSON")'));
+    const ex = JSON.parse(j.body.toString());
+    check(`${label}: batch JSON with every sweep`, j.name === '869_whip_lot_A-batch.json' && ex.format === 'easyvna-web-batch' && ex.batch.antennas.length === 8 &&
+      ex.batch.freq.length === 401 && ex.batch.antennas.every((a) => a.s11.length === 401) && ex.figures.summary.n === 8, j.name);
+    jsonFile = j.file;
+  });
+  await step(`${label}: batch sheet`, async () => {
+    const [sp] = await Promise.all([ctx.waitForEvent('page', { timeout: 20000 }), page.click('#bvSheet')]);
+    await sp.waitForURL(/#print$/, { timeout: 20000 });
+    await sp.waitForSelector('.sheet');
+    await sp.waitForFunction(() => window.__printed >= 1, null, { timeout: 5000 });
+    const txt = await sp.textContent('.sheet');
+    const svg = await sp.evaluate(() => [document.querySelectorAll('svg.overlay polyline').length, document.querySelectorAll('svg.spread circle, svg.spread path').length]);
+    check(`${label}: batch sheet opens and prints, with overlay, spread chart, tables and conclusion`, /869 whip lot A/.test(txt) && /tuned \(± 1\.30 MHz\)/.test(txt) && /Lot statistics/.test(txt) &&
+      /SN 0042/.test(txt) && /(Systematic offset|On target on average|On average)/.test(txt) && svg[0] >= 8 && svg[1] >= 8 && (await sp.$('td.out')) !== null, JSON.stringify(svg));
+    for (const paper of ['a4', 'letter']) {
+      await sp.evaluate((p) => setPaper(p, false), paper);
+      await sp.emulateMedia({ media: 'print' });
+      const pdf = await sp.pdf({ preferCSSPageSize: true, printBackground: true });
+      check(`${label}: batch sheet fits one ${paper === 'a4' ? 'A4' : 'Letter'} page`, pdfPages(pdf) === 1, String(pdfPages(pdf)));
+      if (shots) pdfShot(pdf, `batch-sheet-${paper}`);
+    }
+    await sp.close();
+  });
+  await step(`${label}: 20 antennas still fit one page`, async () => {
+    for (let i = 0; i < 12; i++) { await api(page, 'POST', 'api/mock/antenna', { name: 'lot869' }); await api(page, 'POST', `api/batches/${id}/capture`, {}); }
+    const v = await api(page, 'GET', `api/batches/${id}`);
+    const r = await api(page, 'POST', `api/batches/${id}/sheet`, {});
+    const [sp] = await Promise.all([ctx.waitForEvent('page', { timeout: 20000 }), page.evaluate(async (u) => { const w = window.open('', '_blank'); await EasyVNAHost.openReport(w, u.url, u.file); }, r)]);
+    await sp.waitForSelector('.sheet');
+    let ok = v.antennas.length === 20;
+    for (const paper of ['a4', 'letter']) {
+      await sp.evaluate((p) => setPaper(p, false), paper);
+      await sp.emulateMedia({ media: 'print' });
+      const pdf = await sp.pdf({ preferCSSPageSize: true, printBackground: true });
+      ok = ok && pdfPages(pdf) === 1;
+      if (shots) pdfShot(pdf, `batch-sheet-20-${paper}`);
+    }
+    check(`${label}: a 20-antenna batch sheet is one page on A4 and Letter (compact table)`, ok && (await sp.$('.halves')) !== null);
+    await sp.close();
+    await page.evaluate(() => loadBatch(S.batch.id));
+  });
+  await step(`${label}: report includes the batch`, async () => {
+    await page.click('#batchClose');
+    await page.click('#aReport');
+    await page.waitForSelector('#repBatch', { timeout: 10000 });
+    check(`${label}: REPORT offers the active batch`, (await page.inputValue('#repBatch')) === id);
+    await page.fill('#repName', 'lot-report');
+    const [rp] = await Promise.all([ctx.waitForEvent('page', { timeout: 20000 }), page.click('#repGo')]);
+    await rp.waitForSelector('.paper', { timeout: 10000 });
+    const txt = await rp.textContent('body');
+    check(`${label}: report has the batch statistics`, /Batch: 869 whip lot A/.test(txt) && /Lot statistics|Resonance/.test(txt) && (await rp.$('svg.spread')) !== null);
+    await rp.close();
+    await page.click('#repClose');
+  });
+  await step(`${label}: Export data includes batches; reload keeps the batch`, async () => {
+    const b = await download(page, () => page.click('#hostExport'));
+    const names = JSON.parse(b.body.toString()).files.map((f) => f.name);
+    check(`${label}: Export data includes batches/${id}.json`, names.includes(`batches/${id}.json`), names.filter((n) => n.startsWith('batch')).join());
+    await page.reload();
+    await ready(page, true);
+    await page.click('#aBatch');
+    await page.waitForSelector('#bvCapture', { timeout: 15000 });
+    check(`${label}: after a reload the batch is still open with its 20 antennas and labels`, await page.evaluate((i) => S.batch.id === i && S.batch.antennas.length === 20 && S.batch.antennas[1].label === 'SN 0042', id));
+  });
+  await step(`${label}: import JSON`, async () => {
+    await page.click('#bvAll');
+    await page.waitForSelector('#bnImport');
+    await page.setInputFiles('#batchImportFile', jsonFile);
+    await page.waitForFunction((i) => S.batch && S.batch.id !== i, id, { timeout: 15000 });
+    const b = await page.evaluate(() => S.batch);
+    const list = await api(page, 'GET', 'api/batches');
+    check(`${label}: imported batch is a new batch with the same captures`, b.name === '869 whip lot A' && b.antennas.length === 8 && b.antennas[1].label === 'SN 0042' && list.length === 2);
+    // Rename, delete + undo of a whole batch.
+    await page.fill('#bvName', '869 whip lot A (copy)');
+    await page.dispatchEvent('#bvName', 'change');
+    await page.waitForFunction(() => S.batch.name === '869 whip lot A (copy)', null, { timeout: 10000 });
+    await page.click('#bvAll');
+    await page.waitForSelector(`#batchBody [data-del="${b.id}"]`);
+    await page.click(`#batchBody [data-del="${b.id}"]`);
+    await page.click('#askYes');
+    await page.waitForFunction((i) => !document.querySelector(`#batchBody [data-del="${i}"]`), b.id, { timeout: 10000 });
+    const n1 = (await api(page, 'GET', 'api/batches')).length;
+    await page.click('#toastUndo');
+    await page.waitForFunction((i) => S.batch && S.batch.id === i, b.id, { timeout: 10000 });
+    check(`${label}: rename a batch, delete it, Undo restores it`, n1 === 1 && (await api(page, 'GET', 'api/batches')).length === 2);
+    const bad = path.join(TMP, 'not-a-batch.json');
+    fs.writeFileSync(bad, '{"format":"x"}');
+    await page.click('#bvAll');
+    await page.waitForSelector('#bnImport');
+    await page.setInputFiles('#batchImportFile', bad);
+    await page.waitForFunction(() => /not an EasyVNA Web batch/.test(document.getElementById('toastText').textContent), null, { timeout: 10000 });
+    check(`${label}: a file that is not a batch is refused`, true);
+  });
+  if (shots) {
+    await step(`${label}: dark screenshot`, async () => {
+      await page.evaluate((i) => selectBatch(i), id);
+      await page.waitForSelector('#bvCapture');
+      await sweepDone(page, () => api(page, 'POST', 'api/sweep'));
+      await page.emulateMedia({ colorScheme: 'dark' });
+      await page.evaluate(() => drawAll());
+      await batchShot(page, 'batch-dark.png', 1900);
+      await page.emulateMedia({ colorScheme: 'light' });
+    });
+  }
+  ctx.report();
+  await ctx.close();
+  void csvFile;
+}
+async function batchPhone(browser, base) {
+  if (!SHOTS) return;
+  const url = base + '?demo&antenna=lot869';
+  const ctx = await newCtx(browser, url, 'batch phone', { viewport: { width: 390, height: 844 }, deviceScaleFactor: 2 });
+  const page = await ctx.newPage();
+  await page.goto(url);
+  await ready(page, true);
+  await sweepDone(page, () => page.locator('.profile', { hasText: '869' }).first().click());
+  await calibrate(page);
+  await page.click('#aBatch');
+  await page.waitForSelector('#bnGo');
+  await page.fill('#bnLen', '82');
+  await page.click('#bnGo');
+  await page.waitForSelector('#bvCapture');
+  for (let i = 1; i <= 5; i++) {
+    if (i > 1) { await page.click('#bvNext'); await page.waitForTimeout(250); }
+    await page.click('#bvCapture');
+    await waitAnt(page, i);
+  }
+  const wide = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth + 1 || document.getElementById('batchView').scrollWidth > window.innerWidth + 1);
+  check('batch phone: no horizontal page scroll', !wide);
+  await batchShot(page, 'batch-phone.png');
+  await page.evaluate(() => { document.getElementById('batchView').scrollTop = document.querySelector('#bvPlot').offsetTop - 60; });
+  await batchShot(page, 'batch-phone-2.png');
+  ctx.report();
+  await ctx.close();
 }
 
 // ---------- Web Serial with a fake port backed by the Go simulator ----------
@@ -1029,8 +1289,15 @@ async function nativeFlasher(browser) {
         await flasherSerialFlow(browser, base, label + ' flasher-serial', label === 'http' && !!SHOTS);
         continue;
       }
+      if (ONLY === 'batch') { // E2E_ONLY=batch: just the BATCH checks (and their screenshots)
+        console.log(`\n== BATCH over ${label}`);
+        await batchFlow(browser, base, label + ' batch', label === 'http' && !!SHOTS);
+        continue;
+      }
       console.log(`\n== simulator over ${label}`);
       await demoFlow(browser, base, label, label === 'http' && !!SHOTS);
+      console.log(`\n== BATCH over ${label}`);
+      await batchFlow(browser, base, label + ' batch', label === 'http' && !!SHOTS);
       console.log(`\n== Web Serial (fake port) over ${label}`);
       await serialFlow(browser, base, label + ' usb', label === 'http' && !!SHOTS);
       console.log(`\n== NanoVNA V2 (experimental) over ${label}`);
@@ -1041,8 +1308,10 @@ async function nativeFlasher(browser) {
       await flasherFlow(browser, base, label + ' flasher', label === 'http' && !!SHOTS);
       await flasherSerialFlow(browser, base, label + ' flasher-serial', label === 'http' && !!SHOTS);
     }
-    await nativeFlasher(browser);
-    if (ONLY !== 'flasher') {
+    if (ONLY !== 'batch') await nativeFlasher(browser);
+    if (ONLY === 'batch') await batchPhone(browser, httpBase);
+    if (ONLY !== 'flasher' && ONLY !== 'batch') {
+      await batchPhone(browser, httpBase);
       console.log('\n== offline download (http)');
       await offlineFlow(browser, httpBase, 'offline');
       await phone(browser, httpBase);

@@ -44,6 +44,12 @@ NanoVNA needed: <https://pix.github.io/easyvna-web/?demo>)
   measurement**) keeps a summary per antenna, and EasyVNA Web warns when an
   antenna drifts: resonance moved, SWR worse, or signs of loss such as water
   in the coax.
+- **BATCH: test a whole lot.** Measure the antennas of a lot one after
+  the other (by hand, with a key, or captured by themselves as you swap
+  them). Each one gets a clear *tuned / shorten / lengthen / bad* status
+  with the trim to make; the lot gets its mean offset (is the pattern
+  length off?), its spread and its outliers, on screen and on a one-page
+  batch sheet.
 - **Open measurement files.** Load a `.s1p`, `.s2p` or CSV from any VNA
   program and get the same verdict, plots, report and sheet, clearly
   marked *not live*. No NanoVNA needed, so it works in every browser.
@@ -316,7 +322,65 @@ sheet and the report carry a *previous measurement / drift* line. The
 history lives in the antenna's record, so **Export data** includes it, and
 **Export history (CSV)** gives a spreadsheet.
 
-### 10. Open a measurement file
+### 10. Test a lot with BATCH
+
+**BATCH** measures a lot of "identical" antennas (made or bought together,
+e.g. 25 LoRa whips) on one band profile and tells you two things: whether
+**each antenna is tuned**, and **how consistent the lot is**.
+
+1. Tap the band (**433**, **869** or **915**), calibrate it, then **BATCH**.
+   Name the batch (*869 whip lot A*); the element length (for trim advice
+   in mm), a trim log whose MHz/mm was learnt in TUNE, and notes are
+   optional. The batch keeps that profile: captures of another sweep are
+   refused with *this batch uses the 869 MHz profile … tap 869 first*.
+2. Connect each antenna and tap **Capture #n** (or press **C**). Each
+   capture keeps the whole sweep, the calibration state and the time; its
+   label (#1, #2…) can be changed into a serial number. **Redo** measures
+   one again, **×** deletes it (with Undo).
+3. Or turn on **Auto-capture** (it starts LIVE): unscrew the antenna,
+   screw on the next one and hold still. A new antenna is captured once
+   the reading has changed (the open cable is seen, or the trace jumped and
+   settled somewhere else) and stayed steady for HOLD's number of sweeps.
+   Touching the antenna and letting go, or slow drift, does not capture it
+   again.
+
+Each antenna gets a status against TUNE's target (the band reference,
+e.g. 869.00 MHz) with TUNE's ✓ ON TARGET tolerance (± 0.15 %:
+± 1.30 MHz at 869 MHz): **✓ tuned**, **↓ shorten 0.3 mm** (resonates
+low: too long), **↑ lengthen 0.5 mm** (resonates high: too short, do not
+cut), or **✗ out of band** / **✗ poor match** when the band is not covered
+at SWR < 2. The mm come from the trim calculator: the learnt MHz/mm when
+a trim log has it, else the first estimate from the element length with
+TUNE's cautious first cut, else a percentage of the length. Next to it:
+resonance and offset (MHz and %), SWR at the target, worst SWR in the
+band, SWR < 2 bandwidth, return loss and the PASS / OK / FAIL band
+verdict.
+
+The lot gets n, mean, standard deviation, min, max and spread of each
+figure, the yield, and a plain-words conclusion that separates the
+**systematic offset** (*the whole lot resonates 3 MHz low: the pattern is
+~0.3 mm too long*) from the **unit-to-unit spread** (σ compared with the
+tolerance window). **Statistical outliers** (antennas unlike the rest of
+the lot, ◆) are flagged with a robust rule that works from 3 antennas on:
+|x − median| > 3.5 × 1.4826 × MAD (the modified z-score; the median and
+MAD are not pulled by the odd antenna, and a small repeatability floor
+keeps identical antennas from being flagged). An outlier is not the same
+as off target: an antenna can be both, either or neither. The view shows
+all SWR curves with the lot's min/max envelope and the live trace, and a
+resonance strip with the target, the tolerance window, the mean ± 1σ and
+one mark per antenna.
+
+**Batch sheet** (or Ctrl+P in BATCH) prints one A4 or Letter page: the
+conclusion, the SWR overlay, the resonance strip, the statistics and every
+antenna (up to 40 on one page; from 15 on, in two compact columns). **CSV**
+gives one row per antenna plus the statistics, **JSON** the whole batch
+with every sweep, which **Import a batch** reads back. The REPORT can
+include a batch's statistics. Batches are kept with your data
+(`batches/`, included in *Export data*). In the simulator
+(`?demo&antenna=lot869`, or `-mock -mock-antenna lot869`) **Next
+simulated antenna** connects the next unit of a simulated lot.
+
+### 11. Open a measurement file
 
 **Open file** (top right) loads a measurement saved by EasyVNA Web or by
 another VNA program: Touchstone `.s1p`, `.s2p` (S11, plus S21 when it is
@@ -330,7 +394,7 @@ reference for live sweeps (last month's measurement against today's), and
 **Back to live** to sweep again. **Snapshots & export** saves the current
 sweep as `.s1p`, `.s2p` (when S21 was measured) or CSV.
 
-### 11. Back up and update the firmware
+### 12. Back up and update the firmware
 
 **Firmware** (top right) backs up and updates the NanoVNA's firmware over
 USB, in Chrome or Edge on a computer (WebUSB), in the program and in the
@@ -389,6 +453,7 @@ WinUSB driver for DFU mode; macOS needs nothing: see
 | **COMPARE** | S21 against antenna A, live Δ dB in band, leaderboard |
 | **Warnings** | no antenna or open cable, reflection above 1 (bad calibration, also over part of the sweep), lossy / fake antenna, noisy measurement (point-to-point jitter and sweep-to-sweep repeatability, 4× real H4 noise; moving the antenna does not count) |
 | **History** | per-antenna measurement log (sheet, report, *Log this measurement*), resonance and SWR sparklines, drift warnings (resonance moved, SWR worse, rising loss), previous-measurement line on the sheet and report, CSV export |
+| **Batch** | a lot of antennas on one profile: capture by hand, by key or automatically; per-antenna tuned / shorten / lengthen / bad with the trim in mm; mean offset, spread, outliers (median / MAD), yield; SWR overlay and resonance strip; one-page batch sheet; CSV and JSON export, JSON import |
 | **Report** | printable A4 / Letter report with vector plots (SWR, return loss, impedance, Smith) and tables, saved in the data folder |
 | **Antenna sheet** | PRINT: a one-page datasheet of the antenna (photo, key figures, all four graphs, notes, trim log); its details are remembered per antenna name |
 | **Files** | open `.s1p` / `.s2p` / CSV (Touchstone 1 and 2.0, any S format and unit, other reference impedances renormalised to 50 Ω) as a labelled *not live* measurement with the full analysis; export Touchstone `.s1p` / `.s2p`, CSV, named snapshots |
@@ -408,7 +473,7 @@ WinUSB driver for DFU mode; macOS needs nothing: see
 | `-readonly` | off | never change anything stored on the device: calibration, save, recall and on-device profile switching are refused. Sweeps still work |
 | `-data` | per OS | folder for settings, REF traces, trim logs, compare session, reports and snapshots |
 | `-mock` | off | simulate a NanoVNA-H4 (no hardware needed) |
-| `-mock-antenna` | `dual` | simulated antenna: `dual`, `869`, `869tuned`, `915`, `dummy`, `open`, `bend` |
+| `-mock-antenna` | `dual` | simulated antenna: `dual`, `869`, `869tuned`, `915`, `dummy`, `open`, `bend`, and `lot433`, `lot869`, `lot915` (each selection connects the next unit of a simulated lot) |
 | `-mock-firmware` | `custom` | `custom` simulates the EasyVNA firmware, `stock` plain NanoVNA-D, `v2` a NanoVNA V2 (binary protocol, raw data, host calibration) |
 | `-maxpoints` | auto | points per device scan (401 on H4, 101 on H) |
 | `-cal-settle` | `1.5s` | time with a standard attached before `cal <std>` (older firmware) |

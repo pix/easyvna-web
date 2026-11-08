@@ -254,7 +254,7 @@ input[type="number"], input:not([type]), select {
 .devinfo { margin: 0; white-space: pre-wrap; font-size: 12.5px; color: var(--ink2); }
 
 .toast {
-  position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); z-index: 10;
+  position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); z-index: 30; /* above the overlays (TUNE, BATCH…): their Undo must be reachable */
   background: var(--ink); color: var(--page); padding: 9px 14px; border-radius: 8px; max-width: calc(100% - 32px);
   font-size: 13px; box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
 }
@@ -272,7 +272,7 @@ input[type="number"], input:not([type]), select {
 
 /* ---- round 3: action tiles, banners, overlays ---- */
 .pill.ro { color: var(--warn-ink); border-color: currentColor; font-weight: 700; }
-.actions { display: grid; grid-template-columns: repeat(10, minmax(0, 1fr)); gap: 8px; }
+.actions { display: grid; grid-template-columns: repeat(11, minmax(0, 1fr)); gap: 8px; }
 .tilewrap { position: relative; display: flex; }
 .tilewrap .tile { flex: 1; }
 .tile {
@@ -386,7 +386,7 @@ table.hist th { color: var(--muted); font-weight: 600; font-size: 12px; }
 .choices { display: flex; flex-direction: column; gap: 6px; }
 .choices label { display: flex; gap: 10px; align-items: center; font-size: 15px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
 textarea { font: inherit; padding: 8px; border-radius: 6px; border: 1px solid var(--border); background: var(--raised); color: inherit; width: 100%; min-height: 60px; }
-.ask { background: rgba(0, 0, 0, 0.45); align-items: center; justify-content: center; padding: 16px; }
+.ask { z-index: 40; background: rgba(0, 0, 0, 0.45); align-items: center; justify-content: center; padding: 16px; }
 .askbox { max-width: 460px; width: 100%; }
 .askbox h3 { margin: 0 0 8px; font-size: 18px; }
 .askbox p { margin: 0 0 14px; font-size: 15px; color: var(--ink2); }
@@ -396,8 +396,8 @@ textarea { font: inherit; padding: 8px; border-radius: 6px; border: 1px solid va
 .toast button { color: inherit; border-color: currentColor; }
 body.locked { overflow: hidden; }
 
-@media (max-width: 900px) {
-  .actions { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+@media (max-width: 1060px) {
+  .actions { grid-template-columns: repeat(6, minmax(0, 1fr)); }
 }
 @media (max-width: 760px) {
   .tunebig { grid-template-columns: 1fr; }
@@ -426,6 +426,51 @@ body.locked { overflow: hidden; }
 .pchip .px { color: var(--muted); padding: 5px 9px 5px 4px; }
 .pchip.hl { border-color: #1baf7a; box-shadow: inset 0 0 0 1.5px #1baf7a; }
 @media (max-width: 760px) { .holdgrid { grid-template-columns: repeat(3, minmax(0, 1fr)); } .hctl { grid-column: 1 / -1; } }
+
+/* BATCH: a lot of antennas */
+.batchbody { max-width: 1120px; }
+.bhead { display: flex; gap: 10px 16px; align-items: flex-start; justify-content: space-between; flex-wrap: wrap; }
+.bhead .bname { font-size: clamp(20px, 4vw, 28px); font-weight: 700; border: 1px solid transparent; background: transparent; padding: 2px 6px; margin-left: -7px; border-radius: 6px; width: min(100%, 560px); }
+.bhead .bname:hover, .bhead .bname:focus { border-color: var(--border); background: var(--raised); }
+.bcap { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.bcap input { font-size: 16px; padding: 8px 10px; width: 210px; }
+.bcap .hstatus { min-width: 12em; }
+.bsum { display: grid; grid-template-columns: auto 1fr; gap: 12px; align-items: stretch; }
+.btally { border: 1px solid var(--border); border-left: 6px solid var(--border); border-radius: 12px; padding: 10px 16px; background: var(--surface); min-width: 150px; }
+.btally.good { border-left-color: var(--good); } .btally.ok { border-left-color: var(--warn); } .btally.bad { border-left-color: var(--bad); }
+.btally .hv { line-height: 1; }
+.bconcl { border: 1px solid var(--border); border-radius: 12px; padding: 10px 14px; background: var(--surface); font-size: 14px; }
+.bconcl p { margin: 0 0 4px; } .bconcl p:first-child { font-weight: 700; } .bconcl .tl { font-weight: 700; margin: 6px 0 0; }
+canvas.batchplot { height: 260px; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; }
+canvas.batchstrip { height: 120px; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; }
+.blegend { display: flex; gap: 4px 14px; flex-wrap: wrap; font-size: 12.5px; color: var(--ink2); }
+.blegend .t { color: var(--good-ink); } .blegend .o { color: var(--warn-ink); } .blegend .x { color: var(--bad-ink); }
+.bwrap { overflow-x: auto; }
+table.bants, table.bstats { width: 100%; border-collapse: collapse; font-size: 13px; font-variant-numeric: tabular-nums; }
+table.bants th, table.bants td, table.bstats th, table.bstats td { text-align: left; padding: 5px 6px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+table.bants th, table.bstats th { color: var(--muted); font-weight: 600; font-size: 12px; }
+table.bants td.num, table.bants th.num, table.bstats td.num, table.bstats th.num { text-align: right; }
+table.bants input.blabel { width: 9em; padding: 3px 6px; font-size: 13px; border: 1px solid transparent; background: transparent; border-radius: 5px; }
+table.bants input.blabel:hover, table.bants input.blabel:focus { border-color: var(--border); background: var(--raised); }
+.bst { font-weight: 700; padding: 2px 8px; border-radius: 999px; border: 1.5px solid currentColor; display: inline-block; }
+.bst.good { color: var(--good-ink); } .bst.ok { color: var(--warn-ink); } .bst.bad { color: var(--bad-ink); }
+td.bout { font-weight: 800; box-shadow: inset 0 0 0 1.5px var(--ink2); border-radius: 4px; }
+td.bout::before { content: "◆ "; font-size: 10px; }
+tr.blast td { background: var(--band); }
+.bact { display: inline-flex; gap: 4px; }
+.bact button { padding: 3px 8px; font-size: 12.5px; }
+.blist td .row { gap: 6px; }
+.bnew { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px 14px; max-width: 900px; }
+.bnew label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--ink2); }
+.bnew input, .bnew select, .bnew textarea { font-size: 16px; padding: 7px 9px; width: 100%; }
+.bnew .wide { grid-column: 1 / -1; }
+@media (max-width: 760px) {
+  #batchView .ovbar .muted { display: none; }
+  .bsum { grid-template-columns: 1fr; }
+  .bnew { grid-template-columns: 1fr; }
+  canvas.batchplot { height: 220px; }
+  .bcap input { width: 100%; }
+}
 
 /* footer / credits */
 .foot { text-align: center; font-size: 12px; color: var(--muted); padding: 8px 0 4px; }
