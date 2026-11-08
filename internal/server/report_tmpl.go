@@ -17,12 +17,19 @@ const reportHTML = `<!doctype html>
   --pass: #0a7d0a; --ok: #b07a00; --fail: #b3261e; --na: #8a8a85; }
 ` + paperCSS + `
 /* header */
-.rh { display: grid; grid-template-columns: 1fr auto; gap: 4mm; border-bottom: 0.6mm solid var(--ink); padding-bottom: 3mm; margin-bottom: 4mm; }
+.rh { display: grid; grid-template-columns: 1fr auto auto; gap: 4mm; border-bottom: 0.6mm solid var(--ink); padding-bottom: 3mm; margin-bottom: 4mm; }
 .kicker { font-size: 8.5pt; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); font-weight: 700; }
 h1 { font-size: 20pt; line-height: 1.1; margin: 1mm 0 2mm; }
 .meta { display: grid; grid-template-columns: auto 1fr auto 1fr; gap: .6mm 4mm; font-size: 8.5pt; }
 .meta dt { color: var(--muted); }
 .meta dd { margin: 0; }
+.side { display: flex; gap: 2.5mm; align-items: flex-start; }
+.photo { width: 40mm; height: 28mm; border: .3mm solid var(--line); border-radius: 1mm; overflow: hidden; display: flex; align-items: center; justify-content: center; background: var(--soft); }
+.photo img { max-width: 100%; max-height: 100%; display: block; }
+.qrbox { display: flex; flex-direction: column; align-items: center; gap: .5mm; font-size: 6.5pt; color: var(--muted); }
+.qrbox svg { display: block; }
+.link a { color: var(--ink); text-decoration: none; overflow-wrap: anywhere; }
+@media screen { .link a { color: #1d4f91; text-decoration: underline; } }
 .credit { text-align: right; font-size: 7.5pt; color: var(--muted); }
 .credit b { color: var(--ink2); font-size: 9pt; }
 .sim { display: inline-block; margin-top: 2mm; font-size: 7.5pt; font-weight: 700; letter-spacing: .08em; padding: .4mm 2mm; border: .3mm solid var(--ok); color: var(--ok); border-radius: 1mm; }
@@ -96,8 +103,10 @@ table.dips td:nth-child(-n+8) { white-space: nowrap; }
       <dt>Firmware</dt><dd>{{if .Firmware}}{{.Firmware}}{{else}}–{{end}}</dd>
       <dt>Profile</dt><dd>{{if .Profiles}}{{.Profiles}}{{else}}–{{end}}</dd>
       <dt>Calibration</dt><dd class="{{if .CalOK}}calok{{else}}calbad{{end}}">{{.CalState}}</dd>
+      {{if .Link}}<dt>Link</dt><dd style="grid-column: span 3" class="link"><a href="{{.Link}}" target="_blank" rel="noopener noreferrer">{{.LinkText}}</a></dd>{{end}}
     </dl>
   </div>
+  {{if or .Photo .QR}}<div class="side">{{if .Photo}}<div class="photo"><img src="{{.Photo | photo}}" alt="Photo of {{.Name}}"></div>{{end}}{{if .QR}}<div class="qrbox">{{.QR}}<span>scan: product link</span></div>{{end}}</div>{{end}}
   <div class="credit"><b>EasyVNA Web</b><br>by PiX<br>{{if .Simulated}}<span class="sim">SIMULATED DATA</span>{{end}}</div>
 </header>
 

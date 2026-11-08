@@ -1345,13 +1345,25 @@ async function openReport() {
     ${batches.length ? `<label class="stepsub">Batch statistics <select id="repBatch"><option value="">none</option>${batches.map((b) => `<option value="${esc(b.id)}" ${b.id === st.batch.active ? 'selected' : ''}>${esc(b.name)} (${b.n})</option>`).join('')}</select></label>` : ''}
     <div class="stepsub">${st.compare.leaderboard.length > 1 ? `S21 compare results (${st.compare.leaderboard.length - 1} vs ${esc(st.compare.aName)}) are included.` : 'No S21 compare results yet.'}</div>
     <label class="stepsub">Notes (optional)<textarea id="repNotes" placeholder="e.g. 3D-printed enclosure, 10 cm RG316 pigtail"></textarea></label>
+    <div class="sheetform">${linkField('repLink')}<div class="wide">${photoBox('repPhoto', 'Antenna photo (optional, remembered with the antenna)')}</div></div>
     <div class="row"><button id="repGo" class="primary bigbtn" type="button">Create report</button></div>
     ${reports.length ? `<div class="stepsub"><b>Earlier reports</b></div><div class="choices">${reports.slice(0, 8).map((r) => `<label><a href="api/reports/${encodeURIComponent(r.file)}" target="_blank" rel="noopener">${esc(r.file)}</a> <span class="muted">${new Date(r.time).toLocaleString()}</span> <a class="btn ghost small" href="api/reports/${encodeURIComponent(r.file)}?download=1">download</a></label>`).join('')}</div>` : ''}`;
+  bindLink('repLink');
+  const repAnt = async () => { // photo and link of the antenna with this name
+    let a = null;
+    try { a = await api('GET', 'api/antennas/' + encodeURIComponent($('repName').value.trim())); } catch { /* new antenna */ }
+    S.repPhoto = (a && a.photo) || ''; $('repLink').value = (a && a.link) || ''; $('repLink').oninput();
+    bindPhoto('repPhoto', 'repView', () => S.repPhoto, (v) => { S.repPhoto = v; });
+  };
+  $('repName').onchange = () => run(repAnt);
+  await repAnt();
   $('repGo').onclick = () => run(async () => {
+    const link = linkValue('repLink');
     const profiles = [...document.querySelectorAll('#repBody .choices input[type=checkbox]:checked')].map((x) => x.value);
     const w = window.open('', '_blank');
     try {
-      const r = await api('POST', 'api/report', { name: $('repName').value.trim(), notes: $('repNotes').value, profiles, trim: $('repTrim').value, batch: $('repBatch') ? $('repBatch').value : '' });
+      const r = await api('POST', 'api/report', { name: $('repName').value.trim(), notes: $('repNotes').value, profiles, trim: $('repTrim').value, batch: $('repBatch') ? $('repBatch').value : '',
+        photo: S.repPhoto || '', link });
       if (HOST) await HOST.openReport(w, r.url, r.file);
       else if (w) w.location = r.url; else location.href = r.url;
       toast('Report saved: ' + r.file);
@@ -1371,28 +1383,131 @@ function sheetBand() {
   if (BAND_PURPOSE[st.config.profile]) return BAND_PURPOSE[st.config.profile];
   return p && !p.identify ? p.label + ' MHz' : '';
 }
-// downscalePhoto returns a JPEG data: URL at most max pixels on its long side.
-async function downscalePhoto(file, max = 800, q = 0.8) {
-  const bmp = await createImageBitmap(file);
-  const k = Math.min(1, max / Math.max(bmp.width, bmp.height));
-  const c = document.createElement('canvas');
-  c.width = Math.max(1, Math.round(bmp.width * k)); c.height = Math.max(1, Math.round(bmp.height * k));
-  const ctx = c.getContext('2d');
-  ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, c.width, c.height);
-  ctx.drawImage(bmp, 0, 0, c.width, c.height);
+// ---------- photos and links (antenna sheet, report, batch) ----------
+// A photo can be chosen, dropped or pasted (Ctrl+V, or "Paste image" where
+// the browser lets pages read the clipboard). It is stored as a data: URL:
+// small PNG / JPEG / WebP files as they are, anything else re-encoded as a
+// JPEG (quality 0.85) at most 1600 px on its long side, so phone photos do
+// not bloat the stored data and its exports.
+const PHOTO_MAX = 1600;
+function readDataURL(blob) {
+  return new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = () => rej(r.error); r.readAsDataURL(blob); });
+}
+async function preparePhoto(blob) {
+  if (!blob || !/^image\//.test(blob.type || '')) throw new Error('that is not an image: use a JPEG, PNG or WebP photo');
+  if (blob.size > 60e6) throw new Error('the image is too large (over 60 MB)');
+  let bmp;
+  try { bmp = await createImageBitmap(blob); } catch { throw new Error('this image cannot be read: use a JPEG, PNG or WebP photo'); }
+  const big = Math.max(bmp.width, bmp.height);
+  if (/^image\/(png|jpeg|webp)$/.test(blob.type) && blob.size <= 400e3 && big <= PHOTO_MAX) { if (bmp.close) bmp.close(); return readDataURL(blob); }
+  let out = '';
+  for (const [max, q] of [[PHOTO_MAX, 0.85], [1200, 0.75], [900, 0.7]]) {
+    const k = Math.min(1, max / big), c = document.createElement('canvas');
+    c.width = Math.max(1, Math.round(bmp.width * k)); c.height = Math.max(1, Math.round(bmp.height * k));
+    const ctx = c.getContext('2d');
+    ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, c.width, c.height);
+    ctx.drawImage(bmp, 0, 0, c.width, c.height);
+    out = c.toDataURL('image/jpeg', q);
+    if (out.length < 2.5e6) break;
+  }
   if (bmp.close) bmp.close();
-  return c.toDataURL('image/jpeg', q);
+  return out;
+}
+// photoBox is the photo field: preview, choose / paste / remove, drop zone.
+function photoBox(id, label) {
+  return `<div class="photorow" id="${id}Box"><div class="phead">${label || 'Photo (optional)'} <span class="small muted">· paste it (Ctrl+V), drop a file here, or</span></div>
+    <div class="row"><img id="${id}Prev" alt="Photo" hidden>
+      <button type="button" class="ghost small" id="${id}Pick">Choose file…</button>
+      <button type="button" class="ghost small" id="${id}Paste" title="Paste an image copied from another program or a web page">Paste image</button>
+      <button type="button" class="ghost small" id="${id}Del" hidden>Remove</button>
+      <input id="${id}File" type="file" accept="image/*" hidden></div>
+    <div class="small muted" id="${id}Msg"></div></div>`;
+}
+// bindPhoto wires a photoBox in the overlay ov; get / set read and store
+// the data: URL. Ctrl+V anywhere in that overlay pastes into it.
+function bindPhoto(id, ov, get, set) {
+  const show = () => {
+    const v = get(), img = $(id + 'Prev');
+    img.hidden = !v; img.src = v || ''; $(id + 'Del').hidden = !v;
+    $(id + 'Pick').textContent = v ? 'Replace…' : 'Choose file…';
+  };
+  const take = async (blob, how) => {
+    const msg = $(id + 'Msg');
+    try { set(await preparePhoto(blob)); msg.textContent = how ? 'Photo ' + how + '.' : ''; } catch (e) { msg.textContent = e.message; toast(e.message, { err: true }); }
+    show();
+  };
+  $(id + 'Pick').onclick = () => { $(id + 'File').value = ''; $(id + 'File').click(); };
+  $(id + 'File').onchange = (e) => { const f = e.target.files[0]; if (f) take(f, 'added'); };
+  $(id + 'Del').onclick = () => { set(''); $(id + 'Msg').textContent = ''; show(); };
+  $(id + 'Paste').onclick = async () => {
+    const msg = $(id + 'Msg');
+    try {
+      if (!navigator.clipboard || !navigator.clipboard.read) throw new Error('no clipboard');
+      for (const item of await navigator.clipboard.read()) {
+        const t = item.types.find((x) => x.startsWith('image/'));
+        if (t) { await take(await item.getType(t), 'pasted'); return; }
+      }
+      msg.textContent = 'The clipboard has no image: copy a photo first (or drop / choose a file).';
+    } catch {
+      msg.textContent = 'This browser does not let the page read the clipboard here: press Ctrl+V (⌘V on a Mac) instead, drop the file here, or choose it.';
+    }
+  };
+  const box = $(id + 'Box');
+  box.ondragover = (e) => { if (e.dataTransfer && [...e.dataTransfer.types].includes('Files')) { e.preventDefault(); box.classList.add('over'); } };
+  box.ondragleave = () => box.classList.remove('over');
+  box.ondrop = (e) => {
+    e.preventDefault(); box.classList.remove('over');
+    const f = e.dataTransfer && [...e.dataTransfer.files].find((x) => x.type.startsWith('image/'));
+    if (f) take(f, 'added'); else { $(id + 'Msg').textContent = 'Drop an image file (JPEG, PNG or WebP).'; }
+  };
+  S.photoTargets = S.photoTargets || {};
+  S.photoTargets[ov] = (blob) => take(blob, 'pasted');
+  show();
+}
+// Ctrl+V with an image on the clipboard goes to the photo of the open
+// dialog (unless the text cursor is in a field and there is text to paste).
+document.addEventListener('paste', (e) => {
+  const ov = ['sheetView', 'repView', 'batchView'].find((v) => !$(v).hidden);
+  const target = ov && S.photoTargets && S.photoTargets[ov];
+  if (!target || !$(ov).querySelector('.photorow') || !e.clipboardData) return;
+  const items = [...e.clipboardData.items];
+  const img = items.find((i) => i.kind === 'file' && i.type.startsWith('image/'));
+  if (!img) return;
+  const typing = /INPUT|TEXTAREA/.test((document.activeElement || {}).tagName || '') && items.some((i) => i.type === 'text/plain');
+  if (typing) return;
+  e.preventDefault();
+  target(img.getAsFile());
+});
+// linkField is the "Product / source link" input: http(s) only, checked
+// as it is typed (the server checks it again and removes tracking
+// parameters).
+function linkField(id, value) {
+  return `<label class="wide linkfield">Product / source link (optional)<input id="${id}" type="url" inputmode="url" maxlength="2000" placeholder="https://… (shop or datasheet page)" value="${esc(value || '')}">
+    <span class="small muted" id="${id}Msg">Printed as a short address and a QR code; never opened by EasyVNA Web.</span></label>`;
+}
+function linkOK(v) { v = (v || '').trim(); return !v || /^https?:\/\/[^\s/?#]+/i.test(v); }
+function bindLink(id) {
+  const inp = $(id), msg = $(id + 'Msg'), def = msg.textContent;
+  inp.oninput = () => { const ok = linkOK(inp.value); inp.classList.toggle('bad', !ok); msg.textContent = ok ? def : 'Only web addresses starting with http:// or https:// are accepted.'; msg.classList.toggle('badtxt', !ok); };
+}
+function linkValue(id) {
+  const v = $(id).value.trim();
+  if (!linkOK(v)) throw new Error('the link must be a web address starting with http:// or https://');
+  return v;
+}
+function linkHTML(link, text) {
+  return link ? `<a href="${esc(link)}" target="_blank" rel="noopener noreferrer">${esc(text || link)}</a>` : '';
 }
 function sheetFill(a) {
   for (const [k] of SHEET_TEXT) $('sh_' + k).value = a[k] ? String(a[k]) : '';
   if (!a.band) $('sh_band').value = sheetBand();
   $('sh_notes').value = a.notes || '';
+  $('sh_link').value = a.link || ''; $('sh_link').oninput && $('sh_link').oninput();
   S.sheetPhoto = a.photo || '';
-  const img = $('shPhotoPrev'); img.hidden = !S.sheetPhoto; img.src = S.sheetPhoto || '';
-  $('shPhotoDel').hidden = !S.sheetPhoto;
+  if ($('shPhotoBox')) bindPhoto('shPhoto', 'sheetView', () => S.sheetPhoto, (v) => { S.sheetPhoto = v; });
 }
 function sheetCollect() {
-  const a = { name: $('sh_name').value.trim(), notes: $('sh_notes').value, photo: S.sheetPhoto || '' };
+  const a = { name: $('sh_name').value.trim(), notes: $('sh_notes').value, photo: S.sheetPhoto || '', link: linkValue('sh_link') };
   for (const [k] of SHEET_TEXT) a[k] = $('sh_' + k).value.trim();
   a.lengthMm = Number(a.lengthMm) || 0;
   if (!a.name) throw new Error('give the antenna a name (the only required field)');
@@ -1419,8 +1534,8 @@ async function openSheet() {
       <label class="wide">Antenna name / ID *<input id="sh_name" list="antNames" maxlength="80" required value="${esc(name)}" placeholder="e.g. whip-A or SN 0042"></label>
       ${SHEET_TEXT.map(([k, l, dl]) => `<label>${l}<input id="sh_${k}" ${dl ? `list="${dl}"` : ''} ${k === 'lengthMm' ? 'type="number" min="0" step="0.1"' : 'maxlength="120"'}></label>`).join('')}
       <label class="wide">Notes<textarea id="sh_notes" maxlength="2000" placeholder="e.g. 3D-printed enclosure, measured in free air 1 m above the bench"></textarea></label>
-      <div class="wide photorow"><label>Photo (optional)<input id="sh_photo" type="file" accept="image/*"></label>
-        <img id="shPhotoPrev" alt="Antenna photo" hidden><button id="shPhotoDel" class="ghost small" type="button" hidden>Remove photo</button></div>
+      ${linkField('sh_link')}
+      <div class="wide">${photoBox('shPhoto')}</div>
     </div>
     <div class="stepsub muted" id="shKnown"></div>
     <div class="row"><button id="shPrint" class="primary bigbtn" type="button">Print sheet</button>
@@ -1430,12 +1545,7 @@ async function openSheet() {
   sheetFill({});
   if (name) await sheetLoad(name, false);
   $('sh_name').onchange = () => run(() => sheetLoad($('sh_name').value.trim(), true));
-  $('sh_photo').onchange = (e) => run(async () => {
-    const f = e.target.files[0]; if (!f) return;
-    S.sheetPhoto = await downscalePhoto(f);
-    const img = $('shPhotoPrev'); img.src = S.sheetPhoto; img.hidden = false; $('shPhotoDel').hidden = false;
-  });
-  $('shPhotoDel').onclick = () => { S.sheetPhoto = ''; $('shPhotoPrev').hidden = true; $('shPhotoDel').hidden = true; $('sh_photo').value = ''; };
+  bindLink('sh_link');
   const make = async () => { const a = sheetCollect(); S.sheetName = a.name; return api('POST', 'api/sheet', { antenna: a }); };
   $('shPrint').onclick = () => run(async () => {
     const w = window.open('', '_blank');
@@ -1596,12 +1706,18 @@ async function renderBatchHome() {
       <label>Element length (mm, optional)<input id="bnLen" type="number" min="0" step="0.1" placeholder="for trim advice in mm"></label>
       <label>Learnt MHz/mm from trim log (optional)<select id="bnTrim"><option value="">none</option>${S.trimList.map((t) => `<option>${esc(t.name)}</option>`).join('')}</select></label>
       <label class="wide">Notes<textarea id="bnNotes" maxlength="2000" placeholder="e.g. 25 pcs bought 2026-10, measured in free air on a 10 cm RG316 pigtail"></textarea></label>
+      ${linkField('bnLink')}
+      <div class="wide">${photoBox('bnPhoto', 'Photo of the lot (optional)')}</div>
     </div>
     <div class="row"><button id="bnGo" class="primary bigbtn" type="button" ${okProf ? '' : 'disabled'}>Start batch</button>
       <button id="bnImport" class="ghost" type="button">Import a batch (JSON)</button></div>`;
+  S.bnPhoto = '';
+  bindLink('bnLink');
+  bindPhoto('bnPhoto', 'batchView', () => S.bnPhoto, (v) => { S.bnPhoto = v; });
   $('bnGo').onclick = () => run(async () => {
     const len = parseFloat($('bnLen').value);
-    S.batch = await api('POST', 'api/batches', { name: $('bnName').value.trim(), notes: $('bnNotes').value, lengthMm: len > 0 ? len : 0, trim: $('bnTrim').value });
+    S.batch = await api('POST', 'api/batches', { name: $('bnName').value.trim(), notes: $('bnNotes').value, lengthMm: len > 0 ? len : 0, trim: $('bnTrim').value,
+      link: linkValue('bnLink'), photo: S.bnPhoto || '' });
     S.batchKey = ''; renderBatch();
     toast('Batch started: connect the first antenna and tap Capture');
   });
@@ -1667,7 +1783,8 @@ function renderBatch() {
   const tcls = !n ? '' : sm.tuned === n ? 'good' : sm.bad ? 'bad' : 'ok';
   $('batchBody').innerHTML = `<div class="bhead"><div style="flex:1;min-width:260px">
       <input id="bvName" class="bname" value="${esc(b.name)}" maxlength="80" aria-label="Batch name" title="Click to rename">
-      <div class="stepsub">${esc(b.label)} · ${mhzR(b.start)}–${mhzR(b.stop)} MHz · target <b>${mhz(b.target)} MHz ± ${tol.toFixed(2)}</b> (TUNE's ✓ on target)${b.lengthMm ? ` · element ${b.lengthMm} mm` : ''}${b.trim ? ` · MHz/mm from ${esc(b.trim)}` : ''}</div></div>
+      <div class="stepsub">${esc(b.label)} · ${mhzR(b.start)}–${mhzR(b.stop)} MHz · target <b>${mhz(b.target)} MHz ± ${tol.toFixed(2)}</b> (TUNE's ✓ on target)${b.lengthMm ? ` · element ${b.lengthMm} mm` : ''}${b.trim ? ` · MHz/mm from ${esc(b.trim)}` : ''}${b.link ? ' · ' + linkHTML(b.link, b.linkText) : ''}</div></div>
+    ${b.photo ? `<img class="bphoto" src="${esc(b.photo)}" alt="Photo of the lot">` : ''}
     <div class="row"><button id="bvSheet" class="primary" type="button" ${n ? '' : 'disabled'} title="One printable page: Ctrl+P here does the same">Batch sheet</button>
       <a class="btn ghost small" href="api/batches/${encodeURIComponent(b.id)}/csv" download>CSV</a>
       <a class="btn ghost small" href="api/batches/${encodeURIComponent(b.id)}/json" download>JSON</a>
@@ -1691,9 +1808,18 @@ function renderBatch() {
       <div class="small muted">${esc(sm.slope)}. ◆ = statistical outlier for that figure (|x − median| &gt; 3.5 × 1.4826 × MAD, from 3 antennas on): unlike the rest of the lot, which is not the same as off target.</div>` : '<div class="empty">No antenna yet: connect the first one and tap <b>Capture #1</b>.</div>'}
     <h3 style="margin:4px 0 0">Lot statistics</h3>
     <div class="bwrap"><table class="bstats"><thead><tr><th>Statistic</th><th class="num">n</th><th class="num">mean</th><th class="num">SD</th><th class="num">min</th><th class="num">max</th><th class="num">spread</th><th>outliers</th></tr></thead><tbody>${stats}</tbody></table></div>
-    <label class="stepsub">Notes<textarea id="bvNotes" maxlength="2000">${esc(b.notes || '')}</textarea></label>`;
+    <label class="stepsub">Notes<textarea id="bvNotes" maxlength="2000">${esc(b.notes || '')}</textarea></label>
+    <details class="panel" id="bvMore"><summary>Photo &amp; link of the lot</summary><div class="sheetform">${linkField('bvLink', b.link)}<div class="wide">${photoBox('bvPhoto', 'Photo of the lot (optional)')}</div></div>
+      <div class="row"><button id="bvMoreSave" class="primary" type="button">Save photo &amp; link</button></div></details>`;
   const bid = encodeURIComponent(b.id);
   $('bvName').onchange = () => run(async () => { S.batch = await api('PUT', 'api/batches/' + bid, { name: $('bvName').value }); toast('Batch renamed'); renderTiles(); });
+  S.bvPhoto = b.photo || '';
+  bindLink('bvLink');
+  bindPhoto('bvPhoto', 'batchView', () => S.bvPhoto, (v) => { S.bvPhoto = v; });
+  $('bvMoreSave').onclick = () => run(async () => {
+    S.batch = await api('PUT', 'api/batches/' + bid, { link: linkValue('bvLink'), photo: S.bvPhoto || '' });
+    S.batchKey = ''; renderBatch(); toast('Photo and link saved');
+  });
   $('bvNotes').onchange = () => run(async () => { S.batch = await api('PUT', 'api/batches/' + bid, { notes: $('bvNotes').value }); toast('Notes saved'); });
   $('bvCapture').onclick = () => run(batchCapture);
   $('bvAuto').onclick = () => run(async () => {

@@ -78,6 +78,10 @@ type reportData struct {
 	Warnings  []rf.Warning
 	Batch     *BatchView    // BATCH: statistics of a lot (optional)
 	BatchPlot template.HTML // its resonance strip
+	Photo     string        // the antenna's photo (data: URL, checked)
+	Link      string        // its product / source link (clean)
+	LinkText  string
+	QR        template.HTML
 }
 
 var verdictLabel = map[string]string{"good": "PASS", "ok": "OK", "bad": "FAIL"}
@@ -139,7 +143,9 @@ var reportFuncs = template.FuncMap{
 	},
 }
 
-var reportTmpl = template.Must(template.Must(template.New("report").Funcs(reportFuncs).Funcs(batchFuncs).Parse(batchStatsHTML)).Parse(reportHTML))
+var reportTmpl = template.Must(template.Must(template.New("report").Funcs(reportFuncs).Funcs(batchFuncs).Funcs(template.FuncMap{
+	"photo": func(s string) template.URL { return template.URL(s) }, // checked by checkPhoto
+}).Parse(batchStatsHTML)).Parse(reportHTML))
 
 // refName names the REF of a comparison: its file, or when it was stored.
 func refName(d *rf.RefDelta) string {
@@ -211,10 +217,13 @@ func verdictClass(v string) string {
 }
 
 // buildReport assembles the report for the chosen profiles.
-func (s *Server) buildReport(id, name, notes string, profiles []string, trimName string, hist []HistoryEntry, batch *Batch) ([]byte, []HistoryEntry, error) {
+func (s *Server) buildReport(id, name, notes string, profiles []string, trimName string, hist []HistoryEntry, batch *Batch, ant *AntennaInfo) ([]byte, []HistoryEntry, error) {
 	var logged []HistoryEntry
 	s.mu.Lock()
 	d := reportData{ReportID: id, Name: name, Notes: notes, Generated: time.Now()}
+	if ant != nil {
+		d.Photo, d.Link, d.LinkText, d.QR = ant.Photo, ant.Link, LinkText(ant.Link), qrSVG(ant.Link, 22)
+	}
 	if s.info != nil {
 		d.Device = s.info.Model
 		d.Firmware = s.info.Version
@@ -463,8 +472,10 @@ func (s *Server) hReport(w http.ResponseWriter, r *http.Request) {
 		Profiles []string `json:"profiles"`
 		Trim     string   `json:"trim"`
 		Batch    string   `json:"batch"`
+		Photo    *string  `json:"photo"` // the antenna's photo and link, remembered in its record
+		Link     *string  `json:"link"`
 	}
-	if err := readJSON(r, &req); err != nil {
+	if err := readJSONMax(r, &req, maxPhotoBytes+(64<<10)); err != nil {
 		writeErr(w, 400, err)
 		return
 	}
@@ -482,8 +493,32 @@ func (s *Server) hReport(w http.ResponseWriter, r *http.Request) {
 		s.mu.Unlock()
 	}
 	var hist []HistoryEntry
+	var ant *AntennaInfo
 	if a, err := s.store.LoadAntenna(name); err == nil {
-		hist = a.History
+		hist, ant = a.History, a
+	}
+	if req.Photo != nil || req.Link != nil {
+		a := &AntennaInfo{Name: name}
+		if ant != nil {
+			c := *ant
+			a = &c
+		}
+		if req.Photo != nil {
+			a.Photo = *req.Photo
+		}
+		if req.Link != nil {
+			a.Link = *req.Link
+		}
+		if err := a.clean(); err != nil {
+			writeErr(w, 400, err)
+			return
+		}
+		a.Updated = time.Now()
+		if err := s.store.SaveAntenna(a); err != nil {
+			writeErr(w, 500, err)
+			return
+		}
+		ant = a
 	}
 	var batch *Batch
 	if req.Batch != "" {
@@ -492,7 +527,7 @@ func (s *Server) hReport(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	html, logged, err := s.buildReport(strings.TrimSuffix(file, ".html"), name, req.Notes, req.Profiles, req.Trim, hist, batch)
+	html, logged, err := s.buildReport(strings.TrimSuffix(file, ".html"), name, req.Notes, req.Profiles, req.Trim, hist, batch, ant)
 	if err != nil {
 		writeErr(w, 409, err)
 		return

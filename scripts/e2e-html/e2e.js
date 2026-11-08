@@ -39,6 +39,37 @@ const PAGE_SHA = sha(fs.readFileSync(HTML));
 // A small PNG "photo" for the antenna sheet.
 const PHOTO = path.join(TMP, 'antenna.png');
 fs.writeFileSync(PHOTO, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAADAAAAAgCAIAAADbtmxLAAAAWElEQVR42mN8+OIDw2ACTAyDDAw6B7FQboS7gwWcvfPAidEoG3XQqINGHTTqoFEHjTpo1EGjDhp10KiDRh00qB3EiL/nalu0gRa2Hu4LGI2ykZKGRkOIAQC8qw5rNf7LwwAAAABJRU5ErkJggg==', 'base64'));
+const PHOTO_B64 = fs.readFileSync(PHOTO).toString('base64');
+const AMAZON = 'https://www.amazon.fr/Antenne-LoRa-868MHz/dp/B0C1234567/ref=sr_1_3?crid=2X&keywords=lora+antenna&qid=1730000000&sr=8-3&tag=abcd-21&th=1';
+const AMAZON_CLEAN = 'https://www.amazon.fr/dp/B0C1234567?tag=abcd-21';
+// pasteImage fires Ctrl+V with an image on the clipboard (a synthetic
+// ClipboardEvent), as when a photo is pasted from another program.
+async function pasteImage(page, b64) {
+  await page.evaluate((b) => {
+    const bin = Uint8Array.from(atob(b), (c) => c.charCodeAt(0));
+    const dt = new DataTransfer(); dt.items.add(new File([bin], 'clip.png', { type: 'image/png' }));
+    if (document.activeElement) document.activeElement.blur();
+    document.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
+  }, b64);
+}
+// dropBigImage drops a 2400 × 1800 PNG (a phone-size photo) on sel.
+async function dropBigImage(page, sel) {
+  await page.evaluate(async (s) => {
+    const c = document.createElement('canvas'); c.width = 2400; c.height = 1800;
+    const x = c.getContext('2d');
+    for (let i = 0; i < 600; i++) { x.fillStyle = `hsl(${(i * 37) % 360},70%,${30 + (i % 40)}%)`; x.fillRect((i * 97) % 2400, (i * 53) % 1800, 160, 120); }
+    const blob = await new Promise((r) => c.toBlob(r, 'image/png'));
+    const dt = new DataTransfer(); dt.items.add(new File([blob], 'phone.png', { type: 'image/png' }));
+    const el = document.querySelector(s);
+    el.dispatchEvent(new DragEvent('dragover', { dataTransfer: dt, bubbles: true, cancelable: true }));
+    el.dispatchEvent(new DragEvent('drop', { dataTransfer: dt, bubbles: true, cancelable: true }));
+  }, sel);
+}
+const photoInfo = (page, expr) => page.evaluate(async (e) => {
+  const src = eval(e); if (!src) return null; // eslint-disable-line no-eval
+  const i = new Image(); i.src = src; await i.decode();
+  return { w: i.naturalWidth, h: i.naturalHeight, type: src.slice(5, src.indexOf(';')), len: src.length };
+}, expr);
 // Hand-written measurement files (the Go parser tests use them too).
 const FIXTURES = path.resolve(__dirname, '..', '..', 'internal', 'rf', 'testdata');
 const pdfPages = (buf) => (buf.toString('latin1').match(/\/Type\s*\/Page[^s]/g) || []).length;
@@ -316,10 +347,41 @@ async function demoFlow(browser, base, label, shots) {
     await page.fill('#sh_lengthMm', '81');
     await page.fill('#sh_cable', 'RG316, 10 cm');
     await page.fill('#sh_notes', 'e2e sheet. '.repeat(80));
-    await page.setInputFiles('#sh_photo', PHOTO);
+    // Photo: paste (Ctrl+V), remove, drop a phone-size picture, choose a file, "Paste image".
+    await pasteImage(page, PHOTO_B64);
     await page.waitForSelector('#shPhotoPrev:not([hidden])');
-    const photo = await page.evaluate(() => S.sheetPhoto);
-    check(`${label}: photo downscaled to a JPEG data URL`, photo.startsWith('data:image/jpeg;base64,'));
+    let pi = await photoInfo(page, 'S.sheetPhoto');
+    check(`${label}: Ctrl+V pastes a photo (a small PNG is kept as it is)`, pi && pi.type === 'image/png' && pi.w === 48, JSON.stringify(pi));
+    await page.click('#shPhotoDel');
+    check(`${label}: Remove clears the photo`, await page.evaluate(() => !S.sheetPhoto && document.getElementById('shPhotoPrev').hidden));
+    await dropBigImage(page, '#shPhotoBox');
+    await page.waitForSelector('#shPhotoPrev:not([hidden])');
+    pi = await photoInfo(page, 'S.sheetPhoto');
+    check(`${label}: a dropped 2400 × 1800 picture is stored as a JPEG of at most 1600 px`, pi && pi.type === 'image/jpeg' && pi.w === 1600 && pi.h === 1200, JSON.stringify(pi));
+    await page.setInputFiles('#shPhotoFile', PHOTO);
+    await page.waitForFunction(() => S.sheetPhoto.startsWith('data:image/png'), null, { timeout: 10000 });
+    check(`${label}: Replace… chooses a file`, (await page.textContent('#shPhotoPick')) === 'Replace…');
+    if (label === 'http') {
+      await ctx.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: new URL(base).origin });
+      await page.evaluate(async (b) => { const bin = Uint8Array.from(atob(b), (c) => c.charCodeAt(0)); await navigator.clipboard.write([new ClipboardItem({ 'image/png': new Blob([bin], { type: 'image/png' }) })]); }, PHOTO_B64);
+      await page.click('#shPhotoDel');
+      await page.click('#shPhotoPaste');
+      await page.waitForFunction(() => !!S.sheetPhoto, null, { timeout: 10000 });
+      check(`${label}: "Paste image" reads the clipboard (permission granted)`, /pasted/.test(await page.textContent('#shPhotoMsg')));
+    } else {
+      await page.click('#shPhotoPaste');
+      await page.waitForFunction(() => /Ctrl\+V|no image/.test(document.getElementById('shPhotoMsg').textContent), null, { timeout: 10000 });
+      check(`${label}: "Paste image" without clipboard access explains Ctrl+V / drop / choose`, true);
+    }
+    // Link: javascript: refused as typed and on print; an Amazon link is cleaned.
+    await page.fill('#sh_link', 'javascript:alert(1)');
+    check(`${label}: a javascript: link is flagged as typed`, await page.evaluate(() => document.getElementById('sh_link').classList.contains('bad') && /http:\/\/ or https:\/\//.test(document.getElementById('sh_linkMsg').textContent)));
+    const pages0 = ctx.pages().length;
+    await page.click('#shPrint');
+    await page.waitForFunction(() => /http:\/\/ or https:\/\//.test(document.getElementById('toastText').textContent), null, { timeout: 10000 });
+    await page.waitForTimeout(300);
+    check(`${label}: a javascript: link is refused (no sheet)`, ctx.pages().length === pages0 && !(await page.isHidden('#sheetView')));
+    await page.fill('#sh_link', AMAZON);
     if (shots) await shot(page, 'html-sheet-dialog.png', false);
     const [sp] = await Promise.all([ctx.waitForEvent('page', { timeout: 20000 }), page.click('#shPrint')]);
     await sp.waitForURL(/#print$/, { timeout: 20000 });
@@ -331,6 +393,13 @@ async function demoFlow(browser, base, label, shots) {
     const txt = await sp.textContent('.sheet');
     check(`${label}: sheet opens and prints by itself, with all 4 graphs`, plots.every((n) => n > 0) && /whip-e2e/.test(txt) && /SWR band centre/.test(txt) && /Trim log/.test(txt) && (await sp.$('.photo img')) !== null,
       JSON.stringify(plots));
+    const lk = await sp.evaluate(() => { const a = document.querySelector('a.link'); return a ? [a.getAttribute('href'), a.textContent, a.target, a.rel] : null; });
+    check(`${label}: sheet link: tracking removed, tag kept, short text, new tab without opener`, !!lk && lk[0] === AMAZON_CLEAN && lk[1] === 'amazon.fr/dp/B0C1234567?tag=abcd-21' &&
+      lk[2] === '_blank' && /noopener/.test(lk[3]) && /noreferrer/.test(lk[3]), JSON.stringify(lk));
+    await sp.emulateMedia({ media: 'print' });
+    const qr = await sp.evaluate(() => { const q = document.querySelector('svg.qr'); if (!q) return null; const r = q.getBoundingClientRect(); return [r.width, q.querySelector('path').getAttribute('d').length]; });
+    check(`${label}: QR code of the link is printed`, !!qr && qr[0] > 60 && qr[1] > 200, JSON.stringify(qr));
+    await sp.emulateMedia({ media: 'screen' });
     for (const paper of ['a4', 'letter']) {
       await sp.evaluate((p) => setPaper(p, false), paper);
       await sp.emulateMedia({ media: 'print' });
@@ -343,7 +412,8 @@ async function demoFlow(browser, base, label, shots) {
     // Save as HTML, then the fields come back for the same name.
     await page.click('#aPrint');
     await page.waitForSelector('#sh_name');
-    check(`${label}: sheet fields remembered for the antenna`, (await page.inputValue('#sh_connector')) === 'SMA male' && (await page.evaluate(() => !!S.sheetPhoto)));
+    check(`${label}: sheet fields remembered for the antenna (link and photo too)`, (await page.inputValue('#sh_connector')) === 'SMA male' && (await page.evaluate(() => !!S.sheetPhoto)) &&
+      (await page.inputValue('#sh_link')) === AMAZON_CLEAN);
     const dl = await download(page, () => page.click('#shSave'));
     check(`${label}: Save sheet (HTML)`, /^whip-e2e-sheet-\d{8}-\d{6}\.html$/.test(dl.name) && /Antenna sheet/.test(dl.body.toString()), dl.name);
     await page.click('#shCancel');
@@ -353,12 +423,16 @@ async function demoFlow(browser, base, label, shots) {
     await page.waitForSelector('#repGo');
     check(`${label}: report dialog says where it is saved`, /saved in this browser/.test(await page.textContent('#repBody')));
     await page.fill('#repName', 'whip-e2e');
+    await page.dispatchEvent('#repName', 'change');
+    await page.waitForFunction(() => document.getElementById('repLink').value !== '' && !document.getElementById('repPhotoPrev').hidden, null, { timeout: 10000 });
+    check(`${label}: report dialog shows the antenna's photo and link`, (await page.inputValue('#repLink')) === AMAZON_CLEAN);
     await page.selectOption('#repTrim', 'whip-e2e');
     const [rp] = await Promise.all([ctx.waitForEvent('page', { timeout: 20000 }), page.click('#repGo')]);
     await rp.waitForURL(/^blob:/, { timeout: 20000 });
     await rp.waitForSelector('.paper', { timeout: 10000 });
     const txt = await rp.textContent('body');
     check(`${label}: report opens as a blob page, with the R/X plot`, rp.url().startsWith('blob:') && /whip-e2e/.test(txt) && (await rp.$('svg.z')) !== null, rp.url());
+    check(`${label}: report has the photo, the link and its QR code`, (await rp.$('.photo img')) !== null && (await rp.$('svg.qr')) !== null && /amazon\.fr\/dp\/B0C1234567\?tag=abcd-21/.test(txt));
     await rp.click('.paperpick button[value=letter]');
     const letter = await rp.evaluate(() => document.documentElement.classList.contains('letter'));
     await rp.click('.paperpick button[value=a4]');
@@ -497,10 +571,15 @@ async function batchFlow(browser, base, label, shots) {
     await page.fill('#bnName', '869 whip lot A');
     await page.fill('#bnLen', '82');
     await page.fill('#bnNotes', 'e2e lot: 25 pcs bought 2026-10.');
+    await page.fill('#bnLink', 'https://www.aliexpress.com/item/1005006123456789.html?spm=a2g0o.x&algo_pvid=y&aff_fcid=f1&sk=s4');
+    await pasteImage(page, PHOTO_B64);
+    await page.waitForSelector('#bnPhotoPrev:not([hidden])');
     await page.click('#bnGo');
     await page.waitForSelector('#bvCapture', { timeout: 10000 });
     id = await page.evaluate(() => S.batch.id);
     const s = await st(page);
+    check(`${label}: batch keeps its photo and cleaned link`, await page.evaluate(() => S.batch.photo.startsWith('data:image/png') &&
+      S.batch.link === 'https://www.aliexpress.com/item/1005006123456789.html?aff_fcid=f1&sk=s4' && !!document.querySelector('.bhead a[target=_blank][rel~=noopener]')));
     check(`${label}: batch created and active, tile shows it`, s.batch.active === id && /869 whip lot A/.test(await page.textContent('#aBatch')) && /Capture #1/.test(await page.textContent('#bvCapture')));
   });
   await step(`${label}: capture varied antennas`, async () => {
@@ -598,6 +677,7 @@ async function batchFlow(browser, base, label, shots) {
     const svg = await sp.evaluate(() => [document.querySelectorAll('svg.overlay polyline').length, document.querySelectorAll('svg.spread circle, svg.spread path').length]);
     check(`${label}: batch sheet opens and prints, with overlay, spread chart, tables and conclusion`, /869 whip lot A/.test(txt) && /tuned \(± 1\.30 MHz\)/.test(txt) && /Lot statistics/.test(txt) &&
       /SN 0042/.test(txt) && /(Systematic offset|On target on average|On average)/.test(txt) && svg[0] >= 8 && svg[1] >= 8 && (await sp.$('td.out')) !== null, JSON.stringify(svg));
+    check(`${label}: batch sheet has the lot's photo, link and QR code`, (await sp.$('.photo img')) !== null && (await sp.$('svg.qr')) !== null && /aliexpress\.com\/item\/1005006123456789\.html\?aff_fcid=f1&sk=s4/.test(txt));
     for (const paper of ['a4', 'letter']) {
       await sp.evaluate((p) => setPaper(p, false), paper);
       await sp.emulateMedia({ media: 'print' });

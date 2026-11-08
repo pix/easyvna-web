@@ -284,7 +284,10 @@ It contains:
 * vector SWR, return-loss and Smith plots;
 * resonances, the trim log, HOLD positions and S21 results, each only if
   there is data;
-* your notes, and *page X of Y* on every page.
+* your notes, and *page X of Y* on every page;
+* the antenna's photo, link and its QR code (as on the antenna sheet; set
+  in the REPORT dialog, remembered with the antenna), and a batch's
+  statistics when you pick one.
 
 Pick **A4** or **Letter** in the report toolbar. The default follows your
 browser's language (Letter for the US, Canada, Mexico…) and your last choice
@@ -298,7 +301,16 @@ antenna fits on two pages. See the A4 sample:
 
 **PRINT** makes a one-page datasheet for the antenna you just measured.
 Give it a name; type, band, connector, length, ground plane, cable, maker,
-owner, notes and a photo are optional. They are remembered for that name.
+owner, notes, a product or source link and a photo are optional. They are
+remembered for that name. Add the photo by pasting it (**Ctrl+V**, or
+**Paste image** where the browser allows it), dropping a file on it, or
+choosing one; large phone photos are reduced to 1600 px (JPEG) before
+they are stored. The link must be an `http://` or `https://` address;
+tracking parameters (`ref=`, `utm_*`, `qid`, …) are removed, an Amazon
+product link is shortened to `/dp/<ASIN>` (its `tag` parameter is kept
+from the pasted link), and nothing is ever added. The sheet shows it as a
+short address and a **QR code** so it can be scanned from paper;
+EasyVNA Web never opens the link itself.
 The sheet has the verdict, the key figures (resonance, SWR at the band
 centre and edges, worst in-band SWR, bandwidth, return and mismatch loss,
 impedance, Q) and the SWR, Smith, return-loss and impedance graphs, with

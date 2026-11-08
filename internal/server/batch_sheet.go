@@ -46,9 +46,10 @@ type batchSheetData struct {
 	Dates     string
 	Overlay   template.HTML
 	Spread    template.HTML
+	QR        template.HTML
 	Rows      []batchRow
 	Halves    [][]batchRow // compact: the rows in two side-by-side tables
-	Size      string       // "", "compact" (15-40 antennas: two narrower tables), "long" (over 40: the table continues on a second page)
+	Size      string       // "", "compact" (11-40 antennas: two narrower tables), "long" (over 40: the table continues on a second page)
 	Legend    []string
 }
 
@@ -132,7 +133,7 @@ func overlaySVG(v BatchView, wmm, hmm float64) template.HTML {
 		env = &svgEnv{Min: v.EnvMin, Max: v.EnvMax, Fill: svgLotEnv}
 	}
 	label15 := "SWR 1.5"
-	if hmm < 40 {
+	if hmm <= 40 {
 		label15 = "" // no room between the two lines
 	}
 	title := fmt.Sprintf("SWR of the %d antennas", len(v.Antennas))
@@ -303,21 +304,22 @@ func (s *Server) buildBatchSheet(id string, b *Batch) ([]byte, error) {
 			d.Dates += " – " + sm.Last.Format("2006-01-02 15:04")
 		}
 	}
+	d.QR = qrSVG(c.Link, 20)
 	d.Rows = batchRows(d.V)
 	switch n := len(d.Rows); {
 	case n > 40:
 		d.Size = "long"
-	case n > 14:
+	case n > 10:
 		d.Size = "compact"
 		h := (n + 1) / 2
 		d.Halves = [][]batchRow{d.Rows[:h], d.Rows[h:]}
 	}
-	h := 44.0
+	h := 40.0
 	if d.Size != "" {
 		h = 36
 	}
 	d.Overlay = overlaySVG(d.V, 190, h)
-	d.Spread = spreadSVG(d.V, 190, 25)
+	d.Spread = spreadSVG(d.V, 190, 24)
 	d.Legend = []string{"— each antenna", "shaded: min / max of the lot", "- - target"}
 	for _, a := range d.V.Antennas {
 		if len(a.Metrics.Outliers) > 0 {
@@ -372,13 +374,21 @@ const batchSheetHTML = `<!doctype html>
 body { font: 8.3pt/1.28 Helvetica, Arial, "Segoe UI", sans-serif; }
 .paper { padding: 9mm 10mm; }
 .sheet { display: flex; flex-direction: column; gap: 2mm; }
-.sh { display: grid; grid-template-columns: 1fr auto; gap: 4mm; border-bottom: .6mm solid var(--ink); padding-bottom: 1.8mm; }
+.sh { display: grid; grid-template-columns: 1fr auto; gap: 3mm; border-bottom: .6mm solid var(--ink); padding-bottom: 1.8mm; }
 .kicker { font-size: 7.5pt; letter-spacing: .14em; text-transform: uppercase; color: var(--muted); font-weight: 700; }
 h1 { font-size: 18pt; line-height: 1.05; margin: .5mm 0 1mm; overflow-wrap: anywhere; }
 .meta { display: grid; grid-template-columns: auto 1fr auto 1fr; gap: .3mm 3mm; font-size: 7.4pt; }
 .meta dt { color: var(--muted); } .meta dd { margin: 0; }
 .calbad { color: var(--fail); font-weight: 700; } .calok { color: var(--pass); }
 .sim { display: inline-block; font-size: 7pt; font-weight: 700; letter-spacing: .08em; padding: .2mm 1.5mm; border: .3mm solid var(--ok); color: var(--ok); border-radius: 1mm; margin-left: 2mm; vertical-align: middle; }
+.side { display: flex; gap: 2mm; align-items: flex-start; }
+.photo { width: 34mm; height: 25mm; border: .3mm solid var(--line); border-radius: 1mm; overflow: hidden; display: flex; align-items: center; justify-content: center; background: var(--soft); }
+.photo img { max-width: 100%; max-height: 100%; display: block; }
+.qrbox { display: flex; flex-direction: column; align-items: center; gap: .5mm; width: 24mm; }
+.qrbox svg { display: block; }
+a.link { font-size: 6pt; line-height: 1.2; color: var(--ink2); text-decoration: none; overflow-wrap: anywhere; text-align: center; }
+@media screen { a.link { color: #1d4f91; text-decoration: underline; } }
+.sumrow { display: grid; grid-template-columns: auto 1fr; gap: 2.5mm; align-items: stretch; }
 .tally { border: .3mm solid var(--line); border-left: 2mm solid var(--na); border-radius: 1.5mm; padding: 1.6mm 2.4mm; min-width: 36mm; display: flex; flex-direction: column; justify-content: center; }
 .tally.good { border-left-color: var(--pass); } .tally.ok { border-left-color: var(--ok); } .tally.bad { border-left-color: var(--fail); }
 .tally b { font-size: 20pt; font-weight: 800; line-height: 1; font-variant-numeric: tabular-nums; }
@@ -442,13 +452,16 @@ td.lbl { max-width: 30mm; overflow: hidden; text-overflow: ellipsis; }
       <dt>Calibration</dt><dd style="grid-column: span 3" class="{{if .V.Summary.CalOK}}calok{{else}}calbad{{end}}">{{.V.Summary.CalNote}}{{if .Device}} · {{.Device}}{{end}}</dd>
     </dl>
   </div>
+  {{if or .V.Photo .QR}}<div class="side">{{if .V.Photo}}<div class="photo"><img src="{{.V.Photo | photo}}" alt="Photo of {{.V.Name}}"></div>{{end}}{{if .QR}}<div class="qrbox">{{.QR}}<a class="link" href="{{.V.Link}}" target="_blank" rel="noopener noreferrer">{{.V.LinkText}}</a></div>{{end}}</div>{{end}}
+</header>
+
+<div class="sumrow">
   <div class="tally {{if eq .V.Summary.Tuned (len .V.Antennas)}}good{{else if .V.Summary.Bad}}bad{{else}}ok{{end}}">
     <b>{{.V.Summary.Tuned}} / {{len .V.Antennas}}</b><span>tuned (± {{.Tol}} MHz)</span>
     <span class="yield">PASS {{index .V.Summary.Yield "good"}} · OK {{index .V.Summary.Yield "ok"}} · FAIL {{index .V.Summary.Yield "bad"}}</span>
   </div>
-</header>
-
 <section class="concl" aria-label="Conclusion">{{range .V.Summary.Conclusion}}<p>{{.}}</p>{{end}}<p class="tl">{{.V.Summary.TuningLine}}.</p></section>
+</div>
 
 <div>{{.Overlay}}</div>
 <div>{{.Spread}}</div>
@@ -491,4 +504,6 @@ var batchFuncs = template.FuncMap{
 	},
 }
 
-var batchSheetTmpl = template.Must(template.Must(template.New("batch").Funcs(reportFuncs).Funcs(batchFuncs).Parse(batchStatsHTML)).Parse(batchSheetHTML))
+var batchSheetTmpl = template.Must(template.Must(template.New("batch").Funcs(reportFuncs).Funcs(batchFuncs).Funcs(template.FuncMap{
+	"photo": func(s string) template.URL { return template.URL(s) }, // checked by checkPhoto
+}).Parse(batchStatsHTML)).Parse(batchSheetHTML))

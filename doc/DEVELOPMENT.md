@@ -168,13 +168,13 @@ use it.
 | `POST /api/ref`, `DELETE /api/ref`, `POST /api/ref/undo`, `GET /api/ref?profile=` | REF trace per profile |
 | `GET /api/trim`, `GET /api/trim/{name}`, `POST /api/trim/{name}/log {"lengthMm"} or {"cutMm"}`, `.../undo`, `.../target`, `.../select` | trim sessions |
 | `POST /api/compare {"on"}`, `POST /api/compare/a {"name"}`, `POST /api/compare/add {"name"}`, `POST /api/compare/undo`, `DELETE /api/compare` | S21 compare |
-| `POST /api/report {"name","profiles","trim","notes"}`, `GET /api/reports`, `GET /api/reports/{file}[?download=1]` | reports |
+| `POST /api/report {"name","profiles","trim","notes","batch","photo","link"}`, `GET /api/reports`, `GET /api/reports/{file}[?download=1]` | reports |
 | `POST /api/hold {"on"}` / `{"n"}` / `{"sensitivity"}` / `{"clear":true}` / `{"remove":id}` / `{"undo":true}`, `GET /api/hold` | HOLD stable positions |
 | `POST /api/mock/antenna {"name"}` | mock only: swap the simulated antenna |
 | `GET/POST /api/snapshots`, `GET/DELETE /api/snapshots/{name}` | snapshots |
 | `GET /api/cal`, `POST /api/cal/step/{reset,open,short,load,isoln,thru,done,on,off}`, `POST /api/cal/save {"slot"}`, `POST /api/cal/recall {"slot"}` | calibration |
 | `PUT /api/profiles/{id}/slot {"slot"}`, `POST /api/settings {"autoRecall"}` | settings |
-| `POST /api/sheet {"antenna":{name,type,band,connector,lengthMm,ground,cable,maker,owner,notes,photo}}` | one-page antenna sheet from the last sweep (saved with the reports); the antenna record is remembered |
+| `POST /api/sheet {"antenna":{name,type,band,connector,lengthMm,ground,cable,maker,owner,notes,link,photo}}` | one-page antenna sheet from the last sweep (saved with the reports); the antenna record is remembered |
 | `GET /api/antennas`, `GET /api/antennas/{name}` | remembered antenna records (`antennas/<name>.json`) |
 | `GET /api/antennas/{name}/history`, `POST /api/antennas/{name}/history` (log the current result), `POST .../history/undo`, `GET .../history.csv` | antenna history (kept in the antenna record) with the drift report |
 | `GET /api/batches`, `POST /api/batches {"name","notes","lengthMm","trim"}` (on the current band profile) | BATCH: list, create (and make it active) |
@@ -203,6 +203,8 @@ internal/vna/nanovnav2/      NanoVNA V2 / LiteVNA binary protocol driver (EXPERI
 internal/vna/mock/           byte-level shell and V2 simulators + multi-mode antenna model
 internal/serialport/         serial ports: termios (Linux/macOS), Win32 comm API (Windows);
                              detection via sysfs / registry / cu.usbmodem; busy-port check
+internal/qr/                 QR code encoder (byte mode, versions 1-40): the link's QR code on
+                             printed sheets, checked against libqrencode output in testdata/
 internal/server/             HTTP API, SSE hub, sweep loop, profiles, averaging, TUNE,
                              REF, trim, compare, report and antenna sheet (SVG), BATCH
                              (batch*.go: lots, tuning per antenna, statistics, sheet), store
@@ -276,7 +278,10 @@ profiles), sysfs detection with a fake tree, Windows registry detection
 with a fake registry (phantom ports, composite devices, COM10+), the
 per-OS data dir, port choice and port fallback, and the HTTP API end to end
 (profiles, cal, REF, TUNE/trim, HOLD, compare, report, snapshots, export,
-SSE, BATCH). BATCH has tests of the lot statistics and the outlier rule
+SSE, BATCH). Links: `CleanLink` (http/https only; tracking parameters
+removed; Amazon `/dp/<ASIN>` and the AliExpress parameters kept from the
+pasted link; nothing added), `LinkText` and the QR code on the sheet,
+report and batch sheet. BATCH has tests of the lot statistics and the outlier rule
 (n = 1, 2, identical values, non-finite values), the tuning status and trim
 advice, the conclusion, the next-antenna detector (hand touch, drift,
 swaps), persistence and the whole API on the simulated lot. Simulations of a trim session and of a hand-bent antenna check that

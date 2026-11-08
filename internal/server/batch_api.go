@@ -82,13 +82,15 @@ func (s *Server) hBatchCreate(w http.ResponseWriter, r *http.Request) {
 		Notes    string  `json:"notes"`
 		LengthMm float64 `json:"lengthMm"`
 		Trim     string  `json:"trim"`
+		Link     string  `json:"link"`
+		Photo    string  `json:"photo"`
 	}
-	if err := readJSON(r, &req); err != nil {
+	if err := readJSONMax(r, &req, maxPhotoBytes+(64<<10)); err != nil {
 		writeErr(w, 400, err)
 		return
 	}
 	now := time.Now()
-	b := &Batch{ID: newBatchID(now), Name: req.Name, Notes: req.Notes, LengthMm: req.LengthMm, Trim: req.Trim,
+	b := &Batch{ID: newBatchID(now), Name: req.Name, Notes: req.Notes, LengthMm: req.LengthMm, Trim: req.Trim, Link: req.Link, Photo: req.Photo,
 		Created: now, Updated: now, NextID: 1, Antennas: []BatchAntenna{}}
 	if err := b.clean(); err != nil {
 		writeErr(w, 400, err)
@@ -193,8 +195,10 @@ func (s *Server) hBatchEdit(w http.ResponseWriter, r *http.Request) {
 		Notes    *string  `json:"notes"`
 		LengthMm *float64 `json:"lengthMm"`
 		Trim     *string  `json:"trim"`
+		Link     *string  `json:"link"`
+		Photo    *string  `json:"photo"`
 	}
-	if err := readJSON(r, &req); err != nil {
+	if err := readJSONMax(r, &req, maxPhotoBytes+(64<<10)); err != nil {
 		writeErr(w, 400, err)
 		return
 	}
@@ -216,6 +220,12 @@ func (s *Server) hBatchEdit(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Trim != nil {
 		c.Trim = *req.Trim
+	}
+	if req.Link != nil {
+		c.Link = *req.Link
+	}
+	if req.Photo != nil {
+		c.Photo = *req.Photo
 	}
 	if err := c.clean(); err != nil {
 		s.mu.Unlock()

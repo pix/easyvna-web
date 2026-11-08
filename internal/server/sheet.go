@@ -32,6 +32,7 @@ type AntennaInfo struct {
 	Maker     string    `json:"maker,omitempty"`  // maker / source
 	Owner     string    `json:"owner,omitempty"`  // owner / location
 	Notes     string    `json:"notes,omitempty"`
+	Link      string    `json:"link,omitempty"`  // product / source page (http or https, see CleanLink)
 	Photo     string    `json:"photo,omitempty"` // data:image/jpeg;base64,... (downscaled by the page)
 	Updated   time.Time `json:"updated"`
 	// History holds a summary of each measurement of this antenna (sheet,
@@ -69,6 +70,11 @@ func (a *AntennaInfo) clean() error {
 	if a.LengthMm < 0 || a.LengthMm > 1e5 || math.IsNaN(a.LengthMm) {
 		return errors.New("length must be between 0 and 100000 mm")
 	}
+	link, err := CleanLink(a.Link)
+	if err != nil {
+		return err
+	}
+	a.Link = link
 	return checkPhoto(a.Photo)
 }
 
@@ -197,6 +203,8 @@ type sheetData struct {
 	Drift     *DriftReport
 	Ref       *rf.RefDelta // comparison with the REF trace, if one is stored
 	Warnings  []rf.Warning
+	LinkText  string
+	QR        template.HTML
 }
 
 // interpAt linearly interpolates y(f); ok is false outside the sweep.
@@ -310,7 +318,8 @@ func (s *Server) buildSheet(id string, a AntennaInfo) ([]byte, *HistoryEntry, er
 		e := s.historyEntryLocked(r, "sheet")
 		entry = &e
 	}
-	d := sheetData{ID: id, A: a, Generated: time.Now(), App: s.opt.AppName, URL: s.opt.HomeURL, Warnings: r.Summary.Warnings}
+	d := sheetData{ID: id, A: a, Generated: time.Now(), App: s.opt.AppName, URL: s.opt.HomeURL, Warnings: r.Summary.Warnings,
+		LinkText: LinkText(a.Link), QR: qrSVG(a.Link, 22)}
 	if d.App == "" {
 		d.App = "EasyVNA Web"
 	}

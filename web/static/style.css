@@ -481,8 +481,13 @@ tr.blast td { background: var(--band); }
 .sheetform input, .sheetform textarea { font-size: 16px; padding: 7px 9px; width: 100%; box-sizing: border-box; }
 .sheetform .wide { grid-column: 1 / -1; }
 .sheetform textarea { min-height: 70px; }
-.photorow { display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap; }
+.photorow { display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border: 1.5px dashed var(--border); border-radius: 8px; font-size: 13px; color: var(--ink2); }
+.photorow.over { border-color: var(--accent); background: var(--band); }
 .photorow img { max-height: 90px; max-width: 140px; border-radius: 6px; border: 1px solid var(--border); }
+.linkfield input.bad { border-color: var(--bad); outline-color: var(--bad); }
+.linkfield .badtxt { color: var(--bad-ink); }
+.bphoto { max-height: 84px; max-width: 140px; border-radius: 8px; border: 1px solid var(--border); }
+.stepsub a, .bhead a:not(.btn) { color: var(--accent); overflow-wrap: anywhere; }
 @media (max-width: 760px) { .sheetform { grid-template-columns: 1fr; } }
 .foot a { color: inherit; }
 

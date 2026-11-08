@@ -38,6 +38,8 @@ type Batch struct {
 	Target   float64        `json:"target"`             // Hz, TUNE's target: the primary band's reference
 	LengthMm float64        `json:"lengthMm,omitempty"` // nominal element length (for trim advice in mm)
 	Trim     string         `json:"trim,omitempty"`     // trim log whose learnt MHz/mm is used
+	Link     string         `json:"link,omitempty"`     // product / source page (see CleanLink)
+	Photo    string         `json:"photo,omitempty"`    // one photo of the lot (data: URL)
 	Created  time.Time      `json:"created"`
 	Updated  time.Time      `json:"updated"`
 	NextID   int            `json:"nextId"`
@@ -104,7 +106,12 @@ func (b *Batch) clean() error {
 	if b.LengthMm < 0 || b.LengthMm > 1e5 || math.IsNaN(b.LengthMm) {
 		return errors.New("length must be between 0 and 100000 mm")
 	}
-	return nil
+	link, err := CleanLink(b.Link)
+	if err != nil {
+		return err
+	}
+	b.Link = link
+	return checkPhoto(b.Photo)
 }
 
 // SaveBatch writes a batch.
@@ -434,6 +441,9 @@ type BatchView struct {
 	Target   float64            `json:"target"`
 	LengthMm float64            `json:"lengthMm"`
 	Trim     string             `json:"trim"`
+	Link     string             `json:"link"`
+	LinkText string             `json:"linkText"`
+	Photo    string             `json:"photo"`
 	Created  time.Time          `json:"created"`
 	Updated  time.Time          `json:"updated"`
 	Freq     []float64          `json:"freq"`
@@ -452,7 +462,8 @@ func batchView(b *Batch, slope *trimSlope) BatchView {
 		sl = *slope
 	}
 	v := BatchView{ID: b.ID, Name: b.Name, Notes: b.Notes, Profile: b.Profile, Label: b.Label, Start: b.Start, Stop: b.Stop,
-		Points: b.Points, Bands: b.Bands, Target: b.Target, LengthMm: b.LengthMm, Trim: b.Trim, Created: b.Created, Updated: b.Updated, Freq: b.Freq,
+		Points: b.Points, Bands: b.Bands, Target: b.Target, LengthMm: b.LengthMm, Trim: b.Trim, Link: b.Link,
+		LinkText: LinkText(b.Link), Photo: b.Photo, Created: b.Created, Updated: b.Updated, Freq: b.Freq,
 		Antennas: []BatchAntennaView{}}
 	if v.Freq == nil {
 		v.Freq = []float64{}
@@ -973,8 +984,8 @@ func (s *Server) feedBatchLocked(res *Result) {
 	bs.publish = true
 }
 
-// slopeLocked finds a learnt MHz/mm for b: its trim log (or the active
-// one) when the trim calculator has learnt it.
+// batchSlope finds a learnt MHz/mm for b: from the trim log the batch
+// names, when the trim calculator has learnt it (nil otherwise).
 func (s *Server) batchSlope(b *Batch) *trimSlope {
 	name := b.Trim
 	if name == "" {

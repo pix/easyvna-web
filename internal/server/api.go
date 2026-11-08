@@ -88,11 +88,15 @@ func writeErr(w http.ResponseWriter, code int, err error) {
 	writeJSON(w, code, map[string]string{"error": err.Error()})
 }
 
-func readJSON(r *http.Request, v any) error {
+func readJSON(r *http.Request, v any) error { return readJSONMax(r, v, 1<<20) }
+
+// readJSONMax is readJSON for bodies of up to max bytes (requests with a
+// photo).
+func readJSONMax(r *http.Request, v any, max int64) error {
 	if r.ContentLength == 0 {
 		return nil
 	}
-	dec := json.NewDecoder(http.MaxBytesReader(nil, r.Body, 1<<20))
+	dec := json.NewDecoder(http.MaxBytesReader(nil, r.Body, max))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(v); err != nil {
 		return fmt.Errorf("bad JSON: %w", err)

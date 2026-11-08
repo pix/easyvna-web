@@ -29,6 +29,12 @@ h1 { font-size: 19pt; line-height: 1.05; margin: .5mm 0 .8mm; overflow-wrap: any
 .calbad { color: var(--fail); font-weight: 700; } .calok { color: var(--pass); }
 .photo { width: 44mm; height: 31mm; border: .3mm solid var(--line); border-radius: 1mm; overflow: hidden; display: flex; align-items: center; justify-content: center; background: var(--soft); }
 .photo img { max-width: 100%; max-height: 100%; display: block; }
+.side { display: flex; gap: 2.5mm; align-items: flex-start; }
+.side .photo { width: 36mm; }
+.qrbox { display: flex; flex-direction: column; align-items: center; gap: .6mm; width: 24mm; }
+.qrbox svg { display: block; }
+a.link { font-size: 6.2pt; line-height: 1.2; color: var(--ink2); text-decoration: none; overflow-wrap: anywhere; text-align: center; }
+@media screen { a.link { color: #1d4f91; text-decoration: underline; } }
 .sim { display: inline-block; font-size: 7pt; font-weight: 700; letter-spacing: .08em; padding: .2mm 1.5mm; border: .3mm solid var(--ok); color: var(--ok); border-radius: 1mm; margin-left: 2mm; vertical-align: middle; }
 .uncal { border: .5mm solid var(--fail); color: var(--fail); font-weight: 700; border-radius: 1mm; padding: 1mm 2mm; font-size: 8.5pt; }
 .warn { border: .4mm solid var(--fail); border-radius: 1mm; padding: .8mm 2mm; font-size: 7.5pt; }
@@ -62,7 +68,7 @@ th, td { text-align: left; padding: .5mm 1mm; border-bottom: .2mm solid var(--li
 th { font-size: 6.5pt; color: var(--muted); text-transform: uppercase; }
 td.num, th.num { text-align: right; }
 .kv td:first-child { color: var(--muted); width: 42%; }
-.notes { white-space: pre-wrap; font-size: 7.8pt; max-height: 31mm; overflow: hidden; border: .3mm solid var(--line); background: var(--soft); border-radius: 1mm; padding: 1.2mm 2mm; }
+.notes { white-space: pre-wrap; font-size: 7.8pt; max-height: 24mm; overflow: hidden; border: .3mm solid var(--line); background: var(--soft); border-radius: 1mm; padding: 1.2mm 2mm; }
 .muted { color: var(--muted); }
 .sfoot { border-top: .3mm solid var(--line); padding-top: 1mm; font-size: 7pt; color: var(--muted); display: flex; justify-content: space-between; gap: 4mm; }
 @media print {
@@ -96,7 +102,7 @@ td.num, th.num { text-align: right; }
       <dt>Calibration</dt><dd style="grid-column: span 3" class="{{if .CalOK}}calok{{else}}calbad{{end}}">{{.CalState}}</dd>
     </dl>
   </div>
-  {{if .A.Photo}}<div class="photo"><img src="{{.A.Photo | photo}}" alt="Photo of {{.A.Name}}"></div>{{end}}
+  {{if or .A.Photo .QR}}<div class="side">{{if .A.Photo}}<div class="photo"><img src="{{.A.Photo | photo}}" alt="Photo of {{.A.Name}}"></div>{{end}}{{if .QR}}<div class="qrbox">{{.QR}}<a class="link" href="{{.A.Link}}" target="_blank" rel="noopener noreferrer">{{.LinkText}}</a></div>{{end}}</div>{{end}}
 </header>
 
 {{range .Warnings}}<div class="warn"><b>{{.Title}}</b>: {{.Text}}</div>{{end}}
