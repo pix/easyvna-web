@@ -86,7 +86,7 @@ How the pieces fit:
   *Download for offline use*, hidden on `file://`. Sources are normalised
   to LF first; `.gitattributes` keeps LF in checkouts.
 * **Size.** The module is about 13.7 MB, 3.4 MB gzipped (most of it is
-  `net/http`); the page is about 4.9 MB (the bundled firmware, gzipped, about 0.15 MB of it). `wasm-opt -Oz` saves under 1 %
+  `net/http`); the page is about 5.3 MB (the bundled firmware, gzipped, about 0.15 MB of it). `wasm-opt -Oz` saves under 1 %
   after gzip, so it is not used.
 
 `scripts/e2e-html.sh` covers it over `file://` and a local Pages-like
