@@ -9,6 +9,9 @@
 //     hand, by key and by auto-capture; rename, redo, delete + undo, the
 //     profile refusal, CSV / JSON export, JSON import, the one-page batch
 //     sheet (A4 / Letter, 8 and 20 antennas), the report section, reload;
+//     adjusted versions (trim in the simulator, "Adjusted…", "Same antenna
+//     as…", unlink, delete + undo, n, delta lines, before / after, learnt
+//     MHz/mm, the two-page print, CSV / JSON);
 //   * the simulator (?demo): profiles, sweep, REF, AVG, HOLD, TUNE + trim,
 //     COMPARE, snapshots and exports, report (A4/Letter, download),
 //     Export data / Import data, persistence across a reload;
@@ -826,6 +829,216 @@ async function batchFlow(browser, base, label, shots) {
   ctx.report();
   await ctx.close();
   void csvFile;
+}
+// adjustedFlow: an antenna captured again after a trim is a version of the
+// same physical antenna, not a new one (?demo&antenna=lot869).
+async function adjustedFlow(browser, base, label, shots) {
+  const url = base + '?demo&antenna=lot869';
+  const ctx = await newCtx(browser, url, label);
+  const page = await ctx.newPage();
+  await page.goto(url);
+  await ready(page, true);
+  await sweepDone(page, () => page.locator('.profile', { hasText: '869' }).first().click());
+  await calibrate(page);
+  await sweepDone(page, () => page.click('#aSweep'));
+  const sdir = shots ? path.join(SHOTS, 'adjusted') : '';
+  if (sdir) fs.mkdirSync(sdir, { recursive: true });
+  const shot = async (name, h, keep) => {
+    if (!sdir) return;
+    if (!keep) await page.evaluate(() => { document.getElementById('batchView').scrollTop = 0; });
+    await batchShot(page, path.join('adjusted', name), h);
+  };
+  const B = () => page.evaluate(() => S.batch);
+  let id = '';
+  await step(`${label}: capture #1 and #2, trim #2, capture it as an adjusted version`, async () => {
+    await page.click('#aBatch');
+    await page.waitForSelector('#bnGo', { timeout: 10000 });
+    await page.fill('#bnName', '869 adjusted lot');
+    await page.fill('#bnLen', '82');
+    await page.fill('#bnNotes', 'e2e: #2 trimmed and measured again.');
+    await page.click('#bnGo');
+    await page.waitForSelector('#bvCapture', { timeout: 10000 });
+    id = await page.evaluate(() => S.batch.id);
+    for (let i = 1; i <= 2; i++) {
+      if (i > 1) { await page.click('#bvNext'); await page.waitForTimeout(250); }
+      await page.click('#bvCapture');
+      await waitAnt(page, i);
+    }
+    check(`${label}: the demo offers "Trim simulated antenna"`, /Trim simulated antenna 0\.5 mm/.test(await page.textContent('#bvTrim')));
+    const before = (await B()).antennas[1].metrics.resFreq;
+    await sweepDone(page, () => page.click('#bvTrim'));
+    await page.click('#batchBody [data-adj="2"]');
+    await page.waitForSelector('#adjChange', { timeout: 5000 });
+    await page.fill('#adjChange', 'cut 0.5 mm');
+    await page.fill('#adjTrim', '0.5');
+    await page.click('#askYes');
+    await waitAnt(page, 3);
+    const b = await B();
+    const [a1, a2, a3] = b.antennas;
+    check(`${label}: 3 captures, 2 physical antennas (n = 2), "Capture #3" next`, b.summary.n === 2 && b.summary.captures === 3 && b.summary.stats[0].n === 2 &&
+      /Capture #3/.test(await page.textContent('#bvCapture')) && (await page.textContent('#bvTally')).replace(/\s+/g, ' ').includes('/ 2'), JSON.stringify([b.summary.n, b.summary.captures]));
+    check(`${label}: #2's versions grouped: 2a superseded (greyed), 2b current, labelled "#2 adj 1"`, a1.no === '1' && a2.no === '2a' && !a2.current && a3.no === '2b' && a3.current &&
+      a3.label === '#2 adj 1' && a3.adjustedFrom === 2 && a3.change === 'cut 0.5 mm' && a3.trimMm === 0.5 &&
+      (await page.$('#batchBody tr.bsup[data-id="2"] .btag')) !== null && (await page.textContent('#batchBody tr[data-id="3"] td.bno')).trim() === '2b',
+      JSON.stringify(b.antennas.map((a) => [a.no, a.label, a.current])));
+    const dres = (a3.metrics.resFreq - before) / 1e6;
+    const delta = await page.textContent('#batchBody tr.bdelta[data-step="3"]');
+    check(`${label}: delta line "#2: cut 0.5 mm → resonance +x MHz (a → b), SWR@target …, margin …"`, dres > 3 && dres < 7.5 &&
+      /#2: cut 0\.5 mm → resonance \+\d\.\d\d MHz \(\d{3}\.\d\d → \d{3}\.\d\d\), SWR@target \d\.\d\d → \d\.\d\d, margin (\d+ %|–) → (\d+ %|–)/.test(delta.replace(/\s+/g, ' ')), delta + ' Δ ' + dres.toFixed(2));
+    const concl = await page.textContent('.bconcl');
+    check(`${label}: conclusion compares the lot as received with the lot after adjustment`, /As received → after adjustment \(#2: 1 of 2 antennas\): \d → \d of 2 cover the band at SWR < 2\.0, \d → \d on the TUNE aim, worst SWR \d\.\d\d → \d\.\d\d/.test(concl), concl);
+    const learnt = await page.textContent('#bvLearnt');
+    check(`${label}: MHz/mm learnt from the adjustment (simulated element ≈ 9.9 MHz/mm), used by the trim advice`, b.summary.learnt && b.summary.learnt.mhzPerMm > 7 && b.summary.learnt.mhzPerMm < 13 &&
+      /^Learnt \d+\.\d\d MHz\/mm from 1 adjustment: the trim advice uses it/.test(learnt) && a1.metrics.tuning.method === 'fit' && /learnt from 1 adjustment in this batch/.test(b.summary.slope), learnt);
+    check(`${label}: the strip has one mark per antenna`, await page.evaluate(() => S.batch.antennas.filter((a) => a.current && a.metrics.found).length === 2));
+    await shot('batch-adjusted-light.png', 1500);
+  });
+  await step(`${label}: mark a capture as the same antenna, unlink, delete + undo`, async () => {
+    for (let i = 4; i <= 5; i++) { await page.click('#bvNext'); await page.waitForTimeout(250); await page.click('#bvCapture'); await waitAnt(page, i); }
+    let b = await B();
+    check(`${label}: two more antennas: n = 4, labelled #3 and #4`, b.summary.n === 4 && b.antennas[3].label === '#3' && b.antennas[4].label === '#4', JSON.stringify(b.antennas.map((a) => a.label)));
+    // #4 (capture 5) is in fact antenna #1, re-soldered.
+    await page.selectOption('#batchBody select[data-link="5"]', '1');
+    await page.waitForFunction(() => S.batch.summary.n === 3, null, { timeout: 10000 });
+    b = await B();
+    const v = b.antennas.find((a) => a.id === 5);
+    check(`${label}: "Same antenna as #1": n = 3, the capture becomes 1b "#1 adj 1"`, v.no === '1b' && v.label === '#1 adj 1' && v.adjustedFrom === 1 && b.antennas[1].id === 5 &&
+      (await page.textContent('#batchBody tr[data-id="1"] td.bno')).trim() === '1a', JSON.stringify(b.antennas.map((a) => [a.id, a.no, a.label])));
+    await page.click('#batchBody [data-adjedit="5"]');
+    await page.waitForSelector('#adjChange');
+    await page.fill('#adjChange', 're-soldered the feed');
+    await page.click('#askYes');
+    await page.waitForFunction(() => S.batch.antennas.find((a) => a.id === 5).change === 're-soldered the feed', null, { timeout: 10000 });
+    check(`${label}: edit what was changed`, /#1: re-soldered the feed → resonance/.test(await page.textContent('#batchBody tr.bdelta[data-step="5"]')));
+    await page.selectOption('#batchBody select[data-link="5"]', 'unlink');
+    await page.waitForFunction(() => S.batch.summary.n === 4, null, { timeout: 10000 });
+    b = await B();
+    check(`${label}: unlink: n = 4 again, the capture is #4 again`, b.antennas.find((a) => a.id === 5).label === '#4' && !b.antennas.find((a) => a.id === 5).adjustedFrom);
+    await page.click('#toastUndo');
+    await page.waitForFunction(() => S.batch.summary.n === 3, null, { timeout: 10000 });
+    check(`${label}: Undo of the unlink`, (await B()).antennas.find((a) => a.id === 5).adjustedFrom === 1);
+    // Deleting #2 as received: the adjusted version is #2 now; Undo.
+    await page.click('#batchBody [data-rm="2"]');
+    await waitAnt(page, 4);
+    b = await B();
+    const v3 = b.antennas.find((a) => a.id === 3);
+    check(`${label}: delete #2 as received: its adjusted version is antenna 2 (n = 3)`, b.summary.n === 3 && v3.no === '2' && !v3.adjustedFrom && v3.current, JSON.stringify(v3));
+    await page.click('#toastUndo');
+    await waitAnt(page, 5);
+    check(`${label}: Undo restores #2 and its versions`, await page.evaluate(() => S.batch.antennas.find((a) => a.id === 3).adjustedFrom === 2 && S.batch.summary.n === 3));
+  });
+  await step(`${label}: 8 antennas incl. 3 adjusted: batch sheet, 2 pages`, async () => {
+    // #4 … #8 by API, then #8 trimmed and captured as an adjusted version.
+    for (let i = 0; i < 5; i++) { await api(page, 'POST', 'api/mock/antenna', { name: 'lot869' }); await api(page, 'POST', `api/batches/${id}/capture`, {}); }
+    await api(page, 'POST', 'api/mock/action', { action: 'trim', mm: 0.5 });
+    let r = await api(page, 'POST', `api/batches/${id}/capture`, { adjust: 10, change: 'cut 0.5 mm', trimMm: 0.5 });
+    await page.evaluate((i) => loadBatch(i), id);
+    await waitAnt(page, 11);
+    const b = await B();
+    check(`${label}: 8 antennas, 11 captures, 3 adjusted, MHz/mm from 2 trims`, b.summary.n === 8 && b.summary.captures === 11 && b.summary.adjusted === 3 && b.summary.learnt.adjustments === 2 &&
+      r.batch.antennas.find((a) => a.id === 11).no === '8b', JSON.stringify([b.summary.n, b.summary.captures, b.summary.adjusted, b.summary.learnt]));
+    await shot('batch-adjusted-8.png', 2000);
+    const [sp] = await Promise.all([ctx.waitForEvent('page', { timeout: 20000 }), page.click('#bvSheet')]);
+    await sp.waitForURL(/#print$/, { timeout: 20000 });
+    await sp.waitForSelector('.sheet');
+    const p1 = await sp.evaluate(() => [document.querySelectorAll('svg.overlay polyline[data-ant]').length, document.querySelectorAll('svg.overlay polyline[data-old]').length,
+      document.querySelectorAll('svg.lotsmith polyline[data-ant]').length, document.querySelectorAll('.lotlegend .lg[data-ant]').length, !!document.querySelector('.lotlegend .lg.old'),
+      document.querySelector('.page.p1 .what').textContent]);
+    check(`${label}: sheet page 1: one trace per antenna (current version) + 3 light "as received" traces, the average`, p1[0] === 8 && p1[1] === 3 && p1[2] === 8 && p1[3] === 8 && p1[4] &&
+      /8 antennas \(11 captures, 3 adjusted\)/.test(p1[5]), JSON.stringify(p1));
+    const t2 = (await sp.textContent('.page.p2 .sheet')).replace(/\s+/g, ' ');
+    const p2 = await sp.evaluate(() => [document.querySelectorAll('.page.p2 tr.old').length, document.querySelectorAll('.page.p2 tr.delta').length, document.querySelectorAll('.page.p2 table.adj tbody tr').length]);
+    check(`${label}: sheet page 2: versions grouped (3 struck out), delta lines, the adjustments block with the learnt MHz/mm`, p2[0] === 3 && p2[1] === 3 && p2[2] === 3 &&
+      /Adjustments · learnt \d+\.\d\d MHz\/mm from 2 adjustments/.test(t2) && /As received → after adjustment \(#1, #2, #8: 3 of 8 antennas\)/.test(t2) && /\d \/ 8\s*cover the band/.test(t2) &&
+      /current version of each antenna/.test(t2), JSON.stringify([p2, /Adjustments · learnt \d+\.\d\d MHz\/mm from 2 adjustments/.test(t2), /As received → after adjustment \(#1, #2, #8: 3 of 8 antennas\)/.test(t2), /\d \/ 8\s*cover the band/.test(t2)]));
+    const lay = await sp.evaluate(() => {
+      const svgEl = document.querySelector('svg.spread'), R = svgEl.getBoundingClientRect();
+      const bx = [...svgEl.querySelectorAll('text.lbl')].map((t) => t.getBoundingClientRect()).filter((q) => q.width > 0);
+      let over = 0, out = 0;
+      for (let i = 0; i < bx.length; i++) {
+        const a = bx[i];
+        if (a.left < R.left - 0.5 || a.right > R.right + 0.5 || a.top < R.top - 0.5 || a.bottom > R.bottom + 0.5) out++;
+        for (let j = i + 1; j < bx.length; j++) { const c = bx[j]; if (a.left < c.right - 0.5 && c.left < a.right - 0.5 && a.top < c.bottom - 0.5 && c.top < a.bottom - 0.5) over++; }
+      }
+      return [bx.length, over, out, [...svgEl.querySelectorAll('text.lbl')].filter((t) => /′/.test(t.textContent)).length];
+    });
+    check(`${label}: strip: adjusted antennas labelled #2′, labels neither overlapping nor clipped`, lay[1] === 0 && lay[2] === 0 && lay[3] >= 2, JSON.stringify(lay));
+    for (const paper of ['a4', 'letter']) {
+      await sp.evaluate((p) => setPaper(p, false), paper);
+      await sp.emulateMedia({ media: 'print' });
+      const pdf = await sp.pdf({ preferCSSPageSize: true, printBackground: true });
+      check(`${label}: batch print with 3 adjusted antennas is exactly 2 ${paper === 'a4' ? 'A4' : 'Letter'} pages`, pdfPages(pdf) === 2, String(pdfPages(pdf)));
+      if (sdir) pdfShot(pdf, `adjusted/batch-adjusted-sheet-${paper}`);
+      if (sdir && paper === 'a4') try { require('child_process').execFileSync('pdftoppm', ['-r', '80', '-png', '-f', '2', '-l', '2', '-singlefile', path.join(sdir, `batch-adjusted-sheet-${paper}.pdf`), path.join(sdir, `batch-adjusted-sheet-${paper}-p2`)]); } catch { /* optional */ }
+    }
+    await sp.close();
+  });
+  let jsonFile = '';
+  await step(`${label}: CSV and JSON export, import`, async () => {
+    const c = await download(page, () => page.click('#batchBody a:has-text("CSV")'));
+    const body = c.body.toString();
+    const lines = body.trim().split('\n');
+    const head = lines.find((l) => l.startsWith('#,'));
+    const row11 = lines.find((l) => l.startsWith('11,'));
+    check(`${label}: CSV: every capture, version columns, adjustments and learnt MHz/mm`, lines.filter((l) => /^\d+,/.test(l)).length === 11 && /,no,version,current,adjusted_from,change,trim_mm,delta_resonance_mhz$/.test(head) &&
+      /,8b,1,true,10,cut 0\.5 mm,0\.50,\d\.\d{4}$/.test(row11) && lines.filter((l) => l.startsWith('adjustment,')).length === 3 && /^learnt,/m.test(body) && /^batch,.*,antennas,8,captures,11$/m.test(body),
+      head + '\n' + row11);
+    const j = await download(page, () => page.click('#batchBody a:has-text("JSON")'));
+    const ex = JSON.parse(j.body.toString());
+    check(`${label}: JSON has the versions`, ex.batch.antennas.filter((a) => a.adjustedFrom).length === 3 && ex.figures.summary.n === 8 && ex.batch.antennas.find((a) => a.id === 11).trimMm === 0.5);
+    jsonFile = j.file;
+    await page.click('#bvAll');
+    await page.waitForSelector('#bnImport');
+    await page.setInputFiles('#batchImportFile', jsonFile);
+    await page.waitForFunction((i) => S.batch && S.batch.id !== i, id, { timeout: 15000 });
+    const b = await B();
+    check(`${label}: import keeps the versions (n = 8, 11 captures, same chains)`, b.summary.n === 8 && b.summary.captures === 11 && b.antennas.map((a) => a.no).join() ===
+      ex.figures.antennas.map((a) => a.no).join() && b.antennas.find((a) => a.id === 11).adjustedFrom === 10);
+    await page.evaluate((i) => selectBatch(i), id);
+    await page.waitForFunction((i) => S.batch && S.batch.id === i, id, { timeout: 15000 });
+  });
+  await step(`${label}: 20 antennas incl. 3 adjusted: 2 pages`, async () => {
+    for (let i = 0; i < 12; i++) { await api(page, 'POST', 'api/mock/antenna', { name: 'lot869' }); await api(page, 'POST', `api/batches/${id}/capture`, {}); }
+    const r = await api(page, 'POST', `api/batches/${id}/sheet`, {});
+    const [sp] = await Promise.all([ctx.waitForEvent('page', { timeout: 20000 }), page.evaluate(async (u) => { const w = window.open('', '_blank'); await EasyVNAHost.openReport(w, u.url, u.file); }, r)]);
+    await sp.waitForSelector('.sheet');
+    let ok = (await sp.evaluate(() => document.querySelectorAll('svg.overlay polyline[data-ant]').length)) === 20 && (await sp.$('.halves')) !== null;
+    for (const paper of ['a4', 'letter']) {
+      await sp.evaluate((p) => setPaper(p, false), paper);
+      await sp.emulateMedia({ media: 'print' });
+      const pdf = await sp.pdf({ preferCSSPageSize: true, printBackground: true });
+      ok = ok && pdfPages(pdf) === 2;
+      if (sdir) pdfShot(pdf, `adjusted/batch-adjusted-20-${paper}`);
+    }
+    check(`${label}: 20 antennas (23 captures, 3 adjusted): 2 pages on A4 and Letter, compact table`, ok);
+    await sp.close();
+    await page.evaluate((i) => loadBatch(i), id);
+    await waitAnt(page, 23);
+  });
+  if (sdir) {
+    await step(`${label}: dark and phone screenshots`, async () => {
+      await page.emulateMedia({ colorScheme: 'dark' });
+      await page.evaluate(() => drawAll());
+      await shot('batch-adjusted-dark.png', 2000);
+      await page.emulateMedia({ colorScheme: 'light' });
+      const vp = page.viewportSize();
+      await page.setViewportSize({ width: 390, height: 844 });
+      await page.evaluate(() => drawAll());
+      await page.waitForTimeout(300);
+      const wide = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth + 1 || document.getElementById('batchView').scrollWidth > window.innerWidth + 1);
+      check(`${label}: phone: no horizontal page scroll with versions`, !wide);
+      await page.evaluate(() => { document.getElementById('batchView').scrollTop = document.querySelector('#batchBody table.bants').offsetTop - 80; });
+      await shot('batch-adjusted-phone.png', 0, true);
+      await page.evaluate(() => { document.getElementById('batchView').scrollTop = 0; });
+      await page.click('#batchBody [data-adj="1"]');
+      await page.waitForSelector('#adjChange');
+      await shot('batch-adjusted-dialog-phone.png', 0, true);
+      await page.click('#askNo');
+      await page.setViewportSize(vp);
+    });
+  }
+  ctx.report();
+  await ctx.close();
 }
 async function batchPhone(browser, base) {
   if (!SHOTS) return;
@@ -1660,12 +1873,14 @@ async function nativeFlasher(browser) {
       if (ONLY === 'batch') { // E2E_ONLY=batch: just the BATCH checks (and their screenshots)
         console.log(`\n== BATCH over ${label}`);
         await batchFlow(browser, base, label + ' batch', label === 'http' && !!SHOTS);
+        await adjustedFlow(browser, base, label + ' adjusted', label === 'http' && !!SHOTS);
         continue;
       }
       console.log(`\n== simulator over ${label}`);
       await demoFlow(browser, base, label, label === 'http' && !!SHOTS);
       console.log(`\n== BATCH over ${label}`);
       await batchFlow(browser, base, label + ' batch', label === 'http' && !!SHOTS);
+      await adjustedFlow(browser, base, label + ' adjusted', label === 'http' && !!SHOTS);
       console.log(`\n== acceptance, setup check, Measure ×N over ${label}`);
       await toleranceFlow(browser, base, label + ' tolerance', label === 'http' && !!SHOTS);
       console.log(`\n== Web Serial (fake port) over ${label}`);

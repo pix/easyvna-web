@@ -67,13 +67,18 @@ function toast(msg, opts = {}) {
 async function run(fn) { try { return await fn(); } catch (e) { toast(e.message, { err: true }); } }
 function store(k, v) { try { if (v === undefined) return localStorage.getItem(k); localStorage.setItem(k, v); } catch { return null; } }
 
-// ask shows what an action will do and resolves true on OK.
-function ask(title, text, ok = 'OK') {
+// ask shows what an action will do and resolves true on OK. fields (HTML,
+// optional) adds inputs to the dialog: read them before the next ask.
+function ask(title, text, ok = 'OK', fields = '') {
   return new Promise((resolve) => {
     $('askTitle').textContent = title; $('askText').textContent = text; $('askYes').textContent = ok;
-    const v = $('askView'); v.hidden = false; $('askYes').focus();
+    const f = $('askFields'); f.innerHTML = fields; f.hidden = !fields;
+    const v = $('askView'); v.hidden = false;
+    const first = fields && f.querySelector('input, select');
+    (first || $('askYes')).focus();
     const done = (x) => { v.hidden = true; resolve(x); };
     $('askYes').onclick = () => done(true); $('askNo').onclick = () => done(false);
+    f.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); done(true); } };
   });
 }
 
@@ -1795,16 +1800,27 @@ function renderBatch() {
   const key = JSON.stringify([b.id, b.version, b.updated, b.antennas.length, b.hasUndo]);
   if (key === S.batchKey && $('bvCapture')) { updateBatchLive(); return; }
   S.batchKey = key;
-  const sm = b.summary, n = b.antennas.length, tol = sm.toleranceHz / 1e6, auto = sm.window.mode === 'auto';
+  // n: physical antennas (the lot figures use each one's current version);
+  // the table lists every capture, versions grouped under their antenna.
+  const sm = b.summary, n = sm.n, nCap = b.antennas.length, tol = sm.toleranceHz / 1e6, auto = sm.window.mode === 'auto';
   const st = S.state;
   const lot = st.mockScenarios && st.mockScenarios.includes('lot' + b.profile);
   const outl = (m, k) => (m.outliers.includes(k) ? ' bout' : '');
-  const lastID = n ? b.antennas.reduce((a, x) => (new Date(x.time) > new Date(a.time) ? x : a)).id : 0;
+  const lastID = nCap ? b.antennas.reduce((a, x) => (new Date(x.time) > new Date(a.time) ? x : a)).id : 0;
+  const firsts = b.antennas.filter((a) => a.ver === 0);
+  const linkMenu = (a) => {
+    const others = firsts.filter((f) => f.pos !== a.pos);
+    if (!others.length && a.versions < 2) return '';
+    return `<select class="blink" data-link="${a.id}" aria-label="Same antenna as" title="This capture is the same physical antenna as another one, adjusted (trimmed, bent…), or not"><option value="">Same as…</option>
+      ${others.map((f) => `<option value="${f.id}">same antenna as ${esc(f.label)} (${f.pos})</option>`).join('')}${a.versions > 1 ? '<option value="unlink">not the same antenna (unlink)</option>' : ''}</select>`;
+  };
   const rows = b.antennas.map((a) => {
     const m = a.metrics, t = m.tuning;
-    return `<tr class="${a.id === lastID ? 'blast' : ''}" data-id="${a.id}"><td>${a.id}</td>
-      <td><input class="blabel" data-label="${a.id}" value="${esc(a.label)}" maxlength="40" aria-label="Label of antenna ${a.id}" title="Label or serial number: click to edit"></td>
-      <td title="${esc(t.detail)}"><span class="bst ${BSTATUS[t.status]}">${esc(t.text)}</span></td>
+    const cls = [a.id === lastID ? 'blast' : '', a.current ? '' : 'bsup', a.ver > 0 ? 'bver' : '', a.step ? 'bvgrp' : ''].filter(Boolean).join(' ');
+    const sup = a.current ? '' : ' <span class="btag" title="An adjusted version of this antenna was captured later: this capture is not in the lot figures">superseded</span>';
+    const row = `<tr class="${cls}" data-id="${a.id}"><td class="bno" title="Antenna ${a.pos} of the lot${a.versions > 1 ? `, version ${a.ver + 1} of ${a.versions}` : ''} (capture ${a.id})">${esc(a.no)}</td>
+      <td><input class="blabel" data-label="${a.id}" value="${esc(a.label)}" maxlength="40" aria-label="Label of antenna ${esc(a.no)}" title="Label or serial number: click to edit"></td>
+      <td title="${esc(t.detail)}"><span class="bst ${BSTATUS[t.status]}">${esc(t.text)}</span>${sup}</td>
       <td class="num${outl(m, 'res')}">${m.found ? mhz(m.resFreq) : '–'}</td>
       <td class="num${outl(m, 'res')}">${m.found ? sgn(m.offset / 1e6, 2) + ` <span class="muted">(${sgn(m.offsetPct, 2)} %)</span>` : '–'}</td>
       <td class="num${outl(m, 'swrTarget')}">${swrText(m.swrTarget)}</td><td class="num${outl(m, 'worstSWR')}">${m.worstSWR ? swrText(m.worstSWR) : '–'}</td>
@@ -1812,8 +1828,14 @@ function renderBatch() {
       <td>${badge(m.verdict).replace('? CHECK', VLABEL[m.verdict] || m.verdict)} <span class="muted">${(m.pctBelowLimit != null ? m.pctBelowLimit : m.pctBelow2).toFixed(0)} %</span></td>
       <td class="num">${m.margin && m.margin.ok ? Math.min(999, Math.round(m.margin.usedPct)) + ' %' : '–'}</td>
       <td class="${a.calOK ? '' : 'bad'}" style="${a.calOK ? '' : 'color:var(--bad-ink)'}">${esc(a.cal)}${a.auto ? ' <span class="muted">· auto</span>' : ''}${a.redone ? ` <span class="muted">· redone ${a.redone}×</span>` : ''}${a.rep ? ` <span class="muted brep">· ×${a.rep.n}${a.rep.mode === 'reseat' ? ' re-seated' : ''}, σ ${(a.rep.resSD / 1e6).toFixed(2)} MHz</span>` : ''}</td>
-      <td><span class="bact"><button type="button" class="ghost" data-redo="${a.id}" title="Measure this antenna again (connect it first)">Redo</button>
+      <td><span class="bact"><button type="button" class="ghost" data-redo="${a.id}" title="Measure this capture again and replace it (connect the antenna first)">Redo</button>
+      <button type="button" class="ghost" data-adj="${a.id}" title="Capture the antenna again after trimming or bending it: a new version, the earlier capture is kept">Adjusted…</button>
+      ${linkMenu(a)}
       <button type="button" class="ghost" data-rm="${a.id}" aria-label="Delete ${esc(a.label)}">×</button></span></td></tr>`;
+    if (!a.step) return row;
+    const s2 = a.step, i = s2.text.indexOf(': ');
+    return row + `<tr class="bdelta" data-step="${a.id}"><td></td><td colspan="12">↳ <b>${esc(s2.antenna)}</b>: ${esc(i > 0 ? s2.text.slice(i + 2) : s2.text)}${s2.mhzPerMm ? ` <span class="muted">· ${s2.mhzPerMm.toFixed(2)} MHz/mm</span>` : ''}
+      <button type="button" class="ghost small" data-adjedit="${a.id}" title="What was changed on the antenna, and the trim in mm (used to learn MHz/mm)">Edit</button></td></tr>`;
   }).join('');
   const stats = sm.stats.map((s) => `<tr><td>${esc(s.label)}${s.unit ? ` <span class="muted">(${esc(s.unit)})</span>` : ''}</td><td class="num">${s.n}</td>
       ${s.n ? `<td class="num">${s.mean.toFixed(s.dec)}</td><td class="num">${s.n > 1 ? s.sd.toFixed(s.dec + 1) : '–'}</td><td class="num">${s.min.toFixed(s.dec)}</td><td class="num">${s.max.toFixed(s.dec)}</td><td class="num">${s.spread.toFixed(s.dec)}</td>` : '<td class="num">–</td>'.repeat(5)}
@@ -1829,24 +1851,26 @@ function renderBatch() {
       <a class="btn ghost small" href="api/batches/${encodeURIComponent(b.id)}/json" download>JSON</a>
       <button id="bvAll" class="ghost small" type="button">All batches</button></div></div>
     <div id="bvProblem" class="wbanner warn" hidden></div>
-    <div class="bcap"><button id="bvCapture" class="primary bigbtn" type="button">Capture #${(b.antennas.reduce((m, a) => Math.max(m, a.id), 0)) + 1}</button>
+    <div class="bcap"><button id="bvCapture" class="primary bigbtn" type="button">Capture ${esc(b.next || '#' + (n + 1))}</button>
       <input id="bvLabel" maxlength="40" placeholder="label / serial (optional)" aria-label="Label of the next antenna">
       <span class="mctl" title="Measure each antenna several times and keep the average (the repeatability is shown)"><select id="bvN" aria-label="Sweeps per antenna">${[1, 3, 5, 10].map((v) => `<option value="${v}" ${v === batchN() ? 'selected' : ''}>×${v}</option>`).join('')}</select>
         <label class="small check"><input type="checkbox" id="bvReseat" ${store('measureReseat') === '1' ? 'checked' : ''}> re-seat</label></span>
       <button id="bvAuto" class="toggle" type="button" aria-pressed="${st.batch.auto}" title="Capture each new antenna by itself once it is steady (uses LIVE and HOLD's motion detector)"><i class="led"></i>Auto-capture</button>
-      ${lot ? '<button id="bvNext" class="ghost" type="button" title="Simulator: unscrew this antenna and connect the next one of the lot">Next simulated antenna</button>' : ''}
+      ${lot ? `<button id="bvNext" class="ghost" type="button" title="Simulator: unscrew this antenna and connect the next one of the lot">Next simulated antenna</button>
+      <button id="bvTrim" class="ghost" type="button" title="Simulator: cut ${SIM_TRIM_MM} mm off the connected antenna (its resonance rises by the simulated element's MHz/mm); then capture it with Adjusted… on its row">Trim simulated antenna ${SIM_TRIM_MM} mm</button>` : ''}
       ${b.hasUndo ? '<button id="bvUndo" class="ghost small" type="button">Undo last change</button>' : ''}
       <span id="bvAutoStatus" class="hstatus"></span><span class="muted small">Key <b>C</b>: capture</span></div>
     <div class="bsum"><div class="btally ${tcls}"><div class="tl">${auto ? 'Cover the band' : 'Tuned'}</div><div class="hv" id="bvTally">${auto ? sm.ok : sm.tuned}<small> / ${n}</small></div>
         <div class="small muted">PASS ${sm.yield.good} · OK ${sm.yield.ok} · FAIL ${sm.yield.bad}${auto ? ` · ${sm.tuned} on the aim` : ''}</div></div>
-      <div class="bconcl">${sm.grade ? `<span class="bgrade ${sm.grade}" id="bvGrade">${BGRADE[sm.grade]}</span>` : ''}${sm.conclusion.map((l) => `<p>${esc(l)}</p>`).join('')}<p class="tl">${esc(sm.tuningLine)}.</p></div></div>
+      <div class="bconcl">${sm.grade ? `<span class="bgrade ${sm.grade}" id="bvGrade">${BGRADE[sm.grade]}</span>` : ''}${sm.conclusion.map((l) => `<p${l === sm.adjustLine ? ' class="badj"' : ''}>${esc(l)}</p>`).join('')}<p class="tl">${esc(sm.tuningLine)}.</p>
+        ${sm.learnt ? `<p class="blearnt" id="bvLearnt">${esc(sm.learnt.text.charAt(0).toUpperCase() + sm.learnt.text.slice(1))}${sm.learnt.mhzPerMm ? ': the trim advice uses it' : ''}.</p>` : ''}</div></div>
     <canvas id="bvPlot" class="plot batchplot" aria-label="SWR of every captured antenna with the live trace"></canvas>
     <canvas id="bvStrip" class="plot batchstrip" aria-label="Resonance of each antenna, target and tolerance window"></canvas>
-    <div class="blegend"><span>thin: captured antennas · band: min / max of the lot · thick: live</span><span style="color:var(--series2)">dashed: statistical outlier</span></div>
+    <div class="blegend"><span>thin: captured antennas · band: min / max of the lot · thick: live</span><span style="color:var(--series2)">dashed: statistical outlier</span>${sm.adjusted ? '<span class="muted">light dotted: as received, before adjustment</span>' : ''}</div>
     <h3 style="margin:4px 0 0">Antennas</h3>
-    ${n ? `<div class="bwrap"><table class="bants"><thead><tr><th>#</th><th>Label</th><th>Tuning</th><th class="num">Resonance</th><th class="num">Offset MHz</th><th class="num">SWR@tgt</th><th class="num">Worst</th><th class="num">BW&lt;2</th><th class="num">RL dB</th><th>Band</th><th class="num">Margin used</th><th>Calibration</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>
-      <div class="small muted">${esc(sm.slope)}. ◆ = statistical outlier for that figure (|x − median| &gt; 3.5 × 1.4826 × MAD, from 3 antennas on): unlike the rest of the lot, which is not the same as off target.</div>` : '<div class="empty">No antenna yet: connect the first one and tap <b>Capture #1</b>.</div>'}
-    <h3 style="margin:4px 0 0">Lot statistics</h3>
+    ${nCap ? `<div class="bwrap"><table class="bants"><thead><tr><th title="Position in the lot; 2a, 2b: versions of antenna 2 (as received, adjusted)">#</th><th>Label</th><th>Tuning</th><th class="num">Resonance</th><th class="num">Offset MHz</th><th class="num">SWR@tgt</th><th class="num">Worst</th><th class="num">BW&lt;2</th><th class="num">RL dB</th><th>Band</th><th class="num">Margin used</th><th>Calibration</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>
+      <div class="small muted">${sm.adjusted ? `${n} antennas, ${nCap} captures: the lot figures use the current version of each antenna (2a, 2b: versions; superseded ones are greyed). ` : ''}${esc(sm.slope)}. ◆ = statistical outlier for that figure (|x − median| &gt; 3.5 × 1.4826 × MAD, from 3 antennas on): unlike the rest of the lot, which is not the same as off target.</div>` : '<div class="empty">No antenna yet: connect the first one and tap <b>Capture #1</b>.</div>'}
+    <h3 style="margin:4px 0 0">Lot statistics${sm.adjusted ? ' <span class="muted small">· current version of each antenna</span>' : ''}</h3>
     <div class="bwrap"><table class="bstats"><thead><tr><th>Statistic</th><th class="num">n</th><th class="num">mean</th><th class="num">SD</th><th class="num">min</th><th class="num">max</th><th class="num">spread</th><th>outliers</th></tr></thead><tbody>${stats}</tbody></table></div>
     <label class="stepsub">Notes<textarea id="bvNotes" maxlength="2000">${esc(b.notes || '')}</textarea></label>
     <details class="panel" id="bvMore"><summary>Photo &amp; link of the lot</summary><div class="sheetform">${linkField('bvLink', b.link)}<div class="wide">${photoBox('bvPhoto', 'Photo of the lot (optional)')}</div>${smallPrintFields('bv_', b.photoCaption, b.linkNote || '')}</div>
@@ -1887,17 +1911,56 @@ function renderBatch() {
   for (const x of document.querySelectorAll('#batchBody [data-redo]')) x.onclick = () => run(async () => {
     const a = b.antennas.find((y) => y.id === Number(x.dataset.redo));
     if (!(await ask(`Measure ${a.label} again?`, `Connect ${a.label} now. Its capture is replaced by a new measurement (Undo restores the old one).`, 'Measure again'))) return;
-    await batchCapture(a.id);
+    await batchCapture({ replace: a.id });
+  });
+  // Adjusted…: a new version of this antenna (the earlier captures stay).
+  for (const x of document.querySelectorAll('#batchBody [data-adj]')) x.onclick = () => run(async () => {
+    const a = b.antennas.find((y) => y.id === Number(x.dataset.adj));
+    const root = firsts.find((f) => f.pos === a.pos) || a;
+    const v = await askAdjust(`Capture ${root.label} adjusted?`, `Connect ${root.label} after trimming or bending it. A new version is captured; the earlier capture${a.versions > 1 ? 's stay' : ' stays'} as received, and the lot figures use the new one.`, 'Capture adjusted', {});
+    if (v) await batchCapture({ adjust: a.id, change: v.change, trimMm: v.trimMm });
+  });
+  for (const x of document.querySelectorAll('#batchBody [data-adjedit]')) x.onclick = () => run(async () => {
+    const a = b.antennas.find((y) => y.id === Number(x.dataset.adjedit));
+    const v = await askAdjust(`What was adjusted on ${a.label}?`, 'Change and trim since the version before it. The trim (mm, + shortened) teaches the batch its MHz/mm.', 'Save', a);
+    if (!v) return;
+    const r = await api('PUT', `api/batches/${bid}/antennas/${a.id}`, { change: v.change, trimMm: v.trimMm });
+    S.batch = r.batch; S.batchKey = ''; renderBatch(); toast(r.message, { undo: () => batchUndo(bid) });
+  });
+  for (const x of document.querySelectorAll('#batchBody [data-link]')) x.onchange = () => run(async () => {
+    const v = x.value; x.value = '';
+    if (!v) return;
+    const r = await api('PUT', `api/batches/${bid}/antennas/${x.dataset.link}`, { adjustedFrom: v === 'unlink' ? 0 : Number(v) });
+    S.batch = r.batch; S.batchKey = ''; renderBatch(); toast(r.message, { undo: () => batchUndo(bid) });
+  });
+  const tr = $('bvTrim'); if (tr) tr.onclick = () => run(async () => {
+    await api('POST', 'api/mock/action', { action: 'trim', mm: SIM_TRIM_MM });
+    if (!S.state.continuous) await api('POST', 'api/sweep');
+    toast(`Simulated antenna trimmed ${SIM_TRIM_MM} mm: capture it with Adjusted… on its row`);
   });
   updateBatchLive();
 }
 function batchN() { const v = Number(store('batchN')); return [1, 3, 5, 10].includes(v) ? v : 1; }
-async function batchCapture(replace) {
+const SIM_TRIM_MM = 0.5; // "Trim simulated antenna": about +5 MHz at 869 MHz
+async function batchUndo(bid) { const u = await api('POST', `api/batches/${bid}/undo`); S.batch = u.batch; S.batchKey = ''; renderBatch(); toast('Restored'); }
+// askAdjust asks what was changed on an antenna (free text) and the trim in
+// mm (+ shortened, − lengthened, empty: not a length change).
+async function askAdjust(title, text, ok, a) {
+  const f = `<label class="stepsub">What was changed <input id="adjChange" maxlength="80" placeholder="e.g. cut 1 mm, bent 10°" value="${esc(a.change || '')}"></label>
+    <label class="stepsub">Trim, mm <span class="muted">(+ shortened, − lengthened; empty: no length change)</span><input id="adjTrim" type="number" step="0.05" inputmode="decimal" placeholder="e.g. 1" value="${a.trimMm || ''}"></label>`;
+  if (!(await ask(title, text, ok, f))) return null;
+  const t = Number(($('adjTrim').value || '').replace(',', '.'));
+  return { change: $('adjChange').value.trim(), trimMm: Number.isFinite(t) ? t : 0 };
+}
+// batchCapture captures the antenna on the cable: a new antenna, or opt =
+// { replace: id } (redo), or { adjust: id, change, trimMm } (an adjusted
+// version of that antenna).
+async function batchCapture(opt = {}) {
   const b = S.batch; if (!b) return;
   const n = $('bvN') ? Number($('bvN').value) : 1;
+  const what = opt.replace ? { replace: opt.replace } : opt.adjust ? { adjust: opt.adjust, change: opt.change || '', trimMm: opt.trimMm || 0 } : { label: ($('bvLabel') && $('bvLabel').value.trim()) || '' };
   if (n > 1) { // Measure ×N: the server captures the average with its repeatability (progress in the measure bar)
-    const body = { n, reseat: !!($('bvReseat') && $('bvReseat').checked), for: 'batch' };
-    if (replace) body.replace = replace; else body.label = ($('bvLabel') && $('bvLabel').value.trim()) || '';
+    const body = { n, reseat: !!($('bvReseat') && $('bvReseat').checked), for: 'batch', ...what };
     S.state = await api('POST', 'api/measure', body);
     renderMeasureBar(); updateBatchLive();
     return;
@@ -1905,8 +1968,7 @@ async function batchCapture(replace) {
   const btn = $('bvCapture');
   if (btn) { btn.disabled = true; btn.textContent = 'Measuring…'; }
   try {
-    const body = replace ? { replace } : { label: ($('bvLabel') && $('bvLabel').value.trim()) || '' };
-    const r = await api('POST', `api/batches/${encodeURIComponent(b.id)}/capture`, body);
+    const r = await api('POST', `api/batches/${encodeURIComponent(b.id)}/capture`, what);
     S.batch = r.batch; S.batchKey = ''; renderBatch();
     const a = r.batch.antennas.find((x) => x.id === r.id);
     toast(`${r.message}: ${a ? a.metrics.tuning.text : ''}`, { undo: async () => { const u = await api('POST', `api/batches/${encodeURIComponent(b.id)}/undo`); S.batch = u.batch; S.batchKey = ''; renderBatch(); toast('Restored'); } });
@@ -1978,12 +2040,13 @@ function drawBatch() {
   const base = { freq: freq || (liveOK ? r.freq : []), config: { bands: b.bands }, summary: { dips: [] } };
   const c1 = css('--series1'), c2 = css('--series2');
   const ys = [];
-  for (const a of b.antennas) if (!a.metrics.outliers.length) ys.push({ y: a.swr, color: hexA(c1, 0.55), width: 1.2 });
-  for (const a of b.antennas) if (a.metrics.outliers.length) ys.push({ y: a.swr, color: c2, width: 1.6, dash: [6, 3] });
+  for (const a of b.antennas) if (!a.current) ys.push({ y: a.swr, color: hexA(c1, 0.35), width: 1, dash: [2, 3] }); // as received, before adjustment
+  for (const a of b.antennas) if (a.current && !a.metrics.outliers.length) ys.push({ y: a.swr, color: hexA(c1, 0.55), width: 1.2 });
+  for (const a of b.antennas) if (a.current && a.metrics.outliers.length) ys.push({ y: a.swr, color: c2, width: 1.6, dash: [6, 3] });
   if (liveOK && base.freq.length === r.freq.length) ys.push({ y: r.derived.swr, color: css('--ink'), width: 2.6 });
   if (!base.freq.length) { const { ctx, w, h } = setup(cv); ctx.fillStyle = css('--muted'); ctx.textAlign = 'center'; ctx.font = '13px system-ui, sans-serif'; ctx.fillText(`Sweep the ${b.profile} profile to see the live trace`, w / 2, h / 2); }
   else drawLine(cv, { r: base, ys, ymin: 1, ymax: 5, yticks: swrTicks(5), yfmt: String, hlines: [{ y: goodLim(b.summary.window.limit), label: 'SWR ' + +goodLim(b.summary.window.limit).toFixed(2) }, { y: b.summary.window.limit, label: 'SWR ' + +b.summary.window.limit.toFixed(2) }],
-    envelope: b.antennas.length > 1 ? { min: b.envMin, max: b.envMax } : null, vline: { f: b.target, label: 'target ' + mhzR(b.target) }, noCursor: true, noBandLabels: true });
+    envelope: b.summary.n > 1 ? { min: b.envMin, max: b.envMax } : null, vline: { f: b.target, label: 'target ' + mhzR(b.target) }, noCursor: true, noBandLabels: true });
   drawBatchStrip(liveOK ? r : null);
 }
 // drawBatchStrip: the resonance of each antenna on a frequency axis, in
@@ -1993,7 +2056,11 @@ function drawBatch() {
 // status, stacked when close, outliers ringed), (d) the lot summary: the
 // mean, with its 95 % confidence interval for 3–4 antennas or ± σ from 5
 // on (just the mean below 3). The axis covers all of it; the live
-// resonance is a vertical line, with an arrow when it is off the axis.
+// resonance is a vertical line, with an arrow when it is off the axis. One
+// mark per antenna (its current version); an adjusted antenna is labelled
+// #2′ and has a dotted line from where it resonated as received.
+const PRIMES = ['′', '″', '‴'];
+function stripLabel(a) { return a.ver > 0 && a.step ? a.step.antenna + (PRIMES[a.ver - 1] || ` v${a.ver + 1}`) : a.label; }
 const STRIP_SHAPE = { tuned: '●', ok: '◆', shorten: '▼', lengthen: '▲', bad: '✕', none: '✕' };
 function drawBatchStrip(live) {
   const b = S.batch, cv = $('bvStrip'); if (!cv) return;
@@ -2001,13 +2068,13 @@ function drawBatchStrip(live) {
   const win = sm.window || { hz: sm.toleranceHz, mode: 'tight' };
   const wlo = sm.offMin < 0 ? b.target + sm.offMin : b.target - sm.toleranceHz, whi = sm.offMax > 0 ? b.target + sm.offMax : b.target + sm.toleranceHz;
   const hasWin = whi > wlo;
-  const found = b.antennas.filter((a) => a.metrics.found);
+  const found = b.antennas.filter((a) => a.current && a.metrics.found);
   let liveRes = 0;
   if (live && live.summary && live.summary.dips.length) liveRes = live.summary.dips.reduce((x, d) => (Math.abs(d.freq - b.target) < Math.abs(x.freq - b.target) ? d : x)).freq;
   const nRes = sm.nRes || 0, mean = b.target + sm.biasHz;
   const half = nRes >= 5 ? sm.sigmaHz : nRes >= 3 ? sm.biasCIHz : 0;
   // Range: everything but an extreme summary bar (that one gets arrow caps).
-  const core = [band.lo, band.hi, b.target, ...found.map((a) => a.metrics.resFreq)];
+  const core = [band.lo, band.hi, b.target, ...found.map((a) => a.metrics.resFreq), ...found.filter((a) => a.step && a.step.found).map((a) => a.step.resFrom)];
   if (hasWin) core.push(wlo, whi);
   if (nRes) core.push(mean);
   let lo = Math.min(...core), hi = Math.max(...core);
@@ -2020,11 +2087,12 @@ function drawBatchStrip(live) {
   ctx.font = F;
   const x0 = 18, x1 = w - 18;
   const fx = (f) => x0 + (f - lo) / (hi - lo) * (x1 - x0);
-  const marks = found.map((a) => ({ x: fx(a.metrics.resFreq), a, lw: ctx.measureText(a.label).width, lv: 0 })).sort((p, q) => p.x - q.x);
+  const marks = found.map((a) => ({ x: fx(a.metrics.resFreq), a, lbl: stripLabel(a), lw: ctx.measureText(stripLabel(a)).width, lv: 0,
+    x0: a.step && a.step.found ? fx(a.step.resFrom) : null })).sort((p, q) => p.x - q.x);
   const levels = [];
   for (const m of marks) {
     let lv = 0;
-    const span = [m.x - 8, m.x + 10 + m.lw + 4];
+    const span = [Math.min(m.x, m.x0 == null ? m.x : m.x0) - 8, Math.max(m.x + 10 + m.lw + 4, m.x0 == null ? 0 : m.x0 + 5)];
     while (levels[lv] && levels[lv].some(([a, z]) => span[0] < z && span[1] > a)) lv++;
     (levels[lv] = levels[lv] || []).push(span); m.lv = lv;
     if (m.x + 10 + m.lw > x1) m.left = true; // label on the left at the right edge
@@ -2080,6 +2148,10 @@ function drawBatchStrip(live) {
   const col = { tuned: css('--good-ink'), ok: '#1b8a6b', shorten: css('--warn-ink'), lengthen: css('--warn-ink') };
   for (const m of marks) {
     const x = m.x, y = yAnt1 - LH / 2 - m.lv * LH, st = m.a.metrics.tuning.status;
+    if (m.x0 != null) { // as received → now
+      ctx.strokeStyle = muted; ctx.lineWidth = 1.2; ctx.setLineDash([2, 3]); ctx.beginPath(); ctx.moveTo(m.x0, y); ctx.lineTo(x, y); ctx.stroke(); ctx.setLineDash([]);
+      ctx.beginPath(); ctx.arc(m.x0, y, 3.5, 0, 2 * Math.PI); ctx.stroke();
+    }
     ctx.fillStyle = col[st] || css('--bad-ink'); ctx.strokeStyle = ctx.fillStyle; ctx.lineWidth = 2.6;
     ctx.beginPath();
     if (st === 'tuned') { ctx.arc(x, y, 5.5, 0, 2 * Math.PI); ctx.fill(); }
@@ -2089,7 +2161,7 @@ function drawBatchStrip(live) {
     else { ctx.moveTo(x - 5, y - 5); ctx.lineTo(x + 5, y + 5); ctx.moveTo(x + 5, y - 5); ctx.lineTo(x - 5, y + 5); ctx.stroke(); }
     if (m.a.metrics.outliers.length) { ctx.strokeStyle = ink; ctx.lineWidth = 1.4; ctx.beginPath(); ctx.arc(x, y, 9, 0, 2 * Math.PI); ctx.stroke(); }
     ctx.fillStyle = ink; ctx.font = m.a.metrics.outliers.length ? FB : F;
-    if (m.left) { ctx.textAlign = 'right'; ctx.fillText(m.a.label, x - 11, y); } else { ctx.textAlign = 'left'; ctx.fillText(m.a.label, x + 11, y); }
+    if (m.left) { ctx.textAlign = 'right'; ctx.fillText(m.lbl, x - 11, y); } else { ctx.textAlign = 'left'; ctx.fillText(m.lbl, x + 11, y); }
     ctx.font = F;
   }
   // (d) lot summary

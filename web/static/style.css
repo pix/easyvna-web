@@ -457,8 +457,31 @@ table.bants input.blabel:hover, table.bants input.blabel:focus { border-color: v
 td.bout { font-weight: 800; box-shadow: inset 0 0 0 1.5px var(--ink2); border-radius: 4px; }
 td.bout::before { content: "◆ "; font-size: 10px; }
 tr.blast td { background: var(--band); }
-.bact { display: inline-flex; gap: 4px; }
+.bact { display: inline-flex; gap: 4px; align-items: center; }
 .bact button { padding: 3px 8px; font-size: 12.5px; }
+.bact select.blink { font-size: 12.5px; padding: 3px 4px; max-width: 7.5em; }
+/* the row actions stay in view when the table scrolls sideways (not on a
+   phone: they would cover the figures) */
+@media (min-width: 761px) {
+  table.bants:not(.blist) tr:not(.bdelta) > td:last-child, table.bants:not(.blist) th:last-child { position: sticky; right: 0; background: var(--page); box-shadow: -8px 0 8px -8px rgba(0, 0, 0, .25); }
+  table.bants:not(.blist) tr.blast:not(.bdelta) > td:last-child { background: linear-gradient(var(--band), var(--band)), var(--page); }
+}
+/* adjusted versions: the superseded capture greyed and lightly struck, the
+   delta line under the adjusted one */
+table.bants td.bno { font-weight: 700; }
+table.bants tr.bver td.bno { padding-left: 12px; }
+table.bants tr.bsup td { color: var(--muted); }
+table.bants tr.bsup td.num { text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--muted) 45%, transparent); }
+table.bants tr.bsup .bst { opacity: .6; font-weight: 600; }
+table.bants tr.bsup input.blabel { color: var(--muted); }
+table.bants tr.bvgrp td { border-bottom: 0; }
+table.bants tr.bdelta td { padding-top: 0; font-size: 12.5px; color: var(--ink2); white-space: normal; }
+table.bants tr.bdelta button { padding: 1px 8px; font-size: 12px; margin-left: 6px; }
+.btag { font-size: 11px; font-weight: 600; letter-spacing: .02em; color: var(--muted); border: 1px solid var(--border); border-radius: 999px; padding: 1px 6px; margin-left: 6px; }
+.bconcl p.badj { font-weight: 400; }
+.bconcl p.blearnt { font-weight: 600; color: var(--accent); margin: 4px 0 0; }
+.askfields { display: flex; flex-direction: column; gap: 10px; margin: 0 0 14px; }
+.askfields input { width: 100%; font-size: 16px; padding: 8px 10px; margin-top: 4px; }
 .blist td .row { gap: 6px; }
 .bnew { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px 14px; max-width: 900px; }
 .bnew label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--ink2); }
