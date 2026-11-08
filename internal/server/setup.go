@@ -3,6 +3,7 @@ package server
 import (
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"time"
 
@@ -174,17 +175,30 @@ func (s *Server) hSetup(w http.ResponseWriter, r *http.Request) {
 }
 
 // hMockAction drives the simulated bench: POST /api/mock/action
-// {"action":"hand-on"|"hand-off"|"reseat"} (mock only).
+// {"action":"hand-on"|"hand-off"|"reseat"} or {"action":"trim","mm":0.5}
+// (shortens the connected antenna's element, as MockCut: BATCH's adjusted
+// versions in the simulator) (mock only).
 func (s *Server) hMockAction(w http.ResponseWriter, r *http.Request) {
 	if s.opt.MockAction == nil {
 		writeErr(w, 404, errors.New("not in mock mode"))
 		return
 	}
 	var req struct {
-		Action string `json:"action"`
+		Action string  `json:"action"`
+		Mm     float64 `json:"mm"`
 	}
 	if err := readJSON(r, &req); err != nil {
 		writeErr(w, 400, err)
+		return
+	}
+	if req.Action == "trim" {
+		if s.opt.MockCut == nil || req.Mm == 0 || math.IsNaN(req.Mm) || math.Abs(req.Mm) > 20 {
+			writeErr(w, 400, errors.New("trim: give mm (up to 20, + shortens)"))
+			return
+		}
+		s.opt.MockCut(req.Mm)
+		s.publishState()
+		writeJSON(w, 200, s.state())
 		return
 	}
 	if err := s.opt.MockAction(req.Action); err != nil {

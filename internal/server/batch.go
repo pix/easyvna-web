@@ -63,6 +63,12 @@ type BatchAntenna struct {
 	Redone   int          `json:"redone,omitempty"`   // times it was measured again
 	Rep      *RepeatBrief `json:"rep,omitempty"`      // Measure ×N: repeatability of the N sweeps
 	S11      [][2]float64 `json:"s11"`
+	// Adjusted versions (see batch_adjust.go): this capture is the same
+	// physical antenna as capture AdjustedFrom, after Change (free text) and
+	// a trim of TrimMm (> 0: shortened, < 0: lengthened, 0: not a length change).
+	AdjustedFrom int     `json:"adjustedFrom,omitempty"`
+	Change       string  `json:"change,omitempty"`
+	TrimMm       float64 `json:"trimMm,omitempty"`
 }
 
 // Band returns the batch's primary band.
@@ -163,17 +169,18 @@ func (st *Store) DeleteBatch(id string) error {
 
 // BatchInfo is one row of GET /api/batches.
 type BatchInfo struct {
-	ID      string         `json:"id"`
-	Name    string         `json:"name"`
-	Profile string         `json:"profile"`
-	Label   string         `json:"label"`
-	Created time.Time      `json:"created"`
-	Updated time.Time      `json:"updated"`
-	N       int            `json:"n"`
-	Yield   map[string]int `json:"yield"` // good / ok / bad / n/a
-	Tuned   int            `json:"tuned"`
-	OK      int            `json:"ok"`    // accepted (tuned + ok)
-	Grade   string         `json:"grade"` // fine, worth, must
+	ID       string         `json:"id"`
+	Name     string         `json:"name"`
+	Profile  string         `json:"profile"`
+	Label    string         `json:"label"`
+	Created  time.Time      `json:"created"`
+	Updated  time.Time      `json:"updated"`
+	N        int            `json:"n"`        // physical antennas
+	Captures int            `json:"captures"` // captures, adjusted versions included
+	Yield    map[string]int `json:"yield"`    // good / ok / bad / n/a
+	Tuned    int            `json:"tuned"`
+	OK       int            `json:"ok"`    // accepted (tuned + ok)
+	Grade    string         `json:"grade"` // fine, worth, must
 }
 
 // ListBatches lists the stored batches, most recently updated first.
@@ -186,7 +193,7 @@ func (st *Store) ListBatches(accept func(profile string) rf.Acceptance) []BatchI
 		}
 		v := batchView(b, nil, accept(b.Profile))
 		out = append(out, BatchInfo{ID: b.ID, Name: b.Name, Profile: b.Profile, Label: b.Label, Created: b.Created,
-			Updated: b.Updated, N: len(b.Antennas), Yield: v.Summary.Yield, Tuned: v.Summary.Tuned, OK: v.Summary.OK, Grade: v.Summary.Grade})
+			Updated: b.Updated, N: v.Summary.N, Captures: len(b.Antennas), Yield: v.Summary.Yield, Tuned: v.Summary.Tuned, OK: v.Summary.OK, Grade: v.Summary.Grade})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Updated.After(out[j].Updated) })
 	return out
@@ -231,8 +238,10 @@ type AntennaMetrics struct {
 
 // trimSlope is where the MHz/mm of the trim advice comes from.
 type trimSlope struct {
-	MHzPerMm float64 // learnt (fit), 0 = not learnt
-	From     string  // trim log name
+	MHzPerMm float64        // learnt (fit), 0 = not learnt
+	From     string         // trim log name
+	Log      []rf.TrimPoint // that trim log's points (pooled with the batch's adjustments)
+	Adj      int            // trims of this batch's adjusted versions in MHzPerMm
 }
 
 // antennaMetrics computes the figures of s11 on the batch's grid. It uses
@@ -384,7 +393,7 @@ type BatchStatRow struct {
 
 // BatchSummary is everything computed over the lot.
 type BatchSummary struct {
-	N          int            `json:"n"`
+	N          int            `json:"n"` // physical antennas: the lot figures use each one's current version
 	Stats      []BatchStatRow `json:"stats"`
 	Yield      map[string]int `json:"yield"`
 	Tuned      int            `json:"tuned"`
@@ -424,6 +433,16 @@ type BatchSummary struct {
 	First       time.Time `json:"first"`
 	Last        time.Time `json:"last"`
 	Slope       string    `json:"slope"` // where the mm come from
+	// Adjusted versions (batch_adjust.go): captures, antennas with an
+	// adjusted version, the lot as received (first versions) and as it is
+	// now, every adjustment's effect, and the MHz/mm learnt from the trims.
+	Captures   int          `json:"captures"`
+	Adjusted   int          `json:"adjusted"`
+	AsReceived *LotBrief    `json:"asReceived,omitempty"`
+	Current    *LotBrief    `json:"current,omitempty"`
+	AdjustLine string       `json:"adjustLine,omitempty"`
+	Steps      []AdjustStep `json:"steps"`
+	Learnt     *LearntSlope `json:"learnt,omitempty"`
 }
 
 // batchMetricDefs are the statistics rows: key, label, unit, decimals,
@@ -482,6 +501,18 @@ type BatchAntennaView struct {
 	Rep      *RepeatBrief   `json:"rep,omitempty"`
 	Metrics  AntennaMetrics `json:"metrics"`
 	SWR      []float64      `json:"swr"`
+	// Its place in the lot: physical antenna Pos (1…), version Ver of
+	// Versions (0: as received), Current = the latest version, the one the
+	// lot figures use; Step = the effect of its adjustment.
+	No           string      `json:"no"` // "2", or "2a", "2b" with versions
+	Pos          int         `json:"pos"`
+	Ver          int         `json:"ver"`
+	Versions     int         `json:"versions"`
+	Current      bool        `json:"current"`
+	AdjustedFrom int         `json:"adjustedFrom,omitempty"`
+	Change       string      `json:"change,omitempty"`
+	TrimMm       float64     `json:"trimMm,omitempty"`
+	Step         *AdjustStep `json:"step,omitempty"`
 }
 
 // BatchView is GET /api/batches/{id}.
@@ -513,12 +544,16 @@ type BatchView struct {
 	EnvMin       []float64          `json:"envMin"`
 	EnvMax       []float64          `json:"envMax"`
 	Summary      BatchSummary       `json:"summary"`
+	Next         string             `json:"next"` // default label of the next antenna
 	Version      int                `json:"version"`
 	HasUndo      bool               `json:"hasUndo"`
 }
 
 // batchView computes every figure of b with the acceptance setting acc.
-// slope may be nil (no learnt MHz/mm).
+// slope may be nil (no learnt MHz/mm). Every capture gets its own figures;
+// the lot (statistics, outliers, grade, envelope, lot average) uses the
+// current version of each physical antenna, and the antennas are listed
+// lot position by lot position, each with its versions in order.
 func batchView(b *Batch, slope *trimSlope, acc rf.Acceptance) BatchView {
 	sl := trimSlope{}
 	if slope != nil {
@@ -527,7 +562,7 @@ func batchView(b *Batch, slope *trimSlope, acc rf.Acceptance) BatchView {
 	v := BatchView{ID: b.ID, Name: b.Name, Notes: b.Notes, Profile: b.Profile, Label: b.Label, Start: b.Start, Stop: b.Stop,
 		Points: b.Points, Bands: b.Bands, Target: b.Target, LengthMm: b.LengthMm, Trim: b.Trim, Link: b.Link,
 		LinkText: LinkText(b.Link), Photo: b.Photo, PhotoCaption: b.PhotoCaption, LinkNote: b.LinkNote,
-		Created: b.Created, Updated: b.Updated, Freq: b.Freq, Antennas: []BatchAntennaView{}, Setup: b.Setup, Accept: acc}
+		Created: b.Created, Updated: b.Updated, Freq: b.Freq, Antennas: []BatchAntennaView{}, Setup: b.Setup, Accept: acc, Next: b.nextLabel()}
 	if v.Freq == nil {
 		v.Freq = []float64{}
 	}
@@ -535,34 +570,113 @@ func batchView(b *Batch, slope *trimSlope, acc rf.Acceptance) BatchView {
 		v.Bands = []rf.Band{}
 	}
 	ms := make([]AntennaMetrics, len(b.Antennas))
-	var all [][]complex128
+	swr := make([][]float64, len(b.Antennas))
 	for i, a := range b.Antennas {
 		m, r := antennaMetrics(b, a.S11, sl, acc)
-		ms[i] = m
-		av := BatchAntennaView{ID: a.ID, Label: a.Label, Time: a.Time, Cal: a.Cal, CalOK: a.CalOK, Auto: a.Auto, AvgN: a.AvgN,
-			Warnings: a.Warnings, Redone: a.Redone, Rep: a.Rep, SWR: r.Derived.SWR}
-		if av.Warnings == nil {
-			av.Warnings = []string{}
+		ms[i], swr[i] = m, r.Derived.SWR
+	}
+	// The trims of the adjusted versions teach the batch its MHz/mm.
+	groups := b.lotGroups()
+	sl2, learnt := learnSlope(b, groups, ms, sl)
+	if sl2.MHzPerMm != sl.MHzPerMm {
+		for i := range ms {
+			ms[i].Tuning = tuningOf(b, ms[i], sl2, acc)
 		}
-		if len(v.EnvMin) == 0 {
-			v.EnvMin, v.EnvMax = append([]float64(nil), av.SWR...), append([]float64(nil), av.SWR...)
-		} else if len(av.SWR) == len(v.EnvMin) {
-			for k, s := range av.SWR {
-				v.EnvMin[k], v.EnvMax[k] = math.Min(v.EnvMin[k], s), math.Max(v.EnvMax[k], s)
+	}
+	// The lot: the current version of each physical antenna.
+	lot := &Batch{}
+	*lot = *b
+	lot.Antennas = make([]BatchAntenna, len(groups))
+	lms := make([]AntennaMetrics, len(groups))
+	var all [][]complex128
+	for p, g := range groups {
+		k := g[len(g)-1]
+		lot.Antennas[p], lms[p] = b.Antennas[k], ms[k]
+		lms[p].Outliers = []string{}
+		if len(swr[k]) > 0 {
+			if len(v.EnvMin) == 0 {
+				v.EnvMin, v.EnvMax = append([]float64(nil), swr[k]...), append([]float64(nil), swr[k]...)
+			} else if len(swr[k]) == len(v.EnvMin) {
+				for j, x := range swr[k] {
+					v.EnvMin[j], v.EnvMax[j] = math.Min(v.EnvMin[j], x), math.Max(v.EnvMax[j], x)
+				}
 			}
 		}
-		if len(a.S11) == len(b.Freq) {
-			all = append(all, toComplex(a.S11))
+		if len(b.Antennas[k].S11) == len(b.Freq) {
+			all = append(all, toComplex(b.Antennas[k].S11))
 		}
-		v.Antennas = append(v.Antennas, av)
 	}
 	if len(all) > 0 {
 		// The lot average: the vector average of every antenna's S11.
 		v.AvgSWR = rf.Derive(rf.Average(all), nil).SWR
 	}
-	v.Summary = batchSummary(b, ms, sl, acc)
-	for i := range v.Antennas {
-		v.Antennas[i].Metrics = ms[i]
+	v.Summary = batchSummary(lot, lms, sl2, acc)
+	for p, g := range groups {
+		ms[g[len(g)-1]].Outliers = lms[p].Outliers
+	}
+	sm := &v.Summary
+	sm.Captures, sm.Steps, sm.Learnt = len(b.Antennas), []AdjustStep{}, learnt
+	for _, a := range b.Antennas {
+		if sm.First.IsZero() || a.Time.Before(sm.First) {
+			sm.First = a.Time
+		}
+		if a.Time.After(sm.Last) {
+			sm.Last = a.Time
+		}
+	}
+	// Every capture, by lot position and version.
+	var adjusted []string
+	for p, g := range groups {
+		if len(g) > 1 {
+			adjusted = append(adjusted, b.Antennas[g[0]].Label)
+		}
+		for ver, k := range g {
+			a := b.Antennas[k]
+			av := BatchAntennaView{ID: a.ID, Label: a.Label, Time: a.Time, Cal: a.Cal, CalOK: a.CalOK, Auto: a.Auto, AvgN: a.AvgN,
+				Warnings: a.Warnings, Redone: a.Redone, Rep: a.Rep, SWR: swr[k], Metrics: ms[k],
+				No: versionNo(p+1, ver, len(g)), Pos: p + 1, Ver: ver, Versions: len(g), Current: ver == len(g)-1}
+			if av.Warnings == nil {
+				av.Warnings = []string{}
+			}
+			if ver > 0 {
+				av.AdjustedFrom, av.Change, av.TrimMm = a.AdjustedFrom, a.Change, a.TrimMm
+				st := adjustStep(b, ms, g[0], g[ver-1], k, av.No, versionNo(p+1, ver-1, len(g)))
+				av.Step = &st
+				sm.Steps = append(sm.Steps, st)
+			}
+			v.Antennas = append(v.Antennas, av)
+		}
+	}
+	// The lot as received (first versions) against the lot as it is.
+	if sm.Adjusted = len(adjusted); sm.Adjusted > 0 {
+		first := &Batch{}
+		*first = *b
+		first.Antennas = make([]BatchAntenna, len(groups))
+		fms := make([]AntennaMetrics, len(groups))
+		for p, g := range groups {
+			first.Antennas[p], fms[p] = b.Antennas[g[0]], ms[g[0]]
+			fms[p].Outliers = []string{}
+		}
+		before, after := lotBriefOf(batchSummary(first, fms, sl2, acc)), lotBriefOf(*sm)
+		sm.AsReceived, sm.Current = &before, &after
+		sm.AdjustLine = compareLine(before, after, adjusted, acc, sm.Window.Mode == rf.TolAuto)
+		extra := []string{sm.AdjustLine}
+		if learnt != nil {
+			if learnt.MHzPerMm > 0 {
+				extra = append(extra, capFirst(learnt.Text)+": the trim advice uses it.")
+			} else {
+				extra = append(extra, capFirst(learnt.Text)+".")
+			}
+		}
+		// After the headline and the sample-size line, before the details.
+		at := 1
+		if len(sm.Conclusion) > 1 && strings.HasPrefix(sm.Conclusion[1], "Indicative (n") || len(sm.Conclusion) > 1 && strings.HasPrefix(sm.Conclusion[1], "One antenna so far") {
+			at = 2
+		}
+		if at > len(sm.Conclusion) {
+			at = len(sm.Conclusion)
+		}
+		sm.Conclusion = append(sm.Conclusion[:at:at], append(extra, sm.Conclusion[at:]...)...)
 	}
 	return v
 }
@@ -720,6 +834,11 @@ func batchSummary(b *Batch, ms []AntennaMetrics, sl trimSlope, acc rf.Acceptance
 		s.CalNote = fmt.Sprintf("%d of %d captured without a calibration for this range: compare with care", calBad, n)
 	}
 	switch {
+	case sl.MHzPerMm > 0 && sl.Adj > 0:
+		s.Slope = fmt.Sprintf("mm from %.2f MHz/mm learnt from %d adjustment%s in this batch", sl.MHzPerMm, sl.Adj, plural(sl.Adj))
+		if sl.From != "" && len(sl.Log) > 0 {
+			s.Slope += fmt.Sprintf(" and the trim log %q", sl.From)
+		}
 	case sl.MHzPerMm > 0:
 		s.Slope = fmt.Sprintf("mm from %.2f MHz/mm learnt in the trim log %q", sl.MHzPerMm, sl.From)
 	case b.LengthMm > 0:
@@ -1037,12 +1156,34 @@ func s11Of(g []complex128) [][2]float64 {
 	return out
 }
 
+// capture says what a capture is: a new antenna (Label, optional), a new
+// measurement of capture Replace (redo), or a new, adjusted version of the
+// antenna capture Adjust belongs to (Change, TrimMm).
+type capture struct {
+	Replace int
+	Label   string
+	Auto    bool
+	Adjust  int
+	Change  string
+	TrimMm  float64
+}
+
 // captureLocked stores res (or the averaged reading g, for auto-capture) as
-// a new antenna of b, or as a new measurement of antenna replace. s.mu
-// must be held. b is modified and saved.
-func (s *Server) captureLocked(b *Batch, res *Result, g []complex128, replace int, label string, auto bool) (*BatchAntenna, error) {
+// c says. s.mu must be held. b is modified and saved.
+func (s *Server) captureLocked(b *Batch, res *Result, g []complex128, c capture) (*BatchAntenna, error) {
+	replace, label, auto := c.Replace, c.Label, c.Auto
 	if err := batchCheck(b, res); err != nil && !(replace > 0 && strings.HasPrefix(err.Error(), "a batch holds")) {
 		return nil, err
+	}
+	var grp lotGroup
+	if c.Adjust > 0 {
+		if grp = b.groupOf(c.Adjust); grp == nil {
+			return nil, fmt.Errorf("no antenna %d in this batch", c.Adjust)
+		}
+		var err error
+		if c.Change, c.TrimMm, err = cleanAdjust(c.Change, c.TrimMm); err != nil {
+			return nil, err
+		}
 	}
 	if g == nil {
 		g = res.complexS11()
@@ -1067,15 +1208,20 @@ func (s *Server) captureLocked(b *Batch, res *Result, g []complex128, replace in
 		}
 		old := b.Antennas[i]
 		a.ID, a.Label, a.Redone = old.ID, old.Label, old.Redone+1
+		a.AdjustedFrom, a.Change, a.TrimMm = old.AdjustedFrom, old.Change, old.TrimMm
 		b.Antennas[i] = a
 		out = &b.Antennas[i]
 	} else {
 		if b.NextID < 1 {
 			b.NextID = 1
 		}
+		a.Label = b.nextLabel()
+		if grp != nil {
+			a.AdjustedFrom, a.Change, a.TrimMm = b.Antennas[grp[len(grp)-1]].ID, c.Change, c.TrimMm
+			a.Label = versionLabel(b.Antennas[grp[0]].Label, len(grp))
+		}
 		a.ID = b.NextID
 		b.NextID++
-		a.Label = fmt.Sprintf("#%d", a.ID)
 		if l := strings.TrimSpace(label); l != "" {
 			a.Label = truncate(l, maxBatchLabel)
 		}
@@ -1163,7 +1309,7 @@ func (s *Server) batchStateLocked() BatchState {
 	bs := s.batch
 	v := BatchState{Auto: bs.auto, Version: bs.version}
 	if bs.cur != nil {
-		v.Active, v.Name, v.Profile, v.N, v.HasUndo = bs.cur.ID, bs.cur.Name, bs.cur.Profile, len(bs.cur.Antennas), bs.undo[bs.cur.ID] != nil
+		v.Active, v.Name, v.Profile, v.N, v.HasUndo = bs.cur.ID, bs.cur.Name, bs.cur.Profile, bs.cur.physical(), bs.undo[bs.cur.ID] != nil
 	}
 	if bs.trash != nil {
 		v.Trash = bs.trash.ID
@@ -1214,7 +1360,7 @@ func (s *Server) feedBatchLocked(res *Result) {
 	if b == nil || res.Tune != nil || res.Source != nil {
 		return
 	}
-	live := &BatchLive{ID: b.ID, Auto: bs.auto, N: len(b.Antennas), Version: bs.version}
+	live := &BatchLive{ID: b.ID, Auto: bs.auto, N: b.physical(), Version: bs.version}
 	res.Batch = live
 	if err := batchCheck(b, res); err != nil {
 		live.Problem = err.Error()
@@ -1235,18 +1381,20 @@ func (s *Server) feedBatchLocked(res *Result) {
 	if u.Status != rf.ArrReady {
 		return
 	}
-	a, err := s.captureLocked(b, res, u.Gamma, 0, "", true)
+	a, err := s.captureLocked(b, res, u.Gamma, capture{Auto: true})
 	if err != nil {
 		live.Problem = err.Error()
 		return
 	}
 	bs.arr.Captured(u.Gamma)
-	live.Captured, live.N, live.Version = a.ID, len(b.Antennas), bs.version
+	live.Captured, live.N, live.Version = a.ID, b.physical(), bs.version
 	bs.publish = true
 }
 
 // batchSlope finds a learnt MHz/mm for b: from the trim log the batch
-// names, when the trim calculator has learnt it (nil otherwise).
+// names, when the trim calculator has learnt it (nil: no trim log). The
+// log's points come along: batchView pools them with the batch's own
+// adjusted versions (learnSlope).
 func (s *Server) batchSlope(b *Batch) *trimSlope {
 	name := b.Trim
 	if name == "" {
@@ -1257,10 +1405,14 @@ func (s *Server) batchSlope(b *Batch) *trimSlope {
 		return nil
 	}
 	t.predict()
-	if p := t.Prediction; p != nil && p.Method == "fit" && p.MHzPerMm > 0 {
-		return &trimSlope{MHzPerMm: p.MHzPerMm, From: t.Name}
+	sl := &trimSlope{From: t.Name}
+	for _, e := range t.Entries {
+		sl.Log = append(sl.Log, rf.TrimPoint{LengthMm: e.LengthMm, FreqHz: e.FreqHz})
 	}
-	return nil
+	if p := t.Prediction; p != nil && p.Method == "fit" && p.MHzPerMm > 0 {
+		sl.MHzPerMm = p.MHzPerMm
+	}
+	return sl
 }
 
 // loadActiveBatch restores the active batch at start-up.

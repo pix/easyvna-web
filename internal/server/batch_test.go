@@ -358,7 +358,7 @@ func newBenchServer(t *testing.T, antenna string) (*httptest.Server, *Server, *m
 		return nanovnah.Open(ctx, bench.NewSim(), nanovnah.Options{PortName: "mock", Mock: true, CalSettle: time.Millisecond})
 	}
 	s := New(Options{Open: open, Store: st, Static: fstest.MapFS{"index.html": {Data: []byte("ui")}}, Logger: log.New(io.Discard, "", 0),
-		SetMockAntenna: bench.SetAntenna, MockAntenna: antenna, MockScenarios: mock.ScenarioNames()})
+		SetMockAntenna: bench.SetAntenna, MockAntenna: antenna, MockScenarios: mock.ScenarioNames(), MockCut: bench.Cut, MockAction: bench.Action})
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { s.Run(ctx); close(done) }()

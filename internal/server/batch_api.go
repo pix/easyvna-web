@@ -305,11 +305,16 @@ func (s *Server) hBatchRestore(w http.ResponseWriter, r *http.Request) {
 
 // hBatchCapture captures the antenna on the cable: a fresh sweep, checked
 // against the batch's profile. {"replace": id} measures that antenna again
-// (redo); {"label": "SN 42"} names a new one.
+// (redo); {"label": "SN 42"} names a new one; {"adjust": id, "change":
+// "cut 1 mm", "trimMm": 1} keeps the earlier captures and adds a new,
+// adjusted version of the antenna capture id belongs to.
 func (s *Server) hBatchCapture(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Replace int    `json:"replace"`
-		Label   string `json:"label"`
+		Replace int     `json:"replace"`
+		Label   string  `json:"label"`
+		Adjust  int     `json:"adjust"`
+		Change  string  `json:"change"`
+		TrimMm  float64 `json:"trimMm"`
 	}
 	if err := readJSON(r, &req); err != nil {
 		writeErr(w, 400, err)
@@ -342,11 +347,11 @@ func (s *Server) hBatchCapture(w http.ResponseWriter, r *http.Request) {
 	}
 	s.mu.Lock()
 	var a *BatchAntenna
-	if res.Batch != nil && res.Batch.Captured > 0 && req.Replace == 0 && s.batch.cur == b {
+	if res.Batch != nil && res.Batch.Captured > 0 && req.Replace == 0 && req.Adjust == 0 && s.batch.cur == b {
 		// Auto-capture took this very sweep.
 		a = &b.Antennas[b.index(res.Batch.Captured)]
 	} else {
-		a, err = s.captureLocked(b, res, nil, req.Replace, req.Label, false)
+		a, err = s.captureLocked(b, res, nil, capture{Replace: req.Replace, Label: req.Label, Adjust: req.Adjust, Change: req.Change, TrimMm: req.TrimMm})
 		if err == nil && s.batch.arr != nil && s.batch.cur == b {
 			s.batch.arr.Captured(res.complexS11())
 		}
@@ -358,8 +363,11 @@ func (s *Server) hBatchCapture(w http.ResponseWriter, r *http.Request) {
 	}
 	s.publishState()
 	msg := fmt.Sprintf("%s captured", a.Label)
-	if req.Replace > 0 {
+	switch {
+	case req.Replace > 0:
 		msg = fmt.Sprintf("%s measured again", a.Label)
+	case req.Adjust > 0:
+		msg = fmt.Sprintf("%s captured as an adjusted version", a.Label)
 	}
 	writeJSON(w, 200, map[string]any{"message": msg, "id": a.ID, "batch": s.viewOf(b)})
 }
@@ -372,10 +380,17 @@ func antennaID(r *http.Request) (int, error) {
 	return n, nil
 }
 
-// hBatchAntennaEdit renames an antenna: {"label": "SN 0042"}.
+// hBatchAntennaEdit changes a capture: {"label": "SN 0042"} renames it;
+// {"adjustedFrom": id} makes it an adjusted version of the antenna capture
+// id belongs to (same physical antenna), {"adjustedFrom": 0} takes it out
+// of its antenna's versions; {"change": "bent 10°", "trimMm": 0.5} says
+// what was adjusted (with adjustedFrom, or on an adjusted version).
 func (s *Server) hBatchAntennaEdit(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Label string `json:"label"`
+		Label        *string  `json:"label"`
+		AdjustedFrom *int     `json:"adjustedFrom"`
+		Change       *string  `json:"change"`
+		TrimMm       *float64 `json:"trimMm"`
 	}
 	if err := readJSON(r, &req); err != nil {
 		writeErr(w, 400, err)
@@ -386,9 +401,15 @@ func (s *Server) hBatchAntennaEdit(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, err)
 		return
 	}
-	label := strings.TrimSpace(req.Label)
-	if label == "" || len(label) > maxBatchLabel {
-		writeErr(w, 400, fmt.Errorf("give the antenna a label (1-%d characters)", maxBatchLabel))
+	label := ""
+	if req.Label != nil {
+		if label = strings.TrimSpace(*req.Label); label == "" || len(label) > maxBatchLabel {
+			writeErr(w, 400, fmt.Errorf("give the antenna a label (1-%d characters)", maxBatchLabel))
+			return
+		}
+	}
+	if req.Label == nil && req.AdjustedFrom == nil && req.Change == nil && req.TrimMm == nil {
+		writeErr(w, 400, errors.New("nothing to change"))
 		return
 	}
 	s.changeBatch(w, r, func(b *Batch) (string, error) {
@@ -396,28 +417,57 @@ func (s *Server) hBatchAntennaEdit(w http.ResponseWriter, r *http.Request) {
 		if i < 0 {
 			return "", fmt.Errorf("no antenna %d in this batch", n)
 		}
-		old := b.Antennas[i].Label
-		b.Antennas[i].Label = label
-		return fmt.Sprintf("%s renamed %s", old, label), nil
+		var msgs []string
+		if req.Label != nil {
+			old := b.Antennas[i].Label
+			b.Antennas[i].Label = label
+			msgs = append(msgs, fmt.Sprintf("%s renamed %s", old, label))
+		}
+		change, trim := b.Antennas[i].Change, b.Antennas[i].TrimMm
+		if req.Change != nil {
+			change = *req.Change
+		}
+		if req.TrimMm != nil {
+			trim = *req.TrimMm
+		}
+		switch {
+		case req.AdjustedFrom != nil && *req.AdjustedFrom > 0:
+			m, err := b.linkVersion(n, *req.AdjustedFrom, change, trim)
+			if err != nil {
+				return "", err
+			}
+			msgs = append(msgs, m)
+		case req.AdjustedFrom != nil:
+			m, err := b.unlinkVersion(n)
+			if err != nil {
+				return "", err
+			}
+			msgs = append(msgs, m)
+		case req.Change != nil || req.TrimMm != nil:
+			a := &b.Antennas[i]
+			if a.AdjustedFrom == 0 {
+				return "", fmt.Errorf("%s is not an adjusted version: link it to its antenna first", a.Label)
+			}
+			c, t, err := cleanAdjust(change, trim)
+			if err != nil {
+				return "", err
+			}
+			a.Change, a.TrimMm = c, t
+			msgs = append(msgs, a.Label+": adjustment saved")
+		}
+		return strings.Join(msgs, "; "), nil
 	})
 }
 
-// hBatchAntennaDelete removes an antenna (undo with POST .../undo).
+// hBatchAntennaDelete removes an antenna (undo with POST .../undo). Its
+// later version, if any, follows the version before it.
 func (s *Server) hBatchAntennaDelete(w http.ResponseWriter, r *http.Request) {
 	n, err := antennaID(r)
 	if err != nil {
 		writeErr(w, 400, err)
 		return
 	}
-	s.changeBatch(w, r, func(b *Batch) (string, error) {
-		i := b.index(n)
-		if i < 0 {
-			return "", fmt.Errorf("no antenna %d in this batch", n)
-		}
-		label := b.Antennas[i].Label
-		b.Antennas = append(b.Antennas[:i:i], b.Antennas[i+1:]...)
-		return label + " deleted", nil
-	})
+	s.changeBatch(w, r, func(b *Batch) (string, error) { return b.removeCapture(n) })
 }
 
 // changeBatch applies f to a copy of the batch, saves it and keeps the
@@ -433,7 +483,11 @@ func (s *Server) changeBatch(w http.ResponseWriter, r *http.Request, f func(b *B
 	msg, err := f(c)
 	if err != nil {
 		s.mu.Unlock()
-		writeErr(w, 404, err)
+		code := 409
+		if strings.HasPrefix(err.Error(), "no antenna") {
+			code = 404
+		}
+		writeErr(w, code, err)
 		return
 	}
 	c.Updated = time.Now()
@@ -578,8 +632,15 @@ func (b *Batch) validate() error {
 				return fmt.Errorf("antenna %s: bad S11 value", a.Label)
 			}
 		}
+		var err error
+		if a.Change, a.TrimMm, err = cleanAdjust(a.Change, a.TrimMm); err != nil {
+			return fmt.Errorf("antenna %s: %w", a.Label, err)
+		}
+		if a.AdjustedFrom < 0 {
+			return fmt.Errorf("antenna %s: bad adjustedFrom", a.Label)
+		}
 	}
-	return nil
+	return b.checkChains()
 }
 
 // hBatchImport reads a batch export (or a bare batch) back. A batch with
@@ -665,10 +726,12 @@ func (s *Server) hBatchCSV(w http.ResponseWriter, r *http.Request) {
 		return f(x, prec)
 	}
 	_ = cw.Write([]string{"batch", c.Name, "profile", c.Profile, "range", mhzRange(c.Start, c.Stop), "target_mhz", f(c.Target/1e6, 3),
-		"tolerance_mhz", f(v.Summary.ToleranceHz/1e6, 3), "acceptance", v.Summary.Window.Text, "grade", v.Summary.Grade})
+		"tolerance_mhz", f(v.Summary.ToleranceHz/1e6, 3), "acceptance", v.Summary.Window.Text, "grade", v.Summary.Grade,
+		"antennas", strconv.Itoa(v.Summary.N), "captures", strconv.Itoa(v.Summary.Captures)})
 	_ = cw.Write([]string{"#", "label", "captured", "status", "advice", "resonance_mhz", "offset_mhz", "offset_pct", "swr_at_resonance",
 		"swr_at_target", "worst_swr_in_band", "band_swr2_pct", "bw_swr2_mhz", "return_loss_at_target_db", "band_verdict", "cut_mm",
-		"outlier_of", "calibration", "auto", "warnings", "band_below_limit_pct", "margin_used_pct", "measured_n", "resonance_sd_mhz"})
+		"outlier_of", "calibration", "auto", "warnings", "band_below_limit_pct", "margin_used_pct", "measured_n", "resonance_sd_mhz",
+		"no", "version", "current", "adjusted_from", "change", "trim_mm", "delta_resonance_mhz"})
 	for _, a := range v.Antennas {
 		m := a.Metrics
 		verdict := strings.ToUpper(m.Verdict)
@@ -680,7 +743,9 @@ func (s *Server) hBatchCSV(w http.ResponseWriter, r *http.Request) {
 			f(m.SWRTarget, 3), fz(m.WorstSWR, 3, m.WorstSWR > 0), f(m.PctBelow2, 1), fz(m.BW2/1e6, 3, m.BW2 > 0 && !m.BW2Open),
 			f(m.RLTarget, 2), verdict, fz(m.Tuning.CutMm, 2, m.Tuning.Method != "pct" && m.Found), strings.Join(m.Outliers, " "),
 			a.Cal, strconv.FormatBool(a.Auto), strings.Join(a.Warnings, " "), f(m.PctBelowLimit, 1),
-			fz(m.Margin.UsedPct, 1, m.Margin.OK), repN(a.Rep), repSD(a.Rep)})
+			fz(m.Margin.UsedPct, 1, m.Margin.OK), repN(a.Rep), repSD(a.Rep),
+			a.No, strconv.Itoa(a.Ver), strconv.FormatBool(a.Current), fz(float64(a.AdjustedFrom), 0, a.AdjustedFrom > 0), a.Change,
+			fz(a.TrimMm, 2, a.TrimMm != 0), fz(stepDRes(a.Step), 4, a.Step != nil && a.Step.Found)})
 	}
 	_ = cw.Write(nil)
 	_ = cw.Write([]string{"statistic", "unit", "n", "mean", "sd", "min", "max", "spread", "median", "outliers"})
@@ -695,6 +760,13 @@ func (s *Server) hBatchCSV(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = cw.Write(nil)
 	sm := v.Summary
+	_ = cw.Write([]string{"lot", fmt.Sprintf("%d antennas, %d captures: the statistics use the current version of each antenna", sm.N, sm.Captures)})
+	for _, st := range sm.Steps {
+		_ = cw.Write([]string{"adjustment", st.Text})
+	}
+	if sm.Learnt != nil {
+		_ = cw.Write([]string{"learnt", sm.Learnt.Text, f(sm.Learnt.MHzPerMm, 3)})
+	}
 	_ = cw.Write([]string{"tuning", sm.TuningLine})
 	_ = cw.Write([]string{"yield", fmt.Sprintf("good %d, ok %d, bad %d", sm.Yield["good"], sm.Yield["ok"], sm.Yield["bad"])})
 	for _, l := range sm.Conclusion {
@@ -704,6 +776,13 @@ func (s *Server) hBatchCSV(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
 	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, attachmentName(b.Name, "-batch", ".csv")))
 	_, _ = w.Write(buf.Bytes())
+}
+
+func stepDRes(st *AdjustStep) float64 {
+	if st == nil {
+		return 0
+	}
+	return st.DRes / 1e6
 }
 
 func repN(r *RepeatBrief) string {

@@ -82,10 +82,13 @@ type measureJob struct {
 	Run      int
 	Need     int
 	Message  string
-	Step     string // setup check step
-	Replace  int    // batch: antenna to measure again
-	Label    string // batch: label of a new antenna
-	Captured int    // batch: antenna ID captured
+	Step     string  // setup check step
+	Replace  int     // batch: antenna to measure again
+	Adjust   int     // batch: capture a new version of this antenna
+	Change   string  // batch: what was changed (with Adjust)
+	TrimMm   float64 // batch: mm cut (with Adjust)
+	Label    string  // batch: label of a new antenna
+	Captured int     // batch: antenna ID captured
 	cancel   context.CancelFunc
 	cont     chan struct{}
 }
@@ -122,15 +125,19 @@ func (s *Server) measuringLocked() bool { return s.meas != nil && s.meas.Status 
 
 const maxMeasureN = 20
 
-// hMeasure starts a job: POST /api/measure {"n":5,"reseat":false,"for":"measure"|"batch"|"setup","step":"A","replace":0,"label":""}.
+// hMeasure starts a job: POST /api/measure {"n":5,"reseat":false,"for":"measure"|"batch"|"setup","step":"A","replace":0,"label":"",
+// "adjust":0,"change":"","trimMm":0}.
 func (s *Server) hMeasure(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		N       int    `json:"n"`
-		Reseat  bool   `json:"reseat"`
-		For     string `json:"for"`
-		Step    string `json:"step"`
-		Replace int    `json:"replace"`
-		Label   string `json:"label"`
+		N       int     `json:"n"`
+		Reseat  bool    `json:"reseat"`
+		For     string  `json:"for"`
+		Step    string  `json:"step"`
+		Replace int     `json:"replace"`
+		Label   string  `json:"label"`
+		Adjust  int     `json:"adjust"`
+		Change  string  `json:"change"`
+		TrimMm  float64 `json:"trimMm"`
 	}
 	if err := readJSON(r, &req); err != nil {
 		writeErr(w, 400, err)
@@ -161,6 +168,8 @@ func (s *Server) hMeasure(w http.ResponseWriter, r *http.Request) {
 		err = errors.New("no active batch")
 	case req.For == "batch" && req.Replace > 0 && s.batch.cur.index(req.Replace) < 0:
 		err = fmt.Errorf("no antenna %d in this batch", req.Replace)
+	case req.For == "batch" && req.Adjust > 0 && s.batch.cur.index(req.Adjust) < 0:
+		err = fmt.Errorf("no antenna %d in this batch", req.Adjust)
 	case req.For == "setup" && req.Step != "A" && req.Step != "B" && req.Step != "C":
 		err = errors.New("setup check step: A, B or C")
 	case req.For == "setup" && req.Step != "A" && (s.setup == nil || s.setup.a == nil):
@@ -177,7 +186,7 @@ func (s *Server) hMeasure(w http.ResponseWriter, r *http.Request) {
 		id = s.meas.ID + 1
 	}
 	j := &measureJob{ID: id, For: req.For, N: req.N, Reseat: req.Reseat, Status: "running", Phase: "sweeping",
-		Step: req.Step, Replace: req.Replace, Label: req.Label, cancel: cancel, cont: make(chan struct{}, 1)}
+		Step: req.Step, Replace: req.Replace, Label: req.Label, Adjust: req.Adjust, Change: req.Change, TrimMm: req.TrimMm, cancel: cancel, cont: make(chan struct{}, 1)}
 	s.meas = j
 	s.mu.Unlock()
 	s.publishState()
@@ -357,7 +366,7 @@ func (s *Server) finishMeasure(j *measureJob, last *Result, sweeps [][]complex12
 			break
 		}
 		var a *BatchAntenna
-		a, err = s.captureLocked(b, res, avg, j.Replace, j.Label, false)
+		a, err = s.captureLocked(b, res, avg, capture{Replace: j.Replace, Label: j.Label, Adjust: j.Adjust, Change: j.Change, TrimMm: j.TrimMm})
 		if err == nil {
 			a.Rep = briefOf(res.Multi)
 			err = s.store.SaveBatch(b)
