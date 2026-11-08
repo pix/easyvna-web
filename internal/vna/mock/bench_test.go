@@ -80,7 +80,7 @@ func TestLotUnits(t *testing.T) {
 	for k := 1; k <= 70; k++ {
 		off := LotOffset(k)
 		if k%7 == 3 {
-			if off > -0.015 {
+			if off > -0.025 {
 				t.Fatalf("unit %d should be an outlier: %.4f", k, off)
 			}
 			continue
@@ -94,7 +94,7 @@ func TestLotUnits(t *testing.T) {
 	}
 	mean := sum / float64(n)
 	sd := math.Sqrt(sum2/float64(n) - mean*mean)
-	if math.Abs(mean-LotBias) > 0.001 || sd < 0.0012 || sd > 0.0035 {
+	if math.Abs(mean-LotBias) > 0.001 || sd < 0.0006 || sd > 0.002 {
 		t.Fatalf("lot mean %.4f sd %.4f", mean, sd)
 	}
 	for _, band := range LotBands {

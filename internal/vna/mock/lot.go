@@ -9,9 +9,9 @@ import (
 // mode: every time a lot scenario is selected (SetAntenna, the Device
 // panel, "Next antenna" in BATCH), the next unit of that lot is connected.
 // Units differ like a real production run: the whole lot is cut slightly
-// long (its resonance sits about 0.25 % low), each unit's length varies by
-// about ±0.22 % (1σ), its feed resistance by ±8 % and its Q by ±7 %, and
-// every seventh unit is a clear outlier (about 2 % low, a badly made one).
+// long (its resonance sits about 0.35 % low), each unit's length varies by
+// about ±0.12 % (1σ), its feed resistance by ±8 % and its Q by ±7 %, and
+// every seventh unit is a clear outlier (about 3.5 % low, a badly made one).
 // The sequence is deterministic, so a demo or a test always sees the same
 // lot.
 
@@ -20,9 +20,9 @@ var LotBands = []string{"433", "869", "915"}
 
 // Lot model parameters.
 const (
-	LotBias                       = -0.0025 // relative resonance offset of the whole lot
-	LotSigma                      = 0.0022  // 1σ unit-to-unit relative resonance spread
-	LotOutlier                    = -0.02   // relative offset of an outlier unit
+	LotBias                       = -0.0035 // relative resonance offset of the whole lot
+	LotSigma                      = 0.0012  // 1σ unit-to-unit relative resonance spread
+	LotOutlier                    = -0.035  // relative offset of an outlier unit
 	lotOutlierEvery, lotOutlierAt = 7, 3
 )
 
@@ -59,7 +59,7 @@ func lotGauss(k, salt int) float64 {
 // LotOffset is the relative resonance offset of unit k of a lot.
 func LotOffset(k int) float64 {
 	if k%lotOutlierEvery == lotOutlierAt {
-		return LotOutlier + 0.002*lotRand(k, 7)
+		return LotOutlier + 0.006*lotRand(k, 7)
 	}
 	return LotBias + LotSigma*lotGauss(k, 1)
 }
