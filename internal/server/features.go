@@ -48,7 +48,7 @@ func (s *Server) average(cfg Config, freq []float64, s11, s21 []complex128) ([]c
 func (s *Server) postProcessLocked(res *Result) {
 	cfg := res.Config
 	if s.tune != nil {
-		ti := rf.Tune(res.Freq, res.Derived, s.tune.Target)
+		ti := s.tuneInfoLocked(res, s.tune.Target)
 		res.Tune = &ti
 		s.retuneLocked(ti)
 	} else {
@@ -57,7 +57,9 @@ func (s *Server) postProcessLocked(res *Result) {
 	if ref := s.refs[cfg.Profile]; ref != nil {
 		res.Ref = s.refDeltaLocked(res, ref)
 	}
-	s.feedHoldLocked(res)
+	if !s.measuringLocked() {
+		s.feedHoldLocked(res)
+	}
 	s.feedBatchLocked(res)
 	if s.compareOn {
 		c := s.compare

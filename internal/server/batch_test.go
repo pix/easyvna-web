@@ -52,8 +52,8 @@ func addAnt(b *Batch, f0, r, q float64) {
 
 func TestAntennaTuning(t *testing.T) {
 	b := testBatch()
-	tol := b.ToleranceHz()
-	if math.Abs(tol-1.3035e6) > 1e3 {
+	tol := b.AimHz()
+	if math.Abs(tol-1.3035e6) > 1e3 || math.Abs(tight.Resolve(b.Target, nil).Hz-tol) > 1 {
 		t.Fatalf("tolerance %.0f", tol)
 	}
 	cases := []struct {
@@ -63,7 +63,7 @@ func TestAntennaTuning(t *testing.T) {
 		{868.8e6, 47, "tuned"}, {864e6, 47, "shorten"}, {874e6, 47, "lengthen"}, {835e6, 47, "bad"}, {862e6, 20, "bad"},
 	}
 	for _, c := range cases {
-		m, _ := antennaMetrics(b, whip(b, c.f0, c.r, 13), trimSlope{})
+		m, _ := antennaMetrics(b, whip(b, c.f0, c.r, 13), trimSlope{}, tight)
 		if !m.Found || m.Tuning.Status != c.status {
 			t.Fatalf("f0 %.1f R %.0f: %+v", c.f0/1e6, c.r, m.Tuning)
 		}
@@ -89,7 +89,7 @@ func TestAntennaTuning(t *testing.T) {
 	// With the element length: the trim calculator's first estimate and
 	// its cautious first cut (TUNE's rule).
 	b.LengthMm = 164
-	m, _ := antennaMetrics(b, whip(b, 860e6, 47, 13), trimSlope{})
+	m, _ := antennaMetrics(b, whip(b, 860e6, 47, 13), trimSlope{}, tight)
 	tu := m.Tuning
 	want := 164 - 164*m.ResFreq/b.Target
 	if tu.Method != "ratio" || !tu.Cautious || math.Abs(tu.CutMm-want) > 0.01 || tu.FirstCutMm != rf.FirstCut(want) || !strings.Contains(tu.Text, "shorten") ||
@@ -97,7 +97,7 @@ func TestAntennaTuning(t *testing.T) {
 		t.Fatalf("ratio: %+v (want cut %.2f)", tu, want)
 	}
 	// With a learnt MHz/mm: the full cut, not cautious.
-	m, _ = antennaMetrics(b, whip(b, 860e6, 47, 13), trimSlope{MHzPerMm: 9, From: "whip"})
+	m, _ = antennaMetrics(b, whip(b, 860e6, 47, 13), trimSlope{MHzPerMm: 9, From: "whip"}, tight)
 	if m.Tuning.Method != "fit" || m.Tuning.Cautious || math.Abs(m.Tuning.CutMm-(b.Target-m.ResFreq)/9e6) > 1e-9 {
 		t.Fatalf("fit: %+v", m.Tuning)
 	}
@@ -106,61 +106,119 @@ func TestAntennaTuning(t *testing.T) {
 	for i := range open {
 		open[i] = [2]float64{0.99, 0}
 	}
-	m, _ = antennaMetrics(b, open, trimSlope{})
+	m, _ = antennaMetrics(b, open, trimSlope{}, tight)
 	if m.Found || m.Tuning.Status != "none" {
 		t.Fatalf("open: %+v", m)
 	}
 }
 
+// tight is the ± 0.15 % tolerance (the behaviour before the acceptance
+// setting), auto the default.
+var tight, auto = rf.Acceptance{Tol: rf.TolTight}, rf.Acceptance{}
+
+func TestAntennaTuningAuto(t *testing.T) {
+	b := testBatch()
+	b.LengthMm = 82
+	// 6 MHz low, a whip with a wide dip: the band is covered, OK with margin.
+	m, _ := antennaMetrics(b, whip(b, 863e6, 47, 13), trimSlope{}, auto)
+	if m.Tuning.Status != "ok" || !strings.HasPrefix(m.Tuning.Text, "✓ OK") || !m.Margin.OK || !m.Margin.Covered ||
+		m.Margin.UsedPct <= 0 || m.Margin.UsedPct > 60 || !strings.Contains(m.Tuning.Detail, "Optional") {
+		t.Fatalf("ok: %+v", m)
+	}
+	// On the fine aim: tuned.
+	m, _ = antennaMetrics(b, whip(b, 868.6e6, 47, 13), trimSlope{}, auto)
+	if m.Tuning.Status != "tuned" {
+		t.Fatalf("tuned: %+v", m.Tuning)
+	}
+	// Far off: the band is not covered.
+	m, _ = antennaMetrics(b, whip(b, 835e6, 47, 13), trimSlope{}, auto)
+	if m.Tuning.Status != "bad" || m.Tuning.Text != "✗ out of band" || m.Margin.Covered {
+		t.Fatalf("bad: %+v", m.Tuning)
+	}
+	// A poor match: centring would not help.
+	m, _ = antennaMetrics(b, whip(b, 866.5e6, 15, 13), trimSlope{}, auto)
+	if m.Tuning.Status != "bad" || m.Tuning.Text != "✗ poor match" {
+		t.Fatalf("poor: %+v %+v", m.Tuning, m.Margin)
+	}
+	// A stricter SWR limit turns the same antenna from OK into bad.
+	strict := rf.Acceptance{SWRLimit: 1.5}
+	found := false
+	for f := 868e6; f > 820e6 && !found; f -= 1e6 {
+		m1, _ := antennaMetrics(b, whip(b, f, 47, 13), trimSlope{}, auto)
+		if m1.Verdict != "ok" || m1.WorstSWR < 1.55 {
+			continue
+		}
+		found = true
+		m2, _ := antennaMetrics(b, whip(b, f, 47, 13), trimSlope{}, strict)
+		if m2.Verdict != "bad" || m2.Tuning.Status != "bad" || m1.Tuning.Status == "bad" {
+			t.Fatalf("limit at %.0f MHz: %s/%s %s", f/1e6, m1.Verdict, m2.Verdict, m2.Tuning.Status)
+		}
+	}
+	if !found {
+		t.Fatal("no antenna between SWR 1.55 and 2")
+	}
+}
+
+func joined(sm BatchSummary) string { return strings.Join(sm.Conclusion, " | ") }
+
 func TestBatchSummary(t *testing.T) {
-	// A lot that all resonates ~4 MHz low, consistently: systematic offset.
+	// Tight tolerance: a lot that all resonates ~4 MHz low, consistently.
 	b := testBatch()
 	b.LengthMm = 82
 	for _, f := range []float64{864.6e6, 865.3e6, 864.9e6, 865.6e6, 865.0e6} {
 		addAnt(b, f, 47, 13)
 	}
-	v := batchView(b, nil)
+	v := batchView(b, nil, tight)
 	sm := v.Summary
 	if sm.N != 5 || sm.Shorten != 5 || sm.Tuned != 0 || sm.BiasHz > -3e6 || sm.BiasHz < -5e6 || sm.SigmaHz > 0.6e6 || sm.BiasCutMm <= 0.2 {
 		t.Fatalf("%+v", sm)
 	}
-	if !strings.HasPrefix(sm.Conclusion[0], "Systematic offset: the whole lot resonates") || !strings.Contains(sm.Conclusion[0], "low") ||
-		!strings.Contains(sm.Conclusion[0], "mm too long") || !strings.Contains(sm.Conclusion[1], "Consistent lot") {
+	if sm.Grade != GradeWorth || !strings.HasPrefix(sm.Conclusion[0], "Worth correcting: all 5 antennas cover 863.00–870.00 MHz at SWR < 2.0") ||
+		!strings.Contains(sm.Conclusion[0], "5 are outside the ± 1.30 MHz tolerance") || !strings.Contains(joined(sm), "spread: σ 0.") {
 		t.Fatalf("conclusion: %q", sm.Conclusion)
 	}
-	if !strings.HasPrefix(sm.TuningLine, "0 of 5 tuned; 5 to shorten (") || !strings.Contains(sm.TuningLine, "mm)") {
+	if !strings.HasPrefix(sm.TuningLine, "0 of 5 tuned (± 1.30 MHz); 5 to shorten (") || !strings.Contains(sm.TuningLine, "mm)") {
 		t.Fatal(sm.TuningLine)
+	}
+	if sm.Criteria != "Acceptance: band SWR < 2.0, resonance ± 0.15 % (± 1.30 MHz)" {
+		t.Fatal(sm.Criteria)
 	}
 	res := sm.Stats[0]
 	if res.Key != "res" || res.N != 5 || len(res.Outliers) != 0 || math.Abs(res.Mean-865.08) > 1.2 || res.SD <= 0 {
 		t.Fatalf("res stats %+v", res)
 	}
-	// A mixed lot: 7 tuned, 2 to shorten, 1 bad outlier.
+	// The same lot with Auto (the default): fine, no correction needed.
+	sm = batchView(b, nil, auto).Summary
+	if sm.Grade != GradeFine || sm.OK != 5 || sm.Shorten != 0 || !strings.HasPrefix(sm.Conclusion[0], "Fine: all 5 antennas cover") ||
+		!strings.Contains(sm.Conclusion[0], "no correction needed") || strings.Contains(joined(sm), "Correct the pattern") {
+		t.Fatalf("auto: %q %+v", sm.Conclusion, sm)
+	}
+	if sm.Window.Mode != rf.TolAuto || sm.Window.Hz < 8e6 || !strings.Contains(sm.Criteria, "resonance Auto ±") {
+		t.Fatalf("auto window %+v", sm.Window)
+	}
+	// A mixed lot (tight): 7 tuned, 2 to shorten, 1 bad outlier.
 	b = testBatch()
 	for _, f := range []float64{867.6e6, 868.4e6, 868.0e6, 868.7e6, 867.5e6, 868.2e6, 867.9e6, 865.5e6, 866.0e6, 835e6} {
 		addAnt(b, f, 47, 13)
 	}
-	sm = batchView(b, nil).Summary
-	if sm.Tuned != 7 || sm.Shorten != 2 || sm.Bad != 1 || sm.TuningLine != "7 of 10 tuned; 2 to shorten; 1 bad" {
+	sm = batchView(b, nil, tight).Summary
+	if sm.Tuned != 7 || sm.Shorten != 2 || sm.Bad != 1 || sm.TuningLine != "7 of 10 tuned (± 1.30 MHz); 2 to shorten; 1 bad" || sm.Grade != GradeMust {
 		t.Fatalf("mixed: %+v %q", sm, sm.TuningLine)
 	}
 	if got := sm.Stats[0].Outliers; len(got) != 1 || got[0] != 10 {
 		t.Fatalf("outliers %v", got)
 	}
-	found := false
-	for _, l := range sm.Conclusion {
-		found = found || strings.Contains(l, "Statistical outlier") && strings.Contains(l, "#10")
-	}
-	if !found || sm.Yield["bad"] != 1 {
+	if !strings.Contains(joined(sm), "Statistical outlier") || !strings.Contains(joined(sm), "#10") || sm.Yield["bad"] != 1 ||
+		!strings.HasPrefix(sm.Conclusion[0], "Must correct: 1 of 10 antennas do not cover") || !strings.Contains(sm.Conclusion[0], "individually") {
 		t.Fatalf("%q %v", sm.Conclusion, sm.Yield)
 	}
-	// n = 1, n = 2, identical antennas: no outliers, no NaN anywhere.
+	// n = 0, 1, 2, 4 identical antennas: no outliers, no NaN anywhere.
 	for _, n := range []int{0, 1, 2, 4} {
 		b = testBatch()
 		for i := 0; i < n; i++ {
 			addAnt(b, 868.8e6, 47, 13)
 		}
-		v := batchView(b, nil)
+		v := batchView(b, nil, auto)
 		if _, err := json.Marshal(v); err != nil {
 			t.Fatalf("n=%d: %v", n, err)
 		}
@@ -169,21 +227,82 @@ func TestBatchSummary(t *testing.T) {
 				t.Fatalf("n=%d %s: %+v", n, st.Key, st)
 			}
 		}
-		if n == 1 && !strings.HasPrefix(v.Summary.Conclusion[0], "One antenna so far") {
-			t.Fatal(v.Summary.Conclusion)
+		c := joined(v.Summary)
+		if n == 1 && !strings.Contains(c, "One antenna so far") {
+			t.Fatal(c)
 		}
-		if n == 4 && (v.Summary.Tuned != 4 || !strings.HasPrefix(v.Summary.Conclusion[0], "On target on average")) {
-			t.Fatal(v.Summary.Conclusion)
+		if n == 4 && (v.Summary.Tuned != 4 || !strings.Contains(c, "Centred on the target") || !strings.Contains(c, "Indicative (n = 4)")) {
+			t.Fatal(c)
 		}
 	}
 	// Large variance around the right mean.
 	b = testBatch()
-	for _, f := range []float64{865e6, 873e6, 867e6, 871.5e6, 869e6} {
+	for _, f := range []float64{858e6, 880e6, 862e6, 876e6, 869e6} {
 		addAnt(b, f, 47, 13)
 	}
-	sm = batchView(b, nil).Summary
-	if !strings.Contains(strings.Join(sm.Conclusion, " "), "Large manufacturing variance") {
-		t.Fatal(sm.Conclusion)
+	sm = batchView(b, nil, auto).Summary
+	if !strings.Contains(joined(sm), "Wide spread") {
+		t.Fatal(joined(sm))
+	}
+}
+
+// The lot judgement: n-aware, margin-based (the user's 2-antenna lot).
+func TestBatchConclusionGrades(t *testing.T) {
+	// n = 2, resonating ~6.3 MHz low with a wide margin: no variance
+	// verdict, the mean with its 95 % confidence interval, "indicative".
+	b := testBatch()
+	b.LengthMm = 82
+	addAnt(b, 859.5e6, 47, 13)
+	addAnt(b, 865.8e6, 47, 13)
+	sm := batchView(b, nil, auto).Summary
+	c := joined(sm)
+	if sm.Grade != GradeFine || !strings.Contains(c, "Indicative (n = 2)") || !strings.Contains(c, "95 % confidence interval") ||
+		strings.Contains(c, "spread") || strings.Contains(c, "variance") || sm.BiasCIHz <= 0 {
+		t.Fatalf("n=2: %s", c)
+	}
+	if want := rf.TQuantile95(1) * sm.SigmaHz / math.Sqrt2; math.Abs(sm.BiasCIHz-want) > 0.05*want {
+		t.Fatalf("CI %.0f, want ≈ %.0f", sm.BiasCIHz, want)
+	}
+	// A lot 0.7 % low (≈ 6 MHz) with a wide SWR margin: fine, no correction.
+	b = testBatch()
+	b.LengthMm = 82
+	for _, f := range []float64{862.4e6, 862.9e6, 862.6e6, 863.1e6, 862.7e6, 862.3e6} {
+		addAnt(b, f, 47, 13)
+	}
+	sm = batchView(b, nil, auto).Summary
+	if sm.Grade != GradeFine || !strings.Contains(sm.Headline, "no correction needed") || !strings.Contains(sm.Headline, "uses") ||
+		strings.Contains(joined(sm), "Indicative") || sm.BiasUsedPct > 50 {
+		t.Fatalf("fine: %s %+v", joined(sm), sm.BiasUsedPct)
+	}
+	// Near the margin: worth correcting.
+	b = testBatch()
+	for _, f := range []float64{882e6, 883e6, 882.5e6, 883.4e6, 882.2e6} {
+		addAnt(b, f, 47, 13)
+	}
+	sm = batchView(b, nil, auto).Summary
+	if sm.Grade != GradeWorth || !strings.HasPrefix(sm.Headline, "Worth correcting") || !strings.Contains(sm.Headline, "would centre the lot") {
+		t.Fatalf("worth: %s (bias used %.0f %%, margin max %.0f %%)", joined(sm), sm.BiasUsedPct, sm.MarginMax)
+	}
+	// SWR failures: must correct.
+	b = testBatch()
+	for _, f := range []float64{895e6, 897e6, 896e6, 894e6, 896.5e6} {
+		addAnt(b, f, 47, 13)
+	}
+	sm = batchView(b, nil, auto).Summary
+	if sm.Grade != GradeMust || !strings.HasPrefix(sm.Headline, "Must correct: 5 of 5 antennas do not cover") || !strings.Contains(sm.Headline, "correct the pattern") {
+		t.Fatalf("must: %s", joined(sm))
+	}
+	// Measure ×N: spread compared with the repeatability.
+	b = testBatch()
+	for _, f := range []float64{866e6, 868e6, 870e6, 867e6, 869.5e6} {
+		addAnt(b, f, 47, 13)
+	}
+	for i := range b.Antennas {
+		b.Antennas[i].Rep = &RepeatBrief{N: 5, Mode: rf.RepeatStill, ResSD: 0.1e6}
+	}
+	sm = batchView(b, nil, auto).Summary
+	if sm.NRepeat != 5 || math.Abs(sm.RepeatHz-0.1e6) > 1 || !strings.Contains(joined(sm), "the spread is real") {
+		t.Fatalf("repeat: %s", joined(sm))
 	}
 }
 
@@ -201,7 +320,7 @@ func TestBatchStore(t *testing.T) {
 	if err != nil || got.Name != b.Name || len(got.Antennas) != 1 || len(got.Antennas[0].S11) != 401 {
 		t.Fatalf("%v %+v", err, got)
 	}
-	l := st.ListBatches()
+	l := st.ListBatches(func(string) rf.Acceptance { return rf.Acceptance{} })
 	if len(l) != 1 || l[0].N != 1 || l[0].Tuned != 1 || l[0].Yield["good"] != 1 {
 		t.Fatalf("%+v", l)
 	}
@@ -212,7 +331,7 @@ func TestBatchStore(t *testing.T) {
 	if _, err := st.LoadBatch("../x"); err == nil {
 		t.Fatal("bad id accepted")
 	}
-	if err := st.DeleteBatch("t1"); err != nil || len(st.ListBatches()) != 0 {
+	if err := st.DeleteBatch("t1"); err != nil || len(st.ListBatches(func(string) rf.Acceptance { return rf.Acceptance{} })) != 0 {
 		t.Fatal(err)
 	}
 	// The backup brings it back.
@@ -389,7 +508,7 @@ func TestBatchAPI(t *testing.T) {
 		t.Fatal(c)
 	}
 	html, _ := get(t, ts, "/"+sh["url"])
-	for _, want := range []string{"Batch sheet", "869 whip lot A (2026)", "SN 0042", "Lot statistics", "svg class=\"plot overlay\"", "svg class=\"plot spread\"", "tuned (± 1.30 MHz)", "◆"} {
+	for _, want := range []string{"Batch sheet", "869 whip lot A (2026)", "SN 0042", "Lot statistics", "svg class=\"plot overlay\"", "svg class=\"plot spread\"", "◆"} {
 		if want == "◆" {
 			if !strings.Contains(html, "out\">") && !strings.Contains(html, " out\"") {
 				t.Fatalf("no outlier cell")

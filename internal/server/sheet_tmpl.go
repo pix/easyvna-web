@@ -31,6 +31,11 @@ h1 { font-size: 19pt; line-height: 1.05; margin: .5mm 0 .8mm; overflow-wrap: any
 .photo img { max-width: 100%; max-height: 100%; display: block; }
 .side { display: flex; gap: 2.5mm; align-items: flex-start; }
 .side .photo { width: 36mm; }
+.pbox { width: 36mm; display: flex; flex-direction: column; gap: .5mm; }
+.smallprint { font-size: 6.2pt; line-height: 1.25; color: var(--muted); overflow-wrap: anywhere; }
+.qrbox .smallprint { text-align: center; width: 100%; }
+.crit { font-size: 7pt; color: var(--ink2); display: flex; flex-wrap: wrap; gap: .3mm 4mm; }
+.crit b { color: var(--ink); }
 .qrbox { display: flex; flex-direction: column; align-items: center; gap: .6mm; width: 24mm; }
 .qrbox svg { display: block; }
 a.link { font-size: 6.2pt; line-height: 1.2; color: var(--ink2); text-decoration: none; overflow-wrap: anywhere; text-align: center; }
@@ -102,19 +107,20 @@ td.num, th.num { text-align: right; }
       <dt>Calibration</dt><dd style="grid-column: span 3" class="{{if .CalOK}}calok{{else}}calbad{{end}}">{{.CalState}}</dd>
     </dl>
   </div>
-  {{if or .A.Photo .QR}}<div class="side">{{if .A.Photo}}<div class="photo"><img src="{{.A.Photo | photo}}" alt="Photo of {{.A.Name}}"></div>{{end}}{{if .QR}}<div class="qrbox">{{.QR}}<a class="link" href="{{.A.Link}}" target="_blank" rel="noopener noreferrer">{{.LinkText}}</a></div>{{end}}</div>{{end}}
+  {{if or .A.Photo .QR}}<div class="side">{{if .A.Photo}}<div class="pbox"><div class="photo"><img src="{{.A.Photo | photo}}" alt="Photo of {{.A.Name}}"></div>{{if .A.PhotoCaption}}<div class="smallprint photocaption">{{.A.PhotoCaption}}</div>{{end}}</div>{{end}}{{if .QR}}<div class="qrbox">{{.QR}}<a class="link" href="{{.A.Link}}" target="_blank" rel="noopener noreferrer">{{.LinkText}}</a>{{if .A.LinkNote}}<div class="smallprint linknote">{{.A.LinkNote}}</div>{{end}}</div>{{end}}</div>{{end}}
 </header>
 
 {{range .Warnings}}<div class="warn"><b>{{.Title}}</b>: {{.Text}}</div>{{end}}
 
 <section class="kf" aria-label="Key figures">
-  <div class="verdict {{.VClass}}"><b>{{.Verdict}}</b><span>{{if .VNote}}{{.VNote}}{{else}}PASS = worst in-band SWR &lt; 1.5, OK &lt; 2{{end}}</span></div>
+  <div class="verdict {{.VClass}}"><b>{{.Verdict}}</b><span>{{if .VNote}}{{.VNote}}{{else}}PASS = worst in-band SWR &lt; {{g .Good}}, OK &lt; {{g .Limit}}{{end}}</span></div>
   <div class="figs">{{range .Figs}}<div class="fig {{.Class}}"><i>{{.K}}</i><b{{if gt (len .V) 9}} class="long"{{end}}>{{.V}}</b>{{if .Sub}}<small>{{.Sub}}</small>{{end}}</div>{{end}}</div>
 </section>
 
 <div>{{.SWR}}</div>
 <div class="prow"><div class="stack"><div>{{.RL}}</div><div>{{.Z}}</div></div><div>{{.Smith}}</div></div>
 <div class="legend">{{range .Legend}}<span>{{.}}</span>{{end}}</div>
+<div class="crit"><span class="criteria">{{.Criteria}}</span>{{if .Multi}}<span class="multi"><b>Measurement:</b> {{.Multi}}</span>{{end}}{{with .Setup}}<span class="setupline"><b>Setup check</b> {{.Time.Format "2006-01-02 15:04"}}: {{.Line}}</span>{{end}}</div>
 {{with .Ref}}{{if .Effect}}<div class="drift"><b>Change vs {{refname .}}</b> (per band): {{.Effect}}</div>{{end}}{{end}}
 {{with .Drift}}<div class="drift{{if .Warnings}} dw{{end}}"><b>History:</b> {{.Line}}{{range .Warnings}}{{if ne .Level "info"}} <b>{{.Title}}</b>: {{.Text}}{{end}}{{end}}</div>{{end}}
 
@@ -142,6 +148,7 @@ td.num, th.num { text-align: right; }
 
 var sheetTmpl = template.Must(template.New("sheet").Funcs(reportFuncs).Funcs(template.FuncMap{
 	"add": func(a, b int) int { return a + b },
+	"g":   fmtG,
 	// photo marks the stored data: URL (validated by AntennaInfo.clean) as a
 	// safe image URL; html/template would otherwise replace it.
 	"photo": func(s string) template.URL { return template.URL(s) },

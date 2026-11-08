@@ -87,6 +87,10 @@ func (s *Server) hFile(w http.ResponseWriter, r *http.Request) {
 	s.continuous.Store(false)
 	now := time.Now()
 	cfg, prof := s.fileConfigLocked(m.Freq, m.S21 != nil)
+	cfg.Accept = s.settings.AcceptanceFor(prof)
+	if prof == "" {
+		cfg.Accept = s.settings.Accept
+	}
 	res := buildResult(m.Freq, m.S11, m.S21, cfg, now, 0)
 	res.Source = &FileSource{File: name, Format: m.Format, Loaded: now, Z0: m.Z0, Notes: m.Notes, Profile: prof}
 	s.seq++

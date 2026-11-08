@@ -28,6 +28,10 @@ h1 { font-size: 20pt; line-height: 1.1; margin: 1mm 0 2mm; }
 .photo img { max-width: 100%; max-height: 100%; display: block; }
 .qrbox { display: flex; flex-direction: column; align-items: center; gap: .5mm; font-size: 6.5pt; color: var(--muted); }
 .qrbox svg { display: block; }
+.pbox { width: 40mm; display: flex; flex-direction: column; gap: .5mm; }
+.qrbox { max-width: 30mm; }
+.smallprint { font-size: 6.2pt; line-height: 1.25; color: var(--muted); overflow-wrap: anywhere; }
+.qrbox .smallprint { text-align: center; }
 .link a { color: var(--ink); text-decoration: none; overflow-wrap: anywhere; }
 @media screen { .link a { color: #1d4f91; text-decoration: underline; } }
 .credit { text-align: right; font-size: 7.5pt; color: var(--muted); }
@@ -106,7 +110,7 @@ table.dips td:nth-child(-n+8) { white-space: nowrap; }
       {{if .Link}}<dt>Link</dt><dd style="grid-column: span 3" class="link"><a href="{{.Link}}" target="_blank" rel="noopener noreferrer">{{.LinkText}}</a></dd>{{end}}
     </dl>
   </div>
-  {{if or .Photo .QR}}<div class="side">{{if .Photo}}<div class="photo"><img src="{{.Photo | photo}}" alt="Photo of {{.Name}}"></div>{{end}}{{if .QR}}<div class="qrbox">{{.QR}}<span>scan: product link</span></div>{{end}}</div>{{end}}
+  {{if or .Photo .QR}}<div class="side">{{if .Photo}}<div class="pbox"><div class="photo"><img src="{{.Photo | photo}}" alt="Photo of {{.Name}}"></div>{{if .PhotoCaption}}<div class="smallprint photocaption">{{.PhotoCaption}}</div>{{end}}</div>{{end}}{{if .QR}}<div class="qrbox">{{.QR}}<span>scan: product link</span>{{if .LinkNote}}<div class="smallprint linknote">{{.LinkNote}}</div>{{end}}</div>{{end}}</div>{{end}}
   <div class="credit"><b>EasyVNA Web</b><br>by PiX<br>{{if .Simulated}}<span class="sim">SIMULATED DATA</span>{{end}}</div>
 </header>
 
@@ -167,12 +171,13 @@ table.dips td:nth-child(-n+8) { white-space: nowrap; }
   </tbody></table>
 </section>{{end}}
 
-{{with .Batch}}<section class="card"><h2>Batch: {{.Name}} <small>· {{.Label}} · {{len .Antennas}} antennas · target {{mhz .Target}} MHz ± {{f2 (mhzOf .Summary.ToleranceHz)}}</small></h2>
-  <div class="notes" style="margin-top:0"><b>Lot</b>{{range .Summary.Conclusion}}{{.}}
+{{with .Batch}}<section class="card"><h2>Batch: {{.Name}} <small>· {{.Label}} · {{len .Antennas}} antennas · target {{mhz .Target}} MHz</small></h2>
+  <p class="vrange criteria" style="margin:0 0 1mm">{{.Summary.Criteria}}</p>
+  <div class="notes" style="margin-top:0"><b>Lot</b>{{range $i, $c := .Summary.Conclusion}}{{if eq $i 0}}<b class="headline">{{$c}}</b>{{else}}{{$c}}{{end}}
 {{end}}{{.Summary.TuningLine}}.</div>
   <div style="margin-top:2mm">{{$.BatchPlot}}</div>
   {{template "bstats" .}}
-  <p class="vrange" style="margin:1mm 0 0">The batch sheet (BATCH → Batch sheet) has every antenna and the SWR overlay. Outliers: |x − median| &gt; 3.5 × 1.4826 × MAD.</p>
+  <p class="vrange" style="margin:1mm 0 0">The batch sheet (BATCH → Batch sheet) has every antenna, their curves overlaid and the lot average. Outliers: |x − median| &gt; 3.5 × 1.4826 × MAD.</p>
 </section>{{end}}
 
 <p class="vrange" style="margin-top:4mm">Grades: PASS = worst in-band SWR &lt; 1.5, OK &lt; 2, FAIL otherwise (band edges interpolated). Q is estimated from the SWR &lt; 2 bandwidth assuming a match at resonance. Mismatch loss = −10·log10(1−|Γ|²).</p>

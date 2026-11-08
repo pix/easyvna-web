@@ -26,25 +26,28 @@ import (
 // Batch is one lot. Its sweep (profile, range, points) is fixed when it is
 // created: captures of another sweep are refused.
 type Batch struct {
-	ID       string         `json:"id"`
-	Name     string         `json:"name"`
-	Notes    string         `json:"notes,omitempty"`
-	Profile  string         `json:"profile"`
-	Label    string         `json:"label"` // "869 MHz profile"
-	Start    float64        `json:"start"`
-	Stop     float64        `json:"stop"`
-	Points   int            `json:"points"`
-	Bands    []rf.Band      `json:"bands"`
-	Target   float64        `json:"target"`             // Hz, TUNE's target: the primary band's reference
-	LengthMm float64        `json:"lengthMm,omitempty"` // nominal element length (for trim advice in mm)
-	Trim     string         `json:"trim,omitempty"`     // trim log whose learnt MHz/mm is used
-	Link     string         `json:"link,omitempty"`     // product / source page (see CleanLink)
-	Photo    string         `json:"photo,omitempty"`    // one photo of the lot (data: URL)
-	Created  time.Time      `json:"created"`
-	Updated  time.Time      `json:"updated"`
-	NextID   int            `json:"nextId"`
-	Freq     []float64      `json:"freq,omitempty"` // the grid, set by the first capture
-	Antennas []BatchAntenna `json:"antennas"`
+	ID           string         `json:"id"`
+	Name         string         `json:"name"`
+	Notes        string         `json:"notes,omitempty"`
+	Profile      string         `json:"profile"`
+	Label        string         `json:"label"` // "869 MHz profile"
+	Start        float64        `json:"start"`
+	Stop         float64        `json:"stop"`
+	Points       int            `json:"points"`
+	Bands        []rf.Band      `json:"bands"`
+	Target       float64        `json:"target"`                 // Hz, TUNE's target: the primary band's reference
+	LengthMm     float64        `json:"lengthMm,omitempty"`     // nominal element length (for trim advice in mm)
+	Trim         string         `json:"trim,omitempty"`         // trim log whose learnt MHz/mm is used
+	Link         string         `json:"link,omitempty"`         // product / source page (see CleanLink)
+	Photo        string         `json:"photo,omitempty"`        // one photo of the lot (data: URL)
+	PhotoCaption string         `json:"photoCaption,omitempty"` // small print under the photo
+	LinkNote     string         `json:"linkNote,omitempty"`     // small print under the link
+	Created      time.Time      `json:"created"`
+	Updated      time.Time      `json:"updated"`
+	NextID       int            `json:"nextId"`
+	Freq         []float64      `json:"freq,omitempty"` // the grid, set by the first capture
+	Antennas     []BatchAntenna `json:"antennas"`
+	Setup        *SetupNote     `json:"setup,omitempty"` // last setup check run during this batch
 }
 
 // BatchAntenna is one captured antenna.
@@ -58,6 +61,7 @@ type BatchAntenna struct {
 	AvgN     int          `json:"avgN,omitempty"`
 	Warnings []string     `json:"warnings,omitempty"` // measurement warning codes at capture
 	Redone   int          `json:"redone,omitempty"`   // times it was measured again
+	Rep      *RepeatBrief `json:"rep,omitempty"`      // Measure ×N: repeatability of the N sweeps
 	S11      [][2]float64 `json:"s11"`
 }
 
@@ -69,10 +73,11 @@ func (b *Batch) Band() rf.Band {
 	return rf.Band{}
 }
 
-// ToleranceHz is the "tuned" window around the target: TUNE's ✓ ON TARGET
-// (rf.OnTargetPct, 0.15 % of the target: ±1.30 MHz at 869 MHz, ±0.65 MHz
-// at 433.92 MHz, ±1.37 MHz at 915 MHz).
-func (b *Batch) ToleranceHz() float64 { return b.Target * rf.OnTargetPct / 100 }
+// AimHz is TUNE's fine "on target" aim around the target (rf.OnTargetPct,
+// 0.15 % of the target: ±1.30 MHz at 869 MHz, ±0.65 MHz at 433.92 MHz,
+// ±1.37 MHz at 915 MHz). It is a tuning aim, not an acceptance criterion:
+// the acceptance setting decides (see accept.go).
+func (b *Batch) AimHz() float64 { return b.Target * rf.OnTargetPct / 100 }
 
 const (
 	maxBatchAntennas = 200
@@ -167,19 +172,21 @@ type BatchInfo struct {
 	N       int            `json:"n"`
 	Yield   map[string]int `json:"yield"` // good / ok / bad / n/a
 	Tuned   int            `json:"tuned"`
+	OK      int            `json:"ok"`    // accepted (tuned + ok)
+	Grade   string         `json:"grade"` // fine, worth, must
 }
 
 // ListBatches lists the stored batches, most recently updated first.
-func (st *Store) ListBatches() []BatchInfo {
+func (st *Store) ListBatches(accept func(profile string) rf.Acceptance) []BatchInfo {
 	out := []BatchInfo{}
 	for _, f := range st.listMatch("batches", "*.json") {
 		b, err := st.LoadBatch(strings.TrimSuffix(f.Name, ".json"))
 		if err != nil {
 			continue
 		}
-		v := batchView(b, nil)
+		v := batchView(b, nil, accept(b.Profile))
 		out = append(out, BatchInfo{ID: b.ID, Name: b.Name, Profile: b.Profile, Label: b.Label, Created: b.Created,
-			Updated: b.Updated, N: len(b.Antennas), Yield: v.Summary.Yield, Tuned: v.Summary.Tuned})
+			Updated: b.Updated, N: len(b.Antennas), Yield: v.Summary.Yield, Tuned: v.Summary.Tuned, OK: v.Summary.OK, Grade: v.Summary.Grade})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Updated.After(out[j].Updated) })
 	return out
@@ -189,7 +196,7 @@ func (st *Store) ListBatches() []BatchInfo {
 
 // Tuning says whether one antenna is tuned to the target and what to do.
 type Tuning struct {
-	Status string `json:"status"` // tuned, shorten, lengthen, bad, none
+	Status string `json:"status"` // tuned, ok, shorten, lengthen, bad, none
 	Text   string `json:"text"`   // short: "✓ tuned", "↓ shorten 0.9 mm"
 	Detail string `json:"detail"` // a sentence
 	// CutMm is the full length change (> 0: cut this much, < 0: lengthen);
@@ -203,21 +210,23 @@ type Tuning struct {
 
 // AntennaMetrics are the figures of one antenna. Zero when unknown.
 type AntennaMetrics struct {
-	Found     bool     `json:"found"`     // a resonance near the target
-	ResFreq   float64  `json:"resFreq"`   // Hz: TUNE's resonance (return-loss peak nearest the target)
-	ResSWR    float64  `json:"resSWR"`    // SWR there
-	Offset    float64  `json:"offset"`    // Hz, resonance − target
-	OffsetPct float64  `json:"offsetPct"` // %
-	SWRTarget float64  `json:"swrTarget"` // SWR at the target (band reference)
-	RLTarget  float64  `json:"rlTarget"`  // dB, return loss at the target
-	WorstSWR  float64  `json:"worstSWR"`  // worst SWR in the band
-	WorstFreq float64  `json:"worstFreq"`
-	PctBelow2 float64  `json:"pctBelow2"` // % of the band with SWR < 2
-	BW2       float64  `json:"bw2"`       // Hz, SWR < 2 bandwidth around the resonance
-	BW2Open   bool     `json:"bw2Open"`   // the SWR < 2 region runs into the sweep edge
-	Verdict   string   `json:"verdict"`   // band verdict: good / ok / bad / n/a
-	Tuning    Tuning   `json:"tuning"`
-	Outliers  []string `json:"outliers"` // keys of the batch statistics this antenna is an outlier of
+	Found         bool      `json:"found"`         // a resonance near the target
+	ResFreq       float64   `json:"resFreq"`       // Hz: TUNE's resonance (return-loss peak nearest the target)
+	ResSWR        float64   `json:"resSWR"`        // SWR there
+	Offset        float64   `json:"offset"`        // Hz, resonance − target
+	OffsetPct     float64   `json:"offsetPct"`     // %
+	SWRTarget     float64   `json:"swrTarget"`     // SWR at the target (band reference)
+	RLTarget      float64   `json:"rlTarget"`      // dB, return loss at the target
+	WorstSWR      float64   `json:"worstSWR"`      // worst SWR in the band
+	WorstFreq     float64   `json:"worstFreq"`     //
+	PctBelow2     float64   `json:"pctBelow2"`     // % of the band with SWR < 2
+	PctBelowLimit float64   `json:"pctBelowLimit"` // % of the band with SWR below the acceptance limit
+	BW2           float64   `json:"bw2"`           // Hz, SWR < 2 bandwidth around the resonance
+	BW2Open       bool      `json:"bw2Open"`       // the SWR < 2 region runs into the sweep edge
+	Verdict       string    `json:"verdict"`       // band verdict against the limit: good / ok / bad / n/a
+	Margin        rf.Margin `json:"margin"`        // band margin at the SWR limit (the antenna's own Auto window)
+	Tuning        Tuning    `json:"tuning"`
+	Outliers      []string  `json:"outliers"` // keys of the batch statistics this antenna is an outlier of
 }
 
 // trimSlope is where the MHz/mm of the trim advice comes from.
@@ -228,42 +237,60 @@ type trimSlope struct {
 
 // antennaMetrics computes the figures of s11 on the batch's grid. It uses
 // the same code as the main view (rf.Analyze through buildResult) and TUNE
-// (rf.Tune), so the numbers agree with what the user sees there.
-func antennaMetrics(b *Batch, s11 [][2]float64, slope trimSlope) (AntennaMetrics, *Result) {
-	cfg := Config{Profile: b.Profile, Start: b.Start, Stop: b.Stop, Points: b.Points, Bands: b.Bands}
+// (rf.Tune), so the numbers agree with what the user sees there. acc is
+// the acceptance setting of the batch's profile.
+func antennaMetrics(b *Batch, s11 [][2]float64, slope trimSlope, acc rf.Acceptance) (AntennaMetrics, *Result) {
+	cfg := Config{Profile: b.Profile, Start: b.Start, Stop: b.Stop, Points: b.Points, Bands: b.Bands, Accept: acc}
 	r := buildResult(b.Freq, toComplex(s11), nil, cfg, time.Time{}, 0)
 	m := AntennaMetrics{Outliers: []string{}, Verdict: "n/a"}
 	if len(b.Freq) < 3 {
 		m.Tuning = Tuning{Status: "none", Text: "✗ no data"}
 		return m, r
 	}
-	ti := rf.Tune(r.Freq, r.Derived, b.Target)
+	win := acc.Resolve(b.Target, nil)
+	ti := rf.TuneAt(r.Freq, r.Derived, b.Target, win.AimHz, acc.Limit())
 	m.SWRTarget, m.RLTarget = ti.SWRAtTarget, ti.RLAtTarget
 	m.Found = ti.Found
+	band := b.Band()
 	if ti.Found {
 		m.ResFreq, m.ResSWR, m.Offset, m.OffsetPct = ti.ResFreq, ti.SWRAtRes, ti.Offset, ti.OffsetPct
-		band := b.Band()
-		band.Ref = b.Target
-		if dp := rf.NearestDip(r.Summary.Dips, band); dp != nil && dp.BW2.Found && math.Abs(dp.Freq-ti.ResFreq) < 0.02*b.Target {
+		bd := band
+		bd.Ref = b.Target
+		if dp := rf.NearestDip(r.Summary.Dips, bd); dp != nil && dp.BW2.Found && math.Abs(dp.Freq-ti.ResFreq) < 0.02*b.Target {
 			m.BW2, m.BW2Open = dp.BW2.Width, dp.BW2.LoOpen || dp.BW2.HiOpen
 		}
 	}
 	if len(r.Summary.Bands) > 0 {
 		bs := r.Summary.Bands[0]
-		m.WorstSWR, m.WorstFreq, m.PctBelow2, m.Verdict = bs.WorstSWR, bs.WorstSWRFreq, bs.PctBelow2, bs.Verdict
+		m.WorstSWR, m.WorstFreq, m.PctBelow2, m.PctBelowLimit, m.Verdict = bs.WorstSWR, bs.WorstSWRFreq, bs.PctBelow2, bs.PctBelowLimit, bs.Verdict
 	}
-	m.Tuning = tuningOf(b, m, slope)
+	if band.Valid() {
+		m.Margin = rf.BandMargin(r.Freq, r.Derived.SWR, band, b.Target, m.ResFreq, acc.Limit())
+	}
+	m.Tuning = tuningOf(b, m, slope, acc)
 	return m, r
 }
 
-// tuningOf grades one antenna against the target. The order: no
-// resonance; band not covered at SWR < 2 ("bad"); within the TUNE
-// tolerance ("tuned"); else shorten / lengthen with the trim calculator's
-// cut: from the learnt MHz/mm when a trim log has learnt it, else the
-// first estimate L × f_res / f_target with TUNE's cautious first cut, else
-// (no length given) the length change in %.
-func tuningOf(b *Batch, m AntennaMetrics, slope trimSlope) Tuning {
-	tol := b.ToleranceHz()
+// tuningOf grades one antenna. The acceptance decides; the length advice
+// comes from the trim calculator: from the learnt MHz/mm when a trim log
+// has learnt it, else the first estimate L × f_res / f_target with TUNE's
+// cautious first cut, else (no length given) the length change in %.
+//
+// The statuses: none (no resonance); bad (the band is not covered at the
+// SWR limit: "poor match" when centring would not help, "out of band"
+// otherwise); tuned (within TUNE's ± 0.15 % aim, or the fixed tolerance);
+// ok (Auto: the band is covered at the limit, off the fine aim: the
+// margin used is given and the trim is optional); shorten / lengthen (a
+// fixed tolerance: outside it).
+func tuningOf(b *Batch, m AntennaMetrics, slope trimSlope, acc rf.Acceptance) Tuning {
+	win := acc.Resolve(b.Target, &m.Margin)
+	aim := win.AimHz
+	auto := win.Mode == rf.TolAuto
+	tol := aim
+	if !auto {
+		tol = win.Hz
+	}
+	limit := fmt.Sprintf("SWR < %.1f", acc.Limit())
 	t := Tuning{}
 	if !m.Found {
 		t.Status, t.Text, t.Detail = "none", "✗ no resonance", "No resonance near the target in this sweep."
@@ -299,16 +326,25 @@ func tuningOf(b *Batch, m AntennaMetrics, slope trimSlope) Tuning {
 		}
 		return fmt.Sprintf("%s %.1f mm", dir, math.Abs(t.CutMm))
 	}
+	poor := !m.Margin.OK || m.Margin.RoomDown+m.Margin.RoomUp < 0
 	switch {
-	case m.Verdict == "bad" && math.Abs(m.Offset) <= tol:
+	case m.Verdict == "bad" && (math.Abs(m.Offset) <= tol || (auto && poor)):
 		t.Status, t.Text = "bad", "✗ poor match"
-		t.Detail = fmt.Sprintf("On target (%s) but the band is not covered at SWR < 2 (worst %s): the match itself is poor, not the length.", where, swrF(m.WorstSWR))
+		t.Detail = fmt.Sprintf("The band is not covered at %s (worst %s) and moving the resonance would not fix it (%s): the match itself is poor, not the length.", limit, swrF(m.WorstSWR), where)
 	case m.Verdict == "bad":
 		t.Status, t.Text = "bad", "✗ out of band"
-		t.Detail = fmt.Sprintf("The band is not covered at SWR < 2 (worst %s); %s: %s.", swrF(m.WorstSWR), where, move())
+		t.Detail = fmt.Sprintf("The band is not covered at %s (worst %s); %s: %s.", limit, swrF(m.WorstSWR), where, move())
 	case math.Abs(m.Offset) <= tol:
 		t.Status, t.Text = "tuned", "✓ tuned"
 		t.Detail = fmt.Sprintf("On target: %s, within ±%.2f MHz.", where, tol/1e6)
+		if auto && m.Margin.OK {
+			t.Detail += fmt.Sprintf(" The band is covered at %s (worst %s, %.0f %% of the margin used).", limit, swrF(m.WorstSWR), m.Margin.UsedPct)
+		}
+	case auto:
+		t.Status = "ok"
+		t.Text = fmt.Sprintf("✓ OK · %.0f %% margin used", math.Min(m.Margin.UsedPct, 100))
+		t.Detail = fmt.Sprintf("Covers the band at %s (worst %s); %s: %.0f %% of the margin used. Optional: %s would centre it on the target.",
+			limit, swrF(m.WorstSWR), where, m.Margin.UsedPct, move())
 	case m.Offset < 0:
 		t.Status, t.Text = "shorten", "↓ "+move()
 		t.Detail = fmt.Sprintf("Too long (resonates low): %s.", where)
@@ -316,7 +352,7 @@ func tuningOf(b *Batch, m AntennaMetrics, slope trimSlope) Tuning {
 		t.Status, t.Text = "lengthen", "↑ "+move()
 		t.Detail = fmt.Sprintf("Too short (resonates high): %s. Do not cut.", where)
 	}
-	if t.Status == "shorten" && t.Cautious && t.FirstCutMm < t.CutMm-0.05 {
+	if (t.Status == "shorten" || t.Status == "ok" && m.Offset < 0) && t.Cautious && t.FirstCutMm < t.CutMm-0.05 {
 		if t.FirstCutMm > 0 {
 			t.Detail += fmt.Sprintf(" First cut %.1f mm (full estimate %.1f mm): MHz/mm is not learnt yet.", t.FirstCutMm, t.CutMm)
 		} else {
@@ -348,26 +384,46 @@ type BatchStatRow struct {
 
 // BatchSummary is everything computed over the lot.
 type BatchSummary struct {
-	N           int            `json:"n"`
-	Stats       []BatchStatRow `json:"stats"`
-	Yield       map[string]int `json:"yield"`
-	Tuned       int            `json:"tuned"`
-	Shorten     int            `json:"shorten"`
-	Lengthen    int            `json:"lengthen"`
-	Bad         int            `json:"bad"`
-	None        int            `json:"none"`
-	TuningLine  string         `json:"tuningLine"` // "7 of 10 tuned; 2 to shorten (0.5–1.0 mm), 1 bad"
-	ToleranceHz float64        `json:"toleranceHz"`
-	BiasHz      float64        `json:"biasHz"`  // mean offset from the target (systematic)
-	BiasPct     float64        `json:"biasPct"` // %
-	SigmaHz     float64        `json:"sigmaHz"` // SD of the resonance (unit-to-unit spread)
-	BiasCutMm   float64        `json:"biasCutMm"`
-	Conclusion  []string       `json:"conclusion"` // plain words
-	CalNote     string         `json:"calNote"`
-	CalOK       bool           `json:"calOK"`
-	First       time.Time      `json:"first"`
-	Last        time.Time      `json:"last"`
-	Slope       string         `json:"slope"` // where the mm come from
+	N          int            `json:"n"`
+	Stats      []BatchStatRow `json:"stats"`
+	Yield      map[string]int `json:"yield"`
+	Tuned      int            `json:"tuned"`
+	OKN        int            `json:"okOnly"` // ok (Auto: covered, off the fine aim)
+	OK         int            `json:"ok"`     // accepted: tuned + ok
+	Shorten    int            `json:"shorten"`
+	Lengthen   int            `json:"lengthen"`
+	Bad        int            `json:"bad"`
+	None       int            `json:"none"`
+	TuningLine string         `json:"tuningLine"` // "7 of 10 OK (3 on the ± 0.15 % aim); 1 bad"
+	// Acceptance: the lot's window (Auto: the median of the antennas'
+	// own windows), TUNE's fine aim and the criteria text printed on sheets.
+	Window      rf.Window `json:"window"`
+	ToleranceHz float64   `json:"toleranceHz"` // = Window.Hz (the strip's window)
+	AimHz       float64   `json:"aimHz"`
+	OffMin      float64   `json:"offMin"` // Hz, lot window (median of the antennas' OffMin / OffMax)
+	OffMax      float64   `json:"offMax"`
+	Criteria    string    `json:"criteria"` // "Acceptance: band SWR < 2.0, resonance …"
+	// Lot figures (without the resonance outliers).
+	BiasHz      float64   `json:"biasHz"`      // mean offset from the target (systematic)
+	BiasPct     float64   `json:"biasPct"`     // %
+	BiasCIHz    float64   `json:"biasCIHz"`    // half-width of the mean's 95 % confidence interval (n ≥ 2)
+	SigmaHz     float64   `json:"sigmaHz"`     // SD of the resonance (unit-to-unit spread)
+	SpreadHz    float64   `json:"spreadHz"`    // range of the resonance
+	NRes        int       `json:"nRes"`        // antennas in those figures
+	BiasCutMm   float64   `json:"biasCutMm"`   //
+	BiasUsedPct float64   `json:"biasUsedPct"` // share of the lot window the mean offset uses
+	MarginMax   float64   `json:"marginMax"`   // largest margin used by one antenna, %
+	WorstSWR    float64   `json:"worstSWR"`    // worst in-band SWR of the lot
+	RepeatHz    float64   `json:"repeatHz"`    // pooled within-antenna σ of the resonance (Measure ×N), 0: none
+	NRepeat     int       `json:"nRepeat"`     // antennas measured ×N
+	Grade       string    `json:"grade"`       // fine, worth, must ("" with no antenna)
+	Headline    string    `json:"headline"`    // the graded first sentence
+	Conclusion  []string  `json:"conclusion"`  // plain words
+	CalNote     string    `json:"calNote"`
+	CalOK       bool      `json:"calOK"`
+	First       time.Time `json:"first"`
+	Last        time.Time `json:"last"`
+	Slope       string    `json:"slope"` // where the mm come from
 }
 
 // batchMetricDefs are the statistics rows: key, label, unit, decimals,
@@ -394,7 +450,7 @@ var batchMetricDefs = []struct {
 	}, func(md float64) float64 { return 0.02 * math.Abs(md) }},
 	{"rlTarget", "Return loss at target", "dB", 1, func(m AntennaMetrics) float64 { return m.RLTarget },
 		func(float64) float64 { return 0.5 }},
-	{"cover", "Band with SWR < 2", "%", 0, func(m AntennaMetrics) float64 { return m.PctBelow2 },
+	{"cover", "Band with SWR < limit", "%", 0, func(m AntennaMetrics) float64 { return m.PctBelowLimit },
 		func(float64) float64 { return 5 }},
 }
 
@@ -423,48 +479,55 @@ type BatchAntennaView struct {
 	AvgN     int            `json:"avgN,omitempty"`
 	Warnings []string       `json:"warnings"`
 	Redone   int            `json:"redone,omitempty"`
+	Rep      *RepeatBrief   `json:"rep,omitempty"`
 	Metrics  AntennaMetrics `json:"metrics"`
 	SWR      []float64      `json:"swr"`
 }
 
 // BatchView is GET /api/batches/{id}.
 type BatchView struct {
-	ID       string             `json:"id"`
-	Name     string             `json:"name"`
-	Notes    string             `json:"notes"`
-	Profile  string             `json:"profile"`
-	Label    string             `json:"label"`
-	Start    float64            `json:"start"`
-	Stop     float64            `json:"stop"`
-	Points   int                `json:"points"`
-	Bands    []rf.Band          `json:"bands"`
-	Target   float64            `json:"target"`
-	LengthMm float64            `json:"lengthMm"`
-	Trim     string             `json:"trim"`
-	Link     string             `json:"link"`
-	LinkText string             `json:"linkText"`
-	Photo    string             `json:"photo"`
-	Created  time.Time          `json:"created"`
-	Updated  time.Time          `json:"updated"`
-	Freq     []float64          `json:"freq"`
-	Antennas []BatchAntennaView `json:"antennas"`
-	EnvMin   []float64          `json:"envMin"`
-	EnvMax   []float64          `json:"envMax"`
-	Summary  BatchSummary       `json:"summary"`
-	Version  int                `json:"version"`
-	HasUndo  bool               `json:"hasUndo"`
+	ID           string             `json:"id"`
+	Name         string             `json:"name"`
+	Notes        string             `json:"notes"`
+	Profile      string             `json:"profile"`
+	Label        string             `json:"label"`
+	Start        float64            `json:"start"`
+	Stop         float64            `json:"stop"`
+	Points       int                `json:"points"`
+	Bands        []rf.Band          `json:"bands"`
+	Target       float64            `json:"target"`
+	LengthMm     float64            `json:"lengthMm"`
+	Trim         string             `json:"trim"`
+	Link         string             `json:"link"`
+	LinkText     string             `json:"linkText"`
+	Photo        string             `json:"photo"`
+	PhotoCaption string             `json:"photoCaption"`
+	LinkNote     string             `json:"linkNote"`
+	Setup        *SetupNote         `json:"setup,omitempty"`
+	Accept       rf.Acceptance      `json:"accept"`
+	AvgSWR       []float64          `json:"avgSWR"` // SWR of the lot average (vector average of S11)
+	Created      time.Time          `json:"created"`
+	Updated      time.Time          `json:"updated"`
+	Freq         []float64          `json:"freq"`
+	Antennas     []BatchAntennaView `json:"antennas"`
+	EnvMin       []float64          `json:"envMin"`
+	EnvMax       []float64          `json:"envMax"`
+	Summary      BatchSummary       `json:"summary"`
+	Version      int                `json:"version"`
+	HasUndo      bool               `json:"hasUndo"`
 }
 
-// batchView computes every figure of b. slope may be nil (no learnt MHz/mm).
-func batchView(b *Batch, slope *trimSlope) BatchView {
+// batchView computes every figure of b with the acceptance setting acc.
+// slope may be nil (no learnt MHz/mm).
+func batchView(b *Batch, slope *trimSlope, acc rf.Acceptance) BatchView {
 	sl := trimSlope{}
 	if slope != nil {
 		sl = *slope
 	}
 	v := BatchView{ID: b.ID, Name: b.Name, Notes: b.Notes, Profile: b.Profile, Label: b.Label, Start: b.Start, Stop: b.Stop,
 		Points: b.Points, Bands: b.Bands, Target: b.Target, LengthMm: b.LengthMm, Trim: b.Trim, Link: b.Link,
-		LinkText: LinkText(b.Link), Photo: b.Photo, Created: b.Created, Updated: b.Updated, Freq: b.Freq,
-		Antennas: []BatchAntennaView{}}
+		LinkText: LinkText(b.Link), Photo: b.Photo, PhotoCaption: b.PhotoCaption, LinkNote: b.LinkNote,
+		Created: b.Created, Updated: b.Updated, Freq: b.Freq, Antennas: []BatchAntennaView{}, Setup: b.Setup, Accept: acc}
 	if v.Freq == nil {
 		v.Freq = []float64{}
 	}
@@ -472,11 +535,12 @@ func batchView(b *Batch, slope *trimSlope) BatchView {
 		v.Bands = []rf.Band{}
 	}
 	ms := make([]AntennaMetrics, len(b.Antennas))
+	var all [][]complex128
 	for i, a := range b.Antennas {
-		m, r := antennaMetrics(b, a.S11, sl)
+		m, r := antennaMetrics(b, a.S11, sl, acc)
 		ms[i] = m
 		av := BatchAntennaView{ID: a.ID, Label: a.Label, Time: a.Time, Cal: a.Cal, CalOK: a.CalOK, Auto: a.Auto, AvgN: a.AvgN,
-			Warnings: a.Warnings, Redone: a.Redone, SWR: r.Derived.SWR}
+			Warnings: a.Warnings, Redone: a.Redone, Rep: a.Rep, SWR: r.Derived.SWR}
 		if av.Warnings == nil {
 			av.Warnings = []string{}
 		}
@@ -487,26 +551,70 @@ func batchView(b *Batch, slope *trimSlope) BatchView {
 				v.EnvMin[k], v.EnvMax[k] = math.Min(v.EnvMin[k], s), math.Max(v.EnvMax[k], s)
 			}
 		}
+		if len(a.S11) == len(b.Freq) {
+			all = append(all, toComplex(a.S11))
+		}
 		v.Antennas = append(v.Antennas, av)
 	}
-	v.Summary = batchSummary(b, ms, sl)
+	if len(all) > 0 {
+		// The lot average: the vector average of every antenna's S11.
+		v.AvgSWR = rf.Derive(rf.Average(all), nil).SWR
+	}
+	v.Summary = batchSummary(b, ms, sl, acc)
 	for i := range v.Antennas {
 		v.Antennas[i].Metrics = ms[i]
 	}
 	return v
 }
 
+// lotWindow is the acceptance window of the lot: the fixed tolerance, or
+// with Auto the median of the antennas' own windows (rf.BandMargin).
+func lotWindow(b *Batch, ms []AntennaMetrics, acc rf.Acceptance) (rf.Window, float64, float64) {
+	if acc.Mode() != rf.TolAuto {
+		w := acc.Resolve(b.Target, nil)
+		return w, -w.Hz, w.Hz
+	}
+	var win, lo, hi []float64
+	open := false
+	for _, m := range ms {
+		if m.Found && m.Margin.OK && m.Margin.Window > 0 {
+			win, lo, hi = append(win, m.Margin.Window), append(lo, -m.Margin.OffMin), append(hi, m.Margin.OffMax)
+			open = open || m.Margin.Open
+		}
+	}
+	if len(win) == 0 {
+		any := false
+		for _, m := range ms {
+			any = any || m.Margin.OK
+		}
+		var mp *rf.Margin
+		if any {
+			mp = &rf.Margin{OK: true}
+		}
+		return acc.Resolve(b.Target, mp), 0, 0
+	}
+	m := rf.Margin{OK: true, Window: rf.MedianWindow(win), Open: open}
+	return acc.Resolve(b.Target, &m), -rf.MedianWindow(lo), rf.MedianWindow(hi)
+}
+
 // batchSummary computes the statistics, flags outliers in ms (in place)
 // and writes the conclusion.
-func batchSummary(b *Batch, ms []AntennaMetrics, sl trimSlope) BatchSummary {
-	s := BatchSummary{N: len(ms), Yield: map[string]int{"good": 0, "ok": 0, "bad": 0, "n/a": 0}, ToleranceHz: b.ToleranceHz(),
+func batchSummary(b *Batch, ms []AntennaMetrics, sl trimSlope, acc rf.Acceptance) BatchSummary {
+	s := BatchSummary{N: len(ms), Yield: map[string]int{"good": 0, "ok": 0, "bad": 0, "n/a": 0}, AimHz: b.AimHz(),
 		Stats: []BatchStatRow{}, Conclusion: []string{}}
+	s.Window, s.OffMin, s.OffMax = lotWindow(b, ms, acc)
+	s.ToleranceHz = s.Window.Hz
+	s.Criteria = "Acceptance: " + s.Window.Text
+	limit := acc.Limit()
 	for _, def := range batchMetricDefs {
 		x := make([]float64, len(ms))
 		for i, m := range ms {
 			x[i] = def.val(m)
 		}
 		row := BatchStatRow{Key: def.key, Label: def.label, Unit: def.unit, Dec: def.dec, Stat: rf.Describe(x), Outliers: []int{}}
+		if def.key == "cover" {
+			row.Label = fmt.Sprintf("Band with SWR < %.1f", limit)
+		}
 		if def.floor != nil {
 			for i, o := range rf.Outliers(x, def.floor(row.Median)) {
 				if o {
@@ -519,11 +627,15 @@ func batchSummary(b *Batch, ms []AntennaMetrics, sl trimSlope) BatchSummary {
 	}
 	shortMm, longMm := []float64{}, []float64{}
 	calBad := 0
+	var repSD []float64
+	var repN []int
 	for i, m := range ms {
 		s.Yield[verdictKey(m.Verdict)]++
 		switch m.Tuning.Status {
 		case "tuned":
 			s.Tuned++
+		case "ok":
+			s.OKN++
 		case "shorten":
 			s.Shorten++
 			if m.Tuning.Method != "pct" {
@@ -539,9 +651,18 @@ func batchSummary(b *Batch, ms []AntennaMetrics, sl trimSlope) BatchSummary {
 		default:
 			s.None++
 		}
+		if m.WorstSWR > s.WorstSWR {
+			s.WorstSWR = m.WorstSWR
+		}
+		if m.Found && m.Margin.OK {
+			s.MarginMax = math.Max(s.MarginMax, m.Margin.UsedPct)
+		}
 		a := b.Antennas[i]
 		if !a.CalOK {
 			calBad++
+		}
+		if a.Rep != nil && a.Rep.N >= 2 {
+			repSD, repN = append(repSD, a.Rep.ResSD), append(repN, a.Rep.N)
 		}
 		if s.First.IsZero() || a.Time.Before(s.First) {
 			s.First = a.Time
@@ -550,6 +671,8 @@ func batchSummary(b *Batch, ms []AntennaMetrics, sl trimSlope) BatchSummary {
 			s.Last = a.Time
 		}
 	}
+	s.OK = s.Tuned + s.OKN
+	s.NRepeat, s.RepeatHz = len(repSD), rf.PooledSD(repSD, repN)
 	// Tuning summary line.
 	n := s.N
 	rng := func(v []float64) string {
@@ -565,7 +688,12 @@ func batchSummary(b *Batch, ms []AntennaMetrics, sl trimSlope) BatchSummary {
 	if n == 0 {
 		s.TuningLine = "No antenna captured yet."
 	} else {
-		parts := []string{fmt.Sprintf("%d of %d tuned", s.Tuned, n)}
+		var parts []string
+		if s.Window.Mode == rf.TolAuto {
+			parts = []string{fmt.Sprintf("%d of %d cover the band at SWR < %.1f (%d on the ± %.2f MHz tuning aim)", s.OK, n, limit, s.Tuned, s.AimHz/1e6)}
+		} else {
+			parts = []string{fmt.Sprintf("%d of %d tuned (± %.2f MHz)", s.Tuned, n, s.Window.Hz/1e6)}
+		}
 		if s.Shorten > 0 {
 			parts = append(parts, fmt.Sprintf("%d to shorten%s", s.Shorten, rng(shortMm)))
 		}
@@ -599,7 +727,7 @@ func batchSummary(b *Batch, ms []AntennaMetrics, sl trimSlope) BatchSummary {
 	default:
 		s.Slope = "no element length given: trim advice in % of the length"
 	}
-	s.Conclusion = batchConclusion(b, &s, ms, sl)
+	s.Conclusion = batchConclusion(b, &s, ms, sl, acc)
 	return s
 }
 
@@ -611,11 +739,31 @@ func verdictKey(v string) string {
 	return "n/a"
 }
 
-// batchConclusion says in plain words what the lot is like: a systematic
-// offset (the whole lot resonates low or high: the pattern length is off)
-// versus the unit-to-unit spread (manufacturing variance), compared with
-// the tolerance window; statistical outliers; calibration.
-func batchConclusion(b *Batch, s *BatchSummary, ms []AntennaMetrics, sl trimSlope) []string {
+// Lot grades.
+const (
+	GradeFine  = "fine"  // every antenna covers the band with margin to spare
+	GradeWorth = "worth" // worth correcting: the offset uses much of the margin
+	GradeMust  = "must"  // must correct: antennas fail the SWR limit
+)
+
+// Thresholds of the lot grade: the mean offset may use up to half of the
+// lot's window, and no antenna more than three quarters of its own margin,
+// before a correction is worth it.
+const (
+	worthBiasUsed   = 50.0
+	worthMarginUsed = 75.0
+	firmN           = 5 // from 5 antennas on, the lot figures are no longer "indicative"
+)
+
+// batchConclusion says in plain words what the lot is like. The judgement
+// is margin-based: does every antenna cover the band at the SWR limit, and
+// with how much margin? The mean offset (systematic: the pattern length)
+// is expressed as the share of the lot's window it uses, with its 95 %
+// confidence interval; the unit-to-unit spread is compared with that
+// window (never with TUNE's fine ± 0.15 % aim) and, when the antennas were
+// measured ×N, with the measurement repeatability. Below 3 antennas there
+// is no spread verdict, below 5 the figures are called indicative.
+func batchConclusion(b *Batch, s *BatchSummary, ms []AntennaMetrics, sl trimSlope, acc rf.Acceptance) []string {
 	// The offset and the spread of the lot are computed without the
 	// statistical outliers of the resonance (a badly made antenna would
 	// otherwise hide the pattern's offset and inflate the spread); they are
@@ -637,19 +785,36 @@ func batchConclusion(b *Batch, s *BatchSummary, ms []AntennaMetrics, sl trimSlop
 	if len(skipped) > 0 {
 		without = " without the outlier" + plural(len(skipped)) + " " + strings.Join(skipped, ", ")
 	}
-	tol := s.ToleranceHz
-	out := []string{}
 	switch {
 	case s.N == 0:
-		return []string{"No antenna captured yet: connect the first one and capture it."}
+		out := []string{"No antenna captured yet: connect the first one and capture it."}
+		if b.Setup != nil {
+			out = append(out, "Setup check "+b.Setup.Time.Format("2006-01-02 15:04")+": "+b.Setup.Line+".")
+		}
+		return out
 	case len(res) == 0:
-		return []string{"No resonance near the target in any capture: check the profile and the antennas."}
+		s.Grade = GradeMust
+		s.Headline = "No resonance near the target in any capture: check the profile and the antennas."
+		return []string{s.Headline}
 	}
+	limit := acc.Limit()
+	band := b.Band()
+	bandTxt := fmt.Sprintf("%s–%s MHz", mhzF(band.Lo), mhzF(band.Hi))
+	lim := fmt.Sprintf("SWR < %.1f", limit)
 	rs, os := rf.Describe(res), rf.Describe(off)
-	s.BiasHz, s.BiasPct, s.SigmaHz = os.Mean, 100*os.Mean/b.Target, rs.SD
+	s.NRes = len(res)
+	s.BiasHz, s.BiasPct, s.SigmaHz, s.SpreadHz = os.Mean, 100*os.Mean/b.Target, rs.SD, rs.Spread
+	s.BiasCIHz = rf.MeanCI95(os.SD, len(off))
+	switch {
+	case s.BiasHz < 0 && s.OffMin < 0:
+		s.BiasUsedPct = math.Min(999, 100*s.BiasHz/s.OffMin)
+	case s.BiasHz > 0 && s.OffMax > 0:
+		s.BiasUsedPct = math.Min(999, 100*s.BiasHz/s.OffMax)
+	case s.BiasHz != 0:
+		s.BiasUsedPct = 999
+	}
 	// Pattern correction for the mean offset, with the same slope as the
 	// per-antenna advice (full estimate: it is for the next production run).
-	mm := ""
 	switch {
 	case sl.MHzPerMm > 0:
 		s.BiasCutMm = -os.Mean / 1e6 / sl.MHzPerMm
@@ -658,36 +823,121 @@ func batchConclusion(b *Batch, s *BatchSummary, ms []AntennaMetrics, sl trimSlop
 			s.BiasCutMm = p.CutMm
 		}
 	}
-	if s.BiasCutMm != 0 {
-		mm = fmt.Sprintf(" ~%.1f mm", math.Abs(s.BiasCutMm))
-	} else {
-		mm = fmt.Sprintf(" ~%.1f %%", math.Abs(s.BiasPct))
-	}
 	low := os.Mean < 0
-	dir, long := "low", "long"
+	dir, shorter := "low", "shorter"
 	if !low {
-		dir, long = "high", "short"
+		dir, shorter = "high", "longer"
 	}
+	fix := fmt.Sprintf("~%.1f %%", math.Abs(s.BiasPct))
+	if s.BiasCutMm != 0 {
+		fix = fmt.Sprintf("~%.1f mm", math.Abs(s.BiasCutMm))
+	}
+	ci := ""
+	if len(off) >= 2 {
+		ci = fmt.Sprintf(", 95 %% CI ± %.2f MHz", s.BiasCIHz/1e6)
+	}
+	offTxt := fmt.Sprintf("the lot resonates %.1f MHz %s (%s %%%s%s)", math.Abs(os.Mean)/1e6, dir, signed2(s.BiasPct), ci, without)
 	if len(res) == 1 {
-		out = append(out, fmt.Sprintf("One antenna so far (%s): capture more to see the spread of the lot.", ms[firstFound(ms)].Tuning.Text))
-	} else if math.Abs(os.Mean) > tol && math.Abs(os.Mean) > rs.SD {
-		out = append(out, fmt.Sprintf("Systematic offset: the whole lot resonates %.1f MHz %s (%s %%, mean of %d%s): the pattern is%s too %s. Correct the pattern (or trim every antenna) rather than chasing single ones.",
-			math.Abs(os.Mean)/1e6, dir, signed2(s.BiasPct), len(res), without, mm, long))
-	} else if math.Abs(os.Mean) > tol {
-		out = append(out, fmt.Sprintf("On average the lot resonates %.1f MHz %s (pattern%s too %s%s), but the spread (σ %.1f MHz) is as large as that offset: reduce the variance first.",
-			math.Abs(os.Mean)/1e6, dir, mm, long, without, rs.SD/1e6))
-	} else {
-		out = append(out, fmt.Sprintf("On target on average: mean offset %s MHz%s, within the ±%.2f MHz window.", signed2(os.Mean/1e6), without, tol/1e6))
+		offTxt = fmt.Sprintf("it resonates %.1f MHz %s (%s %%)", math.Abs(os.Mean)/1e6, dir, signed2(s.BiasPct))
 	}
-	if len(res) >= 2 {
+	centred := math.Abs(os.Mean) <= s.AimHz
+	all := fmt.Sprintf("all %d antennas cover", s.N)
+	if s.N == 1 {
+		all = "the antenna covers"
+	}
+	var failing, tight []string
+	for i, m := range ms {
+		if m.Verdict == "bad" || (!m.Found && m.Verdict != "good" && m.Verdict != "ok") {
+			failing = append(failing, b.Antennas[i].Label)
+		}
+		if m.Found && m.Margin.OK && m.Margin.UsedPct > worthMarginUsed && m.Verdict != "bad" {
+			tight = append(tight, b.Antennas[i].Label)
+		}
+	}
+	fixedOut := s.Shorten + s.Lengthen
+	out := []string{}
+	switch {
+	case len(failing) > 0:
+		s.Grade = GradeMust
+		h := fmt.Sprintf("Must correct: %d of %d antennas do not cover %s at %s (%s).", len(failing), s.N, bandTxt, lim, strings.Join(failing, ", "))
+		if s.BiasUsedPct > worthBiasUsed && !centred && len(res) >= 2 {
+			h += fmt.Sprintf(" %s, which uses %.0f %% of the margin: correct the pattern (%s %s), then check those antennas again.", capFirst(offTxt), s.BiasUsedPct, fix, shorter)
+		} else if len(res) >= 2 {
+			h += fmt.Sprintf(" The lot itself is close to the target (mean offset %s MHz): those antennas are individually off or poorly matched; trim or reject them.", signed2(os.Mean/1e6))
+		}
+		s.Headline = h
+	case fixedOut > 0:
+		s.Grade = GradeWorth
+		s.Headline = fmt.Sprintf("Worth correcting: %s %s at %s (worst %s), but %d %s outside the ± %.2f MHz tolerance; %s.",
+			all, bandTxt, lim, swrF(s.WorstSWR), fixedOut, map[bool]string{true: "is", false: "are"}[fixedOut == 1], s.Window.Hz/1e6, offTxt)
+	case s.BiasUsedPct > worthBiasUsed || len(tight) > 0:
+		s.Grade = GradeWorth
+		var why []string
+		if s.BiasUsedPct > worthBiasUsed {
+			why = append(why, fmt.Sprintf("%s, which uses %.0f %% of the margin", offTxt, s.BiasUsedPct))
+		}
+		if len(tight) > 0 {
+			why = append(why, fmt.Sprintf("%s use%s more than %.0f %% of %s margin", strings.Join(tight, ", "), map[bool]string{true: "s", false: ""}[len(tight) == 1], worthMarginUsed, map[bool]string{true: "its", false: "their"}[len(tight) == 1]))
+		}
+		h := fmt.Sprintf("Worth correcting: %s %s at %s (worst %s), but %s.", all, bandTxt, lim, swrF(s.WorstSWR), strings.Join(why, ", and "))
+		if !centred {
+			h += fmt.Sprintf(" A %s %s pattern would centre the lot and restore the margin.", fix, shorter)
+		}
+		s.Headline = h
+	default:
+		s.Grade = GradeFine
+		h := fmt.Sprintf("Fine: %s %s at %s (worst %s).", all, bandTxt, lim, swrF(s.WorstSWR))
+		switch {
+		case centred:
+			h += fmt.Sprintf(" Centred on the target (mean offset %s MHz).", signed2(os.Mean/1e6))
+		default:
+			h += fmt.Sprintf(" %s, which uses %.0f %% of the margin: no correction needed (a %s %s pattern would centre it).", capFirst(offTxt), s.BiasUsedPct, fix, shorter)
+		}
+		s.Headline = h
+	}
+	out = append(out, s.Headline)
+	// Sample size.
+	switch {
+	case len(res) == 1:
+		out = append(out, "One antenna so far: capture more to see the lot's offset and spread.")
+	case len(res) < firmN:
+		lo, hi := (os.Mean-s.BiasCIHz)/1e6, (os.Mean+s.BiasCIHz)/1e6
+		out = append(out, fmt.Sprintf("Indicative (n = %d): mean offset %s MHz, 95 %% confidence interval %s to %s MHz. Capture at least %d antennas for firm lot figures.",
+			len(res), signed2(os.Mean/1e6), signed2(lo), signed2(hi), firmN))
+	}
+	// Spread: compared with the lot's window and the repeatability.
+	if len(res) >= 3 {
+		w := s.Window.Hz
+		if w <= 0 {
+			w = s.AimHz
+		}
+		used := 100 * 2 * rs.SD / w
+		pfx := ""
+		if len(res) < firmN {
+			pfx = "Indicative: "
+		}
 		sd := rs.SD / 1e6
 		switch {
-		case rs.SD <= tol/2:
-			out = append(out, fmt.Sprintf("Consistent lot: unit-to-unit spread σ %.2f MHz (range %.2f MHz%s), well inside the ±%.2f MHz window.", sd, rs.Spread/1e6, without, tol/1e6))
-		case rs.SD <= tol:
-			out = append(out, fmt.Sprintf("Spread σ %.2f MHz (range %.2f MHz%s) uses much of the ±%.2f MHz window: some antennas fall outside it even when the mean is right.", sd, rs.Spread/1e6, without, tol/1e6))
+		case used <= 25:
+			out = append(out, fmt.Sprintf("%sconsistent lot: unit-to-unit spread σ %.2f MHz (range %.2f MHz%s); ± 2σ uses %.0f %% of the ± %.2f MHz window.", pfx, sd, rs.Spread/1e6, without, used, w/1e6))
+		case used <= 50:
+			out = append(out, fmt.Sprintf("%smoderate spread: σ %.2f MHz (range %.2f MHz%s); ± 2σ uses %.0f %% of the ± %.2f MHz window.", pfx, sd, rs.Spread/1e6, without, used, w/1e6))
 		default:
-			out = append(out, fmt.Sprintf("Large manufacturing variance: σ %.2f MHz (range %.2f MHz%s) is wider than the ±%.2f MHz window, so a corrected pattern alone still leaves antennas off target.", sd, rs.Spread/1e6, without, tol/1e6))
+			out = append(out, fmt.Sprintf("%swide spread: σ %.2f MHz (range %.2f MHz%s); ± 2σ uses %.0f %% of the ± %.2f MHz window, so some antennas lose margin even when the mean is right.", pfx, sd, rs.Spread/1e6, without, used, w/1e6))
+		}
+		if pfx == "" {
+			out[len(out)-1] = capFirst(out[len(out)-1])
+		}
+		if rep := s.RepeatHz; rep > 0 {
+			r := rep / 1e6
+			switch {
+			case rs.SD >= 3*rep:
+				out = append(out, fmt.Sprintf("Spread between antennas σ %.2f MHz vs repeatability σ %.2f MHz (Measure ×N): the spread is real.", sd, r))
+			case rs.SD <= 1.5*rep:
+				out = append(out, fmt.Sprintf("Spread between antennas σ %.2f MHz vs repeatability σ %.2f MHz (Measure ×N): the spread is about the measurement repeatability, so the antennas are more alike than these numbers suggest.", sd, r))
+			default:
+				out = append(out, fmt.Sprintf("Spread between antennas σ %.2f MHz vs repeatability σ %.2f MHz (Measure ×N): part of the spread is measurement repeatability.", sd, r))
+			}
 		}
 	}
 	var outl []string
@@ -697,12 +947,23 @@ func batchConclusion(b *Batch, s *BatchSummary, ms []AntennaMetrics, sl trimSlop
 		}
 	}
 	if len(outl) > 0 {
-		out = append(out, fmt.Sprintf("Statistical outlier%s (unlike the rest of the lot, whether tuned or not): %s.", plural(len(outl)), strings.Join(outl, ", ")))
+		out = append(out, fmt.Sprintf("Statistical outlier%s (unlike the rest of the lot, whether in tolerance or not): %s.", plural(len(outl)), strings.Join(outl, ", ")))
 	}
 	if !s.CalOK {
 		out = append(out, "Calibration: "+s.CalNote+".")
 	}
+	if b.Setup != nil {
+		out = append(out, "Setup check "+b.Setup.Time.Format("2006-01-02 15:04")+": "+b.Setup.Line+".")
+	}
 	return out
+}
+
+func capFirst(s string) string {
+	if s == "" {
+		return s
+	}
+	r := []rune(s)
+	return strings.ToUpper(string(r[0])) + string(r[1:])
 }
 
 func firstFound(ms []AntennaMetrics) int {
@@ -964,7 +1225,7 @@ func (s *Server) feedBatchLocked(res *Result) {
 	} else {
 		live.Match = true
 	}
-	if !bs.auto || bs.arr == nil {
+	if !bs.auto || bs.arr == nil || s.measuringLocked() {
 		return
 	}
 	hs := s.hold.cfg

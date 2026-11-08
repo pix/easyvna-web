@@ -63,6 +63,7 @@ func main() {
 	var setMock func(string) error
 	var mockCut func(float64)
 	var mockStd func(string)
+	var mockAction func(string) error
 	antennaName := ""
 	if *useMock {
 		if _, ok := mock.Scenarios[*mockAnt]; !ok {
@@ -76,7 +77,7 @@ func main() {
 			fatal(logger, "%v", err)
 		}
 		antennaName = *mockAnt
-		setMock, mockCut, mockStd = bench.SetAntenna, bench.Cut, bench.AttachStandard
+		setMock, mockCut, mockStd, mockAction = bench.SetAntenna, bench.Cut, bench.AttachStandard, bench.Action
 		open = func(ctx context.Context) (vna.Device, error) {
 			if *mockFW == "v2" {
 				return openV2(ctx, bench.NewSimV2(), nanovnav2.Options{PortName: "mock (V2 simulator)", Mock: true}, *trace, logger)
@@ -126,7 +127,7 @@ func main() {
 		scen = scenarioNames()
 	}
 	srv := server.New(server.Options{Open: open, Store: store, Static: web.Static(), MockAntenna: antennaName, Logger: logger,
-		ReadOnly: *readOnly, SetMockAntenna: setMock, MockScenarios: scen, MockCut: mockCut, MockStandard: mockStd, AppName: "EasyVNA Web " + version})
+		ReadOnly: *readOnly, SetMockAntenna: setMock, MockScenarios: scen, MockCut: mockCut, MockStandard: mockStd, MockAction: mockAction, AppName: "EasyVNA Web " + version})
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 

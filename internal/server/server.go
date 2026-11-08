@@ -32,6 +32,9 @@ type Config struct {
 	Identify  bool      `json:"identify"`
 	PortExtPs float64   `json:"portExtPs"` // one-way port extension delay, ps
 	Avg       int       `json:"avg"`       // average N sweeps (1 = off)
+	// Accept is the acceptance setting the sweep is graded with (set when
+	// it is analysed, from the profile's setting).
+	Accept rf.Acceptance `json:"accept"`
 }
 
 func (c Config) scanRequest() vna.ScanRequest {
@@ -83,6 +86,7 @@ type State struct {
 	DeviceProfiles *vna.DeviceProfiles `json:"deviceProfiles,omitempty"`
 	ReadOnly       bool                `json:"readOnly"`
 	MockScenarios  []string            `json:"mockScenarios,omitempty"`
+	MockHand       bool                `json:"mockHand,omitempty"`
 	Refs           map[string]RefInfo  `json:"refs"`
 	Tune           TuneView            `json:"tune"`
 	Compare        CompareView         `json:"compare"`
@@ -90,6 +94,9 @@ type State struct {
 	ReportChoices  []ReportChoice      `json:"reportChoices"`
 	Hold           HoldView            `json:"hold"`
 	Batch          BatchState          `json:"batch"`
+	Acceptance     AcceptState         `json:"acceptance"`
+	Measure        *MeasureView        `json:"measure,omitempty"`
+	Setup          *SetupView          `json:"setup,omitempty"`
 }
 
 // Result is one processed sweep, as sent to the UI and stored in snapshots.
@@ -111,6 +118,8 @@ type Result struct {
 	Compare    *CompareLive `json:"compare,omitempty"` // S21 compare against stored antenna A
 	Hold       *HoldLive    `json:"hold,omitempty"`    // stable-positions HOLD
 	Batch      *BatchLive   `json:"batch,omitempty"`   // BATCH: the active batch and auto-capture
+	Accept     *AcceptView  `json:"accept,omitempty"`  // acceptance window and band margin
+	Multi      *MultiInfo   `json:"multi,omitempty"`   // Measure ×N: the average of N sweeps and their repeatability
 	// Source is set for a measurement opened from a file (not live).
 	Source *FileSource `json:"source,omitempty"`
 }
@@ -150,6 +159,9 @@ type Options struct {
 	// calibration step measures it ("" = the antenna again); mock only.
 	MockStandard  func(std string)
 	MockScenarios []string
+	// MockAction drives the simulated bench: "hand-on" / "hand-off" (a hand
+	// on the cable) and "reseat" (unscrew and reconnect the antenna).
+	MockAction func(action string) error
 	// Backup enables GET/POST /api/backup (export / import every stored
 	// file as one JSON document). The browser build turns it on.
 	Backup bool
@@ -197,6 +209,10 @@ type Server struct {
 	compareS21Prev   bool
 	hold             *holdState
 	batch            *batchState
+	meas             *measureJob // Measure ×N (current or last)
+	setup            *setupSession
+	setupMargin      *rf.Margin // step A's band margin (Auto window of the setup check)
+	mockHand         bool       // simulator: a hand on the cable
 
 	continuous atomic.Bool
 	wake       chan struct{}
@@ -455,7 +471,16 @@ func (s *Server) process(sw *vna.Sweep, cfg Config) *Result {
 			s21[i] = rf.TransmissionExtension(sw.S21[i], f, tau)
 		}
 	}
+	s.mu.Lock()
+	cfg.Accept = s.settings.AcceptanceFor(cfg.Profile)
+	if s.tune != nil {
+		cfg.Accept = s.settings.AcceptanceFor(s.tune.Base.Profile)
+	}
+	s.mu.Unlock()
 	repeat := s.repeatNoise(sw.Freq, s11)
+	if s.measuring() {
+		cfg.Avg = 1 // Measure ×N: every sweep is fresh
+	}
 	s11, s21, avgN := s.average(cfg, sw.Freq, s11, s21)
 	r := buildResult(sw.Freq, s11, s21, cfg, sw.Started, sw.Duration)
 	r.AvgN = avgN
@@ -494,7 +519,7 @@ func hasWarning(ws []rf.Warning, code string) bool {
 
 func buildResult(freq []float64, s11, s21 []complex128, cfg Config, t time.Time, dur time.Duration) *Result {
 	d := rf.Derive(s11, s21)
-	sum, _ := rf.Analyze(freq, d, cfg.Bands)
+	sum, _ := rf.AnalyzeAt(freq, d, cfg.Bands, cfg.Accept.Limit())
 	r := &Result{Time: t, DurationMs: float64(dur.Microseconds()) / 1000, Config: cfg, Freq: freq,
 		S11: make([][2]float64, len(s11)), Derived: d, Summary: sum}
 	for i, c := range s11 {
@@ -506,6 +531,7 @@ func buildResult(freq []float64, s11, s21 []complex128, cfg Config, t time.Time,
 			r.S21[i] = [2]float64{real(c), imag(c)}
 		}
 	}
+	r.Accept = acceptViewOf(r)
 	return r
 }
 
@@ -521,6 +547,7 @@ func (s *Server) state() State {
 	}
 	st.Cal.Settings = s.settings
 	st.ReadOnly, st.MockScenarios, st.TrimActive = s.opt.ReadOnly, s.opt.MockScenarios, s.settings.TrimActive
+	st.MockHand = s.mockHand
 	st.Refs = map[string]RefInfo{}
 	for k, r := range s.refs {
 		st.Refs[k] = RefInfo{Time: r.Time, Points: len(r.Freq), Start: r.Config.Start, Stop: r.Config.Stop, HasUndo: s.store.HasRefPrev(k)}
@@ -537,6 +564,9 @@ func (s *Server) state() State {
 	st.ReportChoices = s.reportChoicesLocked()
 	st.Hold = s.hold.view()
 	st.Batch = s.batchStateLocked()
+	st.Acceptance = s.acceptStateLocked()
+	st.Measure = s.measureViewLocked()
+	st.Setup = s.setupViewLocked()
 	if a := s.cal.Active; a != nil {
 		m := a.Start == s.cfg.Start && a.Stop == s.cfg.Stop
 		st.Cal.Matches = &m

@@ -47,10 +47,16 @@ type HistoryEntry struct {
 	R           float64   `json:"r"`                     // Ω at the target
 	X           float64   `json:"x"`                     // Ω at the target
 	Q           float64   `json:"q,omitempty"`
-	BW2         float64   `json:"bw2,omitempty"` // Hz, SWR < 2 bandwidth of the dip (0 = open or none)
-	Cal         string    `json:"cal"`           // calibrated, not calibrated, calibration does not fit, from file
-	Key         string    `json:"key"`           // de-duplication: profile + measurement time
+	BW2         float64   `json:"bw2,omitempty"`   // Hz, SWR < 2 bandwidth of the dip (0 = open or none)
+	Cal         string    `json:"cal"`             // calibrated, not calibrated, calibration does not fit, from file
+	Key         string    `json:"key"`             // de-duplication: profile + measurement time
+	Limit       float64   `json:"limit,omitempty"` // band SWR limit of the acceptance setting (0: 2)
+	N           int       `json:"n,omitempty"`     // Measure ×N: sweeps averaged
+	ResSD       float64   `json:"resSD,omitempty"` // Hz, Measure ×N: σ of the resonance
 }
+
+// limit is the band SWR limit the entry was graded with.
+func (e HistoryEntry) limit() float64 { return rf.Acceptance{SWRLimit: e.Limit}.Limit() }
 
 // group is the key entries are compared within.
 func (e HistoryEntry) group() string { return e.Profile + "/" + e.Band }
@@ -70,6 +76,12 @@ func (s *Server) historyEntryLocked(r *Result, kind string) HistoryEntry {
 	}
 	e.Key = e.Profile + "@" + r.Time.UTC().Format(time.RFC3339Nano)
 	e.Cal, _ = s.calLabelLocked(r)
+	if l := r.Config.Accept.Limit(); l != rf.DefaultSWRLimit {
+		e.Limit = l
+	}
+	if r.Multi != nil {
+		e.N, e.ResSD = r.Multi.N, r.Multi.ResSD
+	}
 	sum := r.Summary
 	var bs *rf.BandSummary
 	var dip *rf.Dip
@@ -288,11 +300,12 @@ func detectDrift(h []HistoryEntry) *DriftReport {
 	}
 	// SWR worse.
 	if bWorst > 0 && last.WorstSWR > 0 {
-		worse := last.WorstSWR-bWorst >= driftSWRDelta && last.WorstSWR >= 1.5
-		gradeDrop := rank(rf.Verdict(last.WorstSWR)) > rank(rf.Verdict(bWorst))
+		lim := last.limit()
+		worse := last.WorstSWR-bWorst >= driftSWRDelta && last.WorstSWR >= rf.GoodLimitFor(lim)
+		gradeDrop := rank(rf.VerdictAt(last.WorstSWR, lim)) > rank(rf.VerdictAt(bWorst, lim))
 		if worse || gradeDrop {
 			lvl := "warn"
-			if rf.Verdict(last.WorstSWR) == "bad" {
+			if rf.VerdictAt(last.WorstSWR, lim) == "bad" {
 				lvl = "bad"
 			}
 			rep.Warnings = append(rep.Warnings, DriftWarning{Code: "swr", Level: lvl, Title: "SWR got worse",

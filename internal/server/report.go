@@ -82,6 +82,9 @@ type reportData struct {
 	Link      string        // its product / source link (clean)
 	LinkText  string
 	QR        template.HTML
+	// PhotoCaption / LinkNote: small print under the photo and the link.
+	PhotoCaption string
+	LinkNote     string
 }
 
 var verdictLabel = map[string]string{"good": "PASS", "ok": "OK", "bad": "FAIL"}
@@ -223,6 +226,7 @@ func (s *Server) buildReport(id, name, notes string, profiles []string, trimName
 	d := reportData{ReportID: id, Name: name, Notes: notes, Generated: time.Now()}
 	if ant != nil {
 		d.Photo, d.Link, d.LinkText, d.QR = ant.Photo, ant.Link, LinkText(ant.Link), qrSVG(ant.Link, 22)
+		d.PhotoCaption, d.LinkNote = ant.PhotoCaption, ant.LinkNote
 	}
 	if s.info != nil {
 		d.Device = s.info.Model
@@ -310,6 +314,17 @@ func (s *Server) buildReport(id, name, notes string, profiles []string, trimName
 			{"Sweep", fmt.Sprintf("%s, %d points%s", mhzRange(r.Config.Start, r.Config.Stop), len(r.Freq), avgNote(r.AvgN))},
 			{"Calibration", sec.CalNote},
 		}
+		if r.Accept != nil {
+			sec.Key = append(sec.Key, reportKV{"Acceptance", r.Accept.Window.Text})
+		} else if !r.Config.Identify && len(r.Config.Bands) > 0 {
+			sec.Key = append(sec.Key, reportKV{"Acceptance", fmt.Sprintf("band SWR < %.1f", r.Config.Accept.Limit())})
+		}
+		if r.Multi != nil {
+			sec.Key = append(sec.Key, reportKV{"Measurement", r.Multi.Text})
+		}
+		if n := s.setupNoteFor(r); n != nil {
+			sec.Key = append(sec.Key, reportKV{"Setup check", n.Time.Format("15:04") + ": " + n.Line})
+		}
 		for i := 0; i < len(sec.Key); i += 2 {
 			sec.KeyRows = append(sec.KeyRows, sec.Key[i:min(i+2, len(sec.Key))])
 		}
@@ -348,7 +363,7 @@ func (s *Server) buildReport(id, name, notes string, profiles []string, trimName
 		s.mu.Lock()
 		c := cloneBatch(batch)
 		s.mu.Unlock()
-		v := batchView(c, s.batchSlope(c))
+		v := s.batchViewOf(c)
 		d.Batch, d.BatchPlot = &v, spreadSVG(v, 182, 27)
 	}
 	if len(d.Sections) == 0 && d.Trim == nil && d.Compare == nil && d.Hold == nil && d.Batch == nil {
@@ -378,7 +393,7 @@ func reportPlots(r *Result) (template.HTML, template.HTML) {
 	for _, dp := range r.Summary.Dips {
 		marks = append(marks, svgMark{F: dp.Freq, Label: fmt.Sprintf("%.1f", dp.Freq/1e6)})
 	}
-	thr := []svgHLine{{Y: 2, Label: "SWR 2", Dash: "9 5"}, {Y: 1.5, Label: "SWR 1.5", Dash: "2 4"}}
+	thr := limitLines(r.Config.Accept)
 	swr := svgPlot{Wmm: 182, Hmm: 60, Freq: r.Freq, Series: []svgSeries{{Y: r.Derived.SWR, Color: svgTrace}},
 		YMin: 1, YMax: maxSWR, YTicks: niceTicks(1, maxSWR, 4), YFmt: func(v float64) string { return fmt.Sprintf("%g", v) },
 		YUnit: "SWR", Bands: r.Config.Bands, HLines: thr, Marks: marks, Title: "SWR", Class: "swr"}.render()
@@ -390,8 +405,9 @@ func reportPlots(r *Result) (template.HTML, template.HTML) {
 	rl := svgPlot{Wmm: 124, Hmm: 52, Freq: r.Freq, Series: []svgSeries{{Y: r.Derived.S11dB, Color: svgTrace}},
 		YMin: lo, YMax: 0, YTicks: niceTicks(lo, 0, 4), YFmt: func(v float64) string { return fmt.Sprintf("%g", v) },
 		YUnit: "dB", Bands: r.Config.Bands,
-		HLines: []svgHLine{{Y: -9.54, Label: "SWR 2", Dash: "9 5"}, {Y: -13.98, Label: "SWR 1.5", Dash: "2 4"}},
-		Title:  "Return loss (S11)", Class: "rl"}.render()
+		HLines: []svgHLine{{Y: -rlOfSWR(r.Config.Accept.Limit()), Label: "SWR " + fmtG(r.Config.Accept.Limit()), Dash: "9 5"},
+			{Y: -rlOfSWR(r.Config.Accept.GoodLimit()), Label: "SWR " + fmtG(r.Config.Accept.GoodLimit()), Dash: "2 4"}},
+		Title: "Return loss (S11)", Class: "rl"}.render()
 	return swr, rl
 }
 
@@ -474,6 +490,9 @@ func (s *Server) hReport(w http.ResponseWriter, r *http.Request) {
 		Batch    string   `json:"batch"`
 		Photo    *string  `json:"photo"` // the antenna's photo and link, remembered in its record
 		Link     *string  `json:"link"`
+		// Small print under the photo and the link, remembered too.
+		PhotoCaption *string `json:"photoCaption"`
+		LinkNote     *string `json:"linkNote"`
 	}
 	if err := readJSONMax(r, &req, maxPhotoBytes+(64<<10)); err != nil {
 		writeErr(w, 400, err)
@@ -497,7 +516,7 @@ func (s *Server) hReport(w http.ResponseWriter, r *http.Request) {
 	if a, err := s.store.LoadAntenna(name); err == nil {
 		hist, ant = a.History, a
 	}
-	if req.Photo != nil || req.Link != nil {
+	if req.Photo != nil || req.Link != nil || req.PhotoCaption != nil || req.LinkNote != nil {
 		a := &AntennaInfo{Name: name}
 		if ant != nil {
 			c := *ant
@@ -508,6 +527,12 @@ func (s *Server) hReport(w http.ResponseWriter, r *http.Request) {
 		}
 		if req.Link != nil {
 			a.Link = *req.Link
+		}
+		if req.PhotoCaption != nil {
+			a.PhotoCaption = *req.PhotoCaption
+		}
+		if req.LinkNote != nil {
+			a.LinkNote = *req.LinkNote
 		}
 		if err := a.clean(); err != nil {
 			writeErr(w, 400, err)

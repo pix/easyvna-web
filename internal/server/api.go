@@ -28,6 +28,13 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /api/profiles/{id}/slot", s.hProfileSlot)
 	mux.HandleFunc("POST /api/config", s.hConfig)
 	mux.HandleFunc("POST /api/settings", s.hSettings)
+	mux.HandleFunc("POST /api/acceptance", s.hAcceptance)
+	mux.HandleFunc("POST /api/measure", s.hMeasure)
+	mux.HandleFunc("POST /api/measure/cancel", s.hMeasureCancel)
+	mux.HandleFunc("POST /api/measure/continue", s.hMeasureContinue)
+	mux.HandleFunc("GET /api/setup", s.hSetupGet)
+	mux.HandleFunc("POST /api/setup", s.hSetup)
+	mux.HandleFunc("POST /api/mock/action", s.hMockAction)
 	mux.HandleFunc("POST /api/sweep", s.hSweep)
 	mux.HandleFunc("POST /api/continuous", s.hContinuous)
 	mux.HandleFunc("GET /api/last", s.hLast)
@@ -363,7 +370,8 @@ func (s *Server) hConfig(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) hSettings(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		AutoRecall *bool `json:"autoRecall"`
+		AutoRecall      *bool   `json:"autoRecall"`
+		LinkNoteDefault *string `json:"linkNoteDefault"`
 	}
 	if err := readJSON(r, &req); err != nil {
 		writeErr(w, 400, err)
@@ -372,6 +380,9 @@ func (s *Server) hSettings(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	if req.AutoRecall != nil {
 		s.settings.AutoRecall = *req.AutoRecall
+	}
+	if req.LinkNoteDefault != nil {
+		s.settings.LinkNoteDefault = cleanSmallPrint(*req.LinkNoteDefault)
 	}
 	set := s.settings
 	s.mu.Unlock()

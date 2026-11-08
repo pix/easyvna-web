@@ -58,7 +58,7 @@ func batchErr(w http.ResponseWriter, err error) {
 
 // viewOf builds the view of b with the version and undo flag (s.mu not held).
 func (s *Server) viewOf(b *Batch) BatchView {
-	v := batchView(b, s.batchSlope(b))
+	v := s.batchViewOf(b)
 	s.mu.Lock()
 	v.Version, v.HasUndo = s.batch.version, s.batch.undo[b.ID] != nil
 	s.mu.Unlock()
@@ -72,7 +72,7 @@ func (s *Server) saveSettingsIf(set *Settings) {
 }
 
 func (s *Server) hBatchList(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, 200, s.store.ListBatches())
+	writeJSON(w, 200, s.store.ListBatches(s.acceptFor))
 }
 
 // hBatchCreate makes a batch on the current profile and activates it.
@@ -84,6 +84,9 @@ func (s *Server) hBatchCreate(w http.ResponseWriter, r *http.Request) {
 		Trim     string  `json:"trim"`
 		Link     string  `json:"link"`
 		Photo    string  `json:"photo"`
+		// Small print under the photo and under the link.
+		PhotoCaption string `json:"photoCaption"`
+		LinkNote     string `json:"linkNote"`
 	}
 	if err := readJSONMax(r, &req, maxPhotoBytes+(64<<10)); err != nil {
 		writeErr(w, 400, err)
@@ -91,7 +94,7 @@ func (s *Server) hBatchCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	now := time.Now()
 	b := &Batch{ID: newBatchID(now), Name: req.Name, Notes: req.Notes, LengthMm: req.LengthMm, Trim: req.Trim, Link: req.Link, Photo: req.Photo,
-		Created: now, Updated: now, NextID: 1, Antennas: []BatchAntenna{}}
+		PhotoCaption: cleanSmallPrint(req.PhotoCaption), LinkNote: cleanSmallPrint(req.LinkNote), Created: now, Updated: now, NextID: 1, Antennas: []BatchAntenna{}}
 	if err := b.clean(); err != nil {
 		writeErr(w, 400, err)
 		return
@@ -197,6 +200,9 @@ func (s *Server) hBatchEdit(w http.ResponseWriter, r *http.Request) {
 		Trim     *string  `json:"trim"`
 		Link     *string  `json:"link"`
 		Photo    *string  `json:"photo"`
+		// Small print under the photo and under the link.
+		PhotoCaption *string `json:"photoCaption"`
+		LinkNote     *string `json:"linkNote"`
 	}
 	if err := readJSONMax(r, &req, maxPhotoBytes+(64<<10)); err != nil {
 		writeErr(w, 400, err)
@@ -226,6 +232,12 @@ func (s *Server) hBatchEdit(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Photo != nil {
 		c.Photo = *req.Photo
+	}
+	if req.PhotoCaption != nil {
+		c.PhotoCaption = cleanSmallPrint(*req.PhotoCaption)
+	}
+	if req.LinkNote != nil {
+		c.LinkNote = cleanSmallPrint(*req.LinkNote)
 	}
 	if err := c.clean(); err != nil {
 		s.mu.Unlock()
@@ -504,7 +516,7 @@ func (s *Server) hBatchJSON(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	c := cloneBatch(b)
 	s.mu.Unlock()
-	v := batchView(c, s.batchSlope(c))
+	v := s.batchViewOf(c)
 	ex := BatchExport{Format: BatchFormat, Version: 1, Exported: time.Now().UTC(), App: s.opt.AppName, Batch: c}
 	ex.Figures = &struct {
 		Summary  BatchSummary       `json:"summary"`
@@ -528,6 +540,7 @@ func (b *Batch) validate() error {
 	if err := b.clean(); err != nil {
 		return err
 	}
+	b.PhotoCaption, b.LinkNote = cleanSmallPrint(b.PhotoCaption), cleanSmallPrint(b.LinkNote)
 	if b.Profile == "" || b.Start <= 0 || b.Stop <= b.Start || b.Points < 3 || b.Points > 10001 || b.Target <= 0 || len(b.Bands) == 0 {
 		return errors.New("the batch has no valid sweep range, target or band")
 	}
@@ -636,7 +649,7 @@ func (s *Server) hBatchCSV(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	c := cloneBatch(b)
 	s.mu.Unlock()
-	v := batchView(c, s.batchSlope(c))
+	v := s.batchViewOf(c)
 	var buf bytes.Buffer
 	cw := csv.NewWriter(&buf)
 	f := func(x float64, prec int) string {
@@ -652,10 +665,10 @@ func (s *Server) hBatchCSV(w http.ResponseWriter, r *http.Request) {
 		return f(x, prec)
 	}
 	_ = cw.Write([]string{"batch", c.Name, "profile", c.Profile, "range", mhzRange(c.Start, c.Stop), "target_mhz", f(c.Target/1e6, 3),
-		"tolerance_mhz", f(c.ToleranceHz()/1e6, 3)})
+		"tolerance_mhz", f(v.Summary.ToleranceHz/1e6, 3), "acceptance", v.Summary.Window.Text, "grade", v.Summary.Grade})
 	_ = cw.Write([]string{"#", "label", "captured", "status", "advice", "resonance_mhz", "offset_mhz", "offset_pct", "swr_at_resonance",
 		"swr_at_target", "worst_swr_in_band", "band_swr2_pct", "bw_swr2_mhz", "return_loss_at_target_db", "band_verdict", "cut_mm",
-		"outlier_of", "calibration", "auto", "warnings"})
+		"outlier_of", "calibration", "auto", "warnings", "band_below_limit_pct", "margin_used_pct", "measured_n", "resonance_sd_mhz"})
 	for _, a := range v.Antennas {
 		m := a.Metrics
 		verdict := strings.ToUpper(m.Verdict)
@@ -666,7 +679,8 @@ func (s *Server) hBatchCSV(w http.ResponseWriter, r *http.Request) {
 			fz(m.ResFreq/1e6, 4, m.Found), fz(m.Offset/1e6, 4, m.Found), fz(m.OffsetPct, 3, m.Found), fz(m.ResSWR, 3, m.Found),
 			f(m.SWRTarget, 3), fz(m.WorstSWR, 3, m.WorstSWR > 0), f(m.PctBelow2, 1), fz(m.BW2/1e6, 3, m.BW2 > 0 && !m.BW2Open),
 			f(m.RLTarget, 2), verdict, fz(m.Tuning.CutMm, 2, m.Tuning.Method != "pct" && m.Found), strings.Join(m.Outliers, " "),
-			a.Cal, strconv.FormatBool(a.Auto), strings.Join(a.Warnings, " ")})
+			a.Cal, strconv.FormatBool(a.Auto), strings.Join(a.Warnings, " "), f(m.PctBelowLimit, 1),
+			fz(m.Margin.UsedPct, 1, m.Margin.OK), repN(a.Rep), repSD(a.Rep)})
 	}
 	_ = cw.Write(nil)
 	_ = cw.Write([]string{"statistic", "unit", "n", "mean", "sd", "min", "max", "spread", "median", "outliers"})
@@ -690,6 +704,20 @@ func (s *Server) hBatchCSV(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
 	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, attachmentName(b.Name, "-batch", ".csv")))
 	_, _ = w.Write(buf.Bytes())
+}
+
+func repN(r *RepeatBrief) string {
+	if r == nil {
+		return "1"
+	}
+	return strconv.Itoa(r.N)
+}
+
+func repSD(r *RepeatBrief) string {
+	if r == nil {
+		return ""
+	}
+	return strconv.FormatFloat(r.ResSD/1e6, 'f', 4, 64)
 }
 
 // newArrivalFor starts auto-capture on b, remembering its last capture.

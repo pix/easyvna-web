@@ -83,7 +83,7 @@ func main() {
 		}
 		bench, _ := mock.NewBench(cfg.antenna, 0, cfg.firmware != "stock")
 		opt.MockAntenna, opt.MockScenarios = cfg.antenna, mock.ScenarioNames()
-		opt.SetMockAntenna, opt.MockCut, opt.MockStandard = bench.SetAntenna, bench.Cut, bench.AttachStandard
+		opt.SetMockAntenna, opt.MockCut, opt.MockStandard, opt.MockAction = bench.SetAntenna, bench.Cut, bench.AttachStandard, bench.Action
 		opt.Open = func(ctx context.Context) (vna.Device, error) {
 			if cfg.firmware == "v2" {
 				return nanovnav2.Open(ctx, bench.NewSimV2(), nanovnav2.Options{PortName: "V2 simulator (in this page)", Mock: true})

@@ -10,6 +10,7 @@ import (
 	"math"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -22,19 +23,25 @@ import (
 // sheet dialog. It is stored per antenna name in antennas/<name>.json and
 // fills the dialog again the next time that name is used.
 type AntennaInfo struct {
-	Name      string    `json:"name"`
-	Type      string    `json:"type,omitempty"`
-	Band      string    `json:"band,omitempty"` // band / purpose, e.g. "869 MHz LoRa EU"
-	Connector string    `json:"connector,omitempty"`
-	LengthMm  float64   `json:"lengthMm,omitempty"`
-	Ground    string    `json:"ground,omitempty"` // ground plane / mounting
-	Cable     string    `json:"cable,omitempty"`  // feed cable type and length
-	Maker     string    `json:"maker,omitempty"`  // maker / source
-	Owner     string    `json:"owner,omitempty"`  // owner / location
-	Notes     string    `json:"notes,omitempty"`
-	Link      string    `json:"link,omitempty"`  // product / source page (http or https, see CleanLink)
-	Photo     string    `json:"photo,omitempty"` // data:image/jpeg;base64,... (downscaled by the page)
-	Updated   time.Time `json:"updated"`
+	Name      string  `json:"name"`
+	Type      string  `json:"type,omitempty"`
+	Band      string  `json:"band,omitempty"` // band / purpose, e.g. "869 MHz LoRa EU"
+	Connector string  `json:"connector,omitempty"`
+	LengthMm  float64 `json:"lengthMm,omitempty"`
+	Ground    string  `json:"ground,omitempty"` // ground plane / mounting
+	Cable     string  `json:"cable,omitempty"`  // feed cable type and length
+	Maker     string  `json:"maker,omitempty"`  // maker / source
+	Owner     string  `json:"owner,omitempty"`  // owner / location
+	Notes     string  `json:"notes,omitempty"`
+	Link      string  `json:"link,omitempty"`  // product / source page (http or https, see CleanLink)
+	Photo     string  `json:"photo,omitempty"` // data:image/jpeg;base64,... (downscaled by the page)
+	// PhotoCaption and LinkNote are small print shown under the photo and
+	// under the link (plain text, at most maxSmallPrint characters).
+	PhotoCaption string    `json:"photoCaption,omitempty"`
+	LinkNote     string    `json:"linkNote,omitempty"`
+	Updated      time.Time `json:"updated"`
+	// Setup is the last setup check made with this antenna (see setup.go).
+	Setup *SetupNote `json:"setup,omitempty"`
 	// History holds a summary of each measurement of this antenna (sheet,
 	// report, "Log this measurement"); see history.go.
 	History []HistoryEntry `json:"history,omitempty"`
@@ -52,6 +59,32 @@ type AntennaListEntry struct {
 
 const maxPhotoBytes = 3 << 20 // data URL length
 
+// maxSmallPrint is the length limit (characters) of the photo caption and
+// the link note.
+const maxSmallPrint = 200
+
+// cleanSmallPrint makes a photo caption or link note one plain line of at
+// most maxSmallPrint characters (it is escaped when shown).
+func cleanSmallPrint(s string) string {
+	s = strings.Join(strings.Fields(s), " ")
+	if r := []rune(s); len(r) > maxSmallPrint {
+		s = string(r[:maxSmallPrint])
+	}
+	return s
+}
+
+// smallPrintMm estimates the height (mm) small print of n characters takes
+// in a block w mm wide at 6.2 pt: about 1.25 mm per character, 2.6 mm per
+// line.
+func smallPrintMm(text string, w float64) float64 {
+	n := len([]rune(text))
+	if n == 0 {
+		return 0
+	}
+	perLine := math.Max(8, math.Floor(w/1.25))
+	return math.Ceil(float64(n)/perLine)*2.6 + 0.6
+}
+
 // clean trims every field and checks the name and the photo.
 func (a *AntennaInfo) clean() error {
 	for _, p := range []*string{&a.Name, &a.Type, &a.Band, &a.Connector, &a.Ground, &a.Cable, &a.Maker, &a.Owner} {
@@ -64,6 +97,7 @@ func (a *AntennaInfo) clean() error {
 	if len(a.Notes) > 2000 {
 		a.Notes = a.Notes[:2000]
 	}
+	a.PhotoCaption, a.LinkNote = cleanSmallPrint(a.PhotoCaption), cleanSmallPrint(a.LinkNote)
 	if _, err := SnapshotFile(a.Name); err != nil {
 		return errors.New("give the antenna a name (1-80 characters)")
 	}
@@ -205,6 +239,11 @@ type sheetData struct {
 	Warnings  []rf.Warning
 	LinkText  string
 	QR        template.HTML
+	Criteria  string // "Acceptance: band SWR < 2.0, resonance …"
+	Multi     string // Measure ×N: "average of 5 · resonance σ …"
+	Setup     *SetupNote
+	Limit     float64
+	Good      float64
 }
 
 // interpAt linearly interpolates y(f); ok is false outside the sweep.
@@ -228,21 +267,21 @@ func interpAt(freq, y []float64, f float64) (float64, bool) {
 	return y[i-1] + t*(y[i]-y[i-1]), true
 }
 
-func swrClass(v float64) string {
-	switch {
-	case v <= 0:
+func swrClass(v float64) string { return swrClassAt(v, rf.DefaultSWRLimit) }
+
+// swrClassAt colours an SWR value against the band SWR limit.
+func swrClassAt(v, limit float64) string {
+	if v <= 0 {
 		return ""
-	case v < 1.5:
-		return "good"
-	case v < 2:
-		return "ok"
 	}
-	return "bad"
+	return rf.VerdictAt(v, limit)
 }
 
 // sheetFigures computes the key figures of r for its first band.
 func sheetFigures(r *Result) (figs []sheetFig, verdict, vclass string) {
 	d, sum := r.Derived, r.Summary
+	limit := r.Config.Accept.Limit()
+	swrClass := func(v float64) string { return swrClassAt(v, limit) }
 	swrAt := func(f float64) (sheetFig, bool) {
 		v, ok := interpAt(r.Freq, d.SWR, f)
 		return sheetFig{V: swrF(v), Sub: "@ " + mhzF(f) + " MHz", Class: swrClass(v)}, ok
@@ -360,6 +399,20 @@ func (s *Server) buildSheet(id string, a AntennaInfo) ([]byte, *HistoryEntry, er
 	}
 	d.Figs, d.Verdict, d.VClass = sheetFigures(r)
 	d.Ref = r.Ref
+	d.Limit, d.Good = r.Config.Accept.Limit(), r.Config.Accept.GoodLimit()
+	if r.Accept != nil {
+		d.Criteria = "Acceptance: " + r.Accept.Window.Text
+	} else {
+		d.Criteria = fmt.Sprintf("Acceptance: band SWR < %.1f", d.Limit)
+	}
+	if r.Multi != nil {
+		d.Multi = r.Multi.Text
+	}
+	if n := s.setupNoteFor(r); n != nil {
+		d.Setup = n
+	} else {
+		d.Setup = a.Setup
+	}
 	if d.Verdict == "CHECK" {
 		d.VNote = "measurement warning, see below"
 	}
@@ -396,12 +449,16 @@ func (s *Server) buildSheet(id string, a AntennaInfo) ([]byte, *HistoryEntry, er
 	}
 	swrSeries = append(swrSeries, svgSeries{Y: r.Derived.SWR, Color: svgTrace})
 	rlSeries = append(rlSeries, svgSeries{Y: r.Derived.S11dB, Color: svgTrace})
-	thr := []svgHLine{{Y: 2, Label: "SWR 2", Dash: "9 5"}, {Y: 1.5, Label: "SWR 1.5", Dash: "2 4"}}
+	thr := limitLines(r.Config.Accept)
 	var marks []svgMark
 	for _, dp := range r.Summary.Dips {
 		marks = append(marks, svgMark{F: dp.Freq, Label: fmt.Sprintf("%.1f", dp.Freq/1e6)})
 	}
-	d.SWR = svgPlot{Wmm: 190, Hmm: 50, Freq: r.Freq, Series: swrSeries, YMin: 1, YMax: maxSWR, YTicks: niceTicks(1, maxSWR, 4),
+	// Small print under the photo / the link takes room from the SWR plot,
+	// so the sheet stays one page.
+	side := math.Max(31+smallPrintMm(a.PhotoCaption, 36), 26+smallPrintMm(a.LinkNote, 24))
+	swrH := math.Max(40, 50-math.Max(0, side-45))
+	d.SWR = svgPlot{Wmm: 190, Hmm: swrH, Freq: r.Freq, Series: swrSeries, YMin: 1, YMax: maxSWR, YTicks: niceTicks(1, maxSWR, 4),
 		YFmt: func(v float64) string { return fmt.Sprintf("%g", v) }, YUnit: "SWR", Bands: r.Config.Bands, HLines: thr, Marks: marks,
 		Title: "SWR", Class: "swr"}.render()
 	lo := -30.0
@@ -411,7 +468,7 @@ func (s *Server) buildSheet(id string, a AntennaInfo) ([]byte, *HistoryEntry, er
 	lo = math.Max(-50, math.Floor(lo/10)*10)
 	d.RL = svgPlot{Wmm: 136, Hmm: 33, Freq: r.Freq, Series: rlSeries, YMin: lo, YMax: 0, YTicks: niceTicks(lo, 0, 3),
 		YFmt: func(v float64) string { return fmt.Sprintf("%g", v) }, YUnit: "dB", Bands: r.Config.Bands,
-		HLines: []svgHLine{{Y: -9.54, Label: "SWR 2", Dash: "9 5"}}, Title: "Return loss (S11)", Class: "rl"}.render()
+		HLines: []svgHLine{{Y: -rlOfSWR(d.Limit), Label: "SWR " + fmtG(d.Limit), Dash: "9 5"}}, Title: "Return loss (S11)", Class: "rl"}.render()
 	d.Z = impedancePlotWith(r, 136, 33, ref)
 	d.Smith = smithSVG(r, 52, ref)
 	d.Legend = []string{"— measured"}
@@ -489,6 +546,11 @@ func (s *Server) hSheet(w http.ResponseWriter, r *http.Request) {
 	if entry != nil {
 		a.History = mergeHistory(a.History, *entry)
 	}
+	s.mu.Lock()
+	if n := s.setupNoteFor(s.last); n != nil {
+		a.Setup = n
+	}
+	s.mu.Unlock()
 	if err := s.store.SaveAntenna(&a); err != nil {
 		writeErr(w, 500, err)
 		return
@@ -498,4 +560,25 @@ func (s *Server) hSheet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, map[string]string{"file": file, "url": "api/reports/" + file})
+}
+
+// limitLines are the SWR plot's threshold lines: the band SWR limit and the
+// GOOD threshold (2 and 1.5 by default).
+func limitLines(a rf.Acceptance) []svgHLine {
+	return []svgHLine{{Y: a.Limit(), Label: "SWR " + fmtG(a.Limit()), Dash: "9 5"}, {Y: a.GoodLimit(), Label: "SWR " + fmtG(a.GoodLimit()), Dash: "2 4"}}
+}
+
+func fmtG(v float64) string { return strconv.FormatFloat(math.Round(v*100)/100, 'f', -1, 64) }
+
+// rlOfSWR is the return loss (dB) at an SWR.
+func rlOfSWR(s float64) float64 { return -20 * math.Log10((s-1)/(s+1)) }
+
+// setupNoteFor is the last setup check when it was made on r's profile
+// (nil otherwise). s.mu must be held.
+func (s *Server) setupNoteFor(r *Result) *SetupNote {
+	if r == nil || s.setup == nil || s.setup.note == nil || s.setup.note.Profile != resultProfile(r) {
+		return nil
+	}
+	n := *s.setup.note
+	return &n
 }

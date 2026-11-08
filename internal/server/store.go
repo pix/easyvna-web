@@ -13,6 +13,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/pix/easyvna-web/internal/rf"
 )
 
 // SlotMeta records what EasyVNA Web saved into a firmware calibration slot.
@@ -32,6 +34,12 @@ type Settings struct {
 	AutoRecall   bool             `json:"autoRecall"`
 	TrimActive   string           `json:"trimActive,omitempty"`
 	BatchActive  string           `json:"batchActive,omitempty"`
+	// Accept is the default acceptance setting, AcceptProfile the
+	// profiles that have their own (see accept.go).
+	Accept        rf.Acceptance            `json:"accept"`
+	AcceptProfile map[string]rf.Acceptance `json:"acceptProfile,omitempty"`
+	// LinkNoteDefault pre-fills the link note of new antennas and batches.
+	LinkNoteDefault string `json:"linkNoteDefault,omitempty"`
 }
 
 // Store manages the data directory: settings and snapshots.

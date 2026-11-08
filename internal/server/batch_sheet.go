@@ -55,7 +55,7 @@ type batchSheetData struct {
 
 func statusClass(st string) string {
 	switch st {
-	case "tuned":
+	case "tuned", "ok":
 		return "good"
 	case "shorten", "lengthen":
 		return "ok"
@@ -291,11 +291,11 @@ func (s *Server) buildBatchSheet(id string, b *Batch) ([]byte, error) {
 	if d.URL == "" {
 		d.URL = "https://github.com/pix/easyvna-web"
 	}
-	d.V = batchView(c, s.batchSlope(c))
+	d.V = s.batchViewOf(c)
 	sm := d.V.Summary
 	band := c.Band()
 	d.Band = fmt.Sprintf("%s MHz band, %s–%s MHz", band.Name, mhzF(band.Lo), mhzF(band.Hi))
-	d.Target, d.Tol = mhzF(c.Target), fmt.Sprintf("%.2f", c.ToleranceHz()/1e6)
+	d.Target, d.Tol = mhzF(c.Target), fmt.Sprintf("%.2f", sm.ToleranceHz/1e6)
 	d.Dates = sm.First.Format("2006-01-02 15:04")
 	if sm.Last.Sub(sm.First) >= time.Minute {
 		if sm.Last.Format("2006-01-02") == sm.First.Format("2006-01-02") {
