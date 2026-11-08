@@ -33,6 +33,10 @@ var (
 
 type batchRow struct {
 	ID                                     int
+	No                                     string // lot position and version: "2", "2a"
+	First                                  bool   // the first version of its antenna (a group starts)
+	Old                                    bool   // superseded by an adjusted version: not in the lot figures
+	Delta, DeltaShort                      string // an adjusted version: what the adjustment did
 	Label, Status, SClass, Detail          string
 	Res, Off, OffPct, SWRT, Worst, BW, RL  string
 	Verdict, VClass, Cover, Cal            string
@@ -43,6 +47,8 @@ type batchRow struct {
 // lotStyle is the line style of one antenna on page 1.
 type lotStyle struct {
 	ID      int
+	Pos     int // lot position (its earlier versions share the style)
+	Adj     bool
 	Label   string
 	Color   string
 	Dash    string
@@ -68,12 +74,17 @@ type batchSheetData struct {
 	QR        template.HTML
 	Rows      []batchRow
 	Halves    [][]batchRow // compact: the rows in two side-by-side tables
-	Size      string       // "", "compact" (11-40 antennas: two narrower tables), "long" (over 40: the table continues on a further page)
+	Size      string       // "", "compact" (11-40 rows: two narrower tables), "long" (over 40: the table continues on a further page)
+	Steps     []AdjustStep // the adjustments (page 2's block), at most maxSheetSteps
+	MoreSteps int          // adjustments left out of the block (in the CSV)
+	// CompactDeltas: the compact table has the delta lines too.
+	CompactDeltas bool
 	// Page 1: the lot on the antenna sheet's layout.
 	LotSWR, LotRL  template.HTML
 	LotZ, LotSmith template.HTML
 	LotLegend      []lotStyle
 	AvgSwatch      template.HTML
+	OldSwatch      template.HTML // earlier versions of adjusted antennas
 	Figs           []sheetFig
 	Grade          string // FINE / WORTH CORRECTING / MUST CORRECT
 	GClass         string
@@ -108,7 +119,7 @@ func batchRows(v BatchView) []batchRow {
 	var rows []batchRow
 	for _, a := range v.Antennas {
 		m := a.Metrics
-		r := batchRow{ID: a.ID, Label: a.Label, Status: m.Tuning.Text, SClass: statusClass(m.Tuning.Status), Detail: m.Tuning.Detail,
+		r := batchRow{ID: a.ID, No: a.No, First: a.Ver == 0, Old: !a.Current, Label: a.Label, Status: m.Tuning.Text, SClass: statusClass(m.Tuning.Status), Detail: m.Tuning.Detail,
 			Res: "–", Off: "–", SWRT: swrF(m.SWRTarget), Worst: "–", BW: "–", RL: fmt.Sprintf("%.1f", m.RLTarget),
 			Verdict: verdictLabel[m.Verdict], VClass: verdictClass(m.Verdict), Cover: fmt.Sprintf("%.0f %%", m.PctBelowLimit),
 			Cal: a.Cal, CalOK: a.CalOK}
@@ -130,17 +141,49 @@ func batchRows(v BatchView) []batchRow {
 		r.OutRes, r.OutSWR, r.OutWorst = hasKey(m.Outliers, "res"), hasKey(m.Outliers, "swrTarget"), hasKey(m.Outliers, "worstSWR")
 		r.OutBW, r.OutRL = hasKey(m.Outliers, "bw2"), hasKey(m.Outliers, "rlTarget")
 		r.Outlier = len(m.Outliers) > 0
+		if a.Step != nil {
+			r.Delta, r.DeltaShort = a.Step.Text, a.Step.Short
+		}
 		rows = append(rows, r)
 	}
 	return rows
 }
 
-// lotStyles gives every antenna its line style.
+// splitRows is where the compact table's second half starts: about half
+// of the lines (a version's delta line is a line), between two antennas.
+func splitRows(rows []batchRow) int {
+	w := func(r batchRow) int {
+		if r.DeltaShort != "" {
+			return 2
+		}
+		return 1
+	}
+	total := 0
+	for _, r := range rows {
+		total += w(r)
+	}
+	best, bestD, acc := (len(rows)+1)/2, total+1, 0
+	for i, r := range rows {
+		if i > 0 && r.First {
+			if d := acc - (total - acc); (d < 0 && -d < bestD) || (d >= 0 && d < bestD) {
+				best, bestD = i, int(math.Abs(float64(d)))
+			}
+		}
+		acc += w(r)
+	}
+	return best
+}
+
+// lotStyles gives every antenna of the lot (its current version) its line
+// style.
 func lotStyles(v BatchView) []lotStyle {
 	var out []lotStyle
 	k := 0
 	for _, a := range v.Antennas {
-		st := lotStyle{ID: a.ID, Label: a.Label, Outlier: len(a.Metrics.Outliers) > 0}
+		if !a.Current {
+			continue
+		}
+		st := lotStyle{ID: a.ID, Pos: a.Pos, Adj: a.Versions > 1, Label: a.Label, Outlier: len(a.Metrics.Outliers) > 0}
 		if st.Outlier {
 			st.Color, st.Dash = svgRef, "6 3"
 		} else {
@@ -162,12 +205,17 @@ func swatch(color, dash string, w float64) template.HTML {
 	return template.HTML(fmt.Sprintf(`<svg class="sw" viewBox="0 0 24 6" width="6mm" height="1.5mm" aria-hidden="true"><line x1="0" x2="24" y1="3" y2="3" stroke="%s" stroke-width="%.1f"%s/></svg>`, color, w*1.4, d))
 }
 
-// lotDerived is every antenna's derived data and the lot average's.
-func lotDerived(b *Batch) ([]rf.Derived, rf.Derived, [][2]float64) {
+// lotDerived is the derived data of the captures ids and their average.
+func lotDerived(b *Batch, ids []int) ([]rf.Derived, rf.Derived, [][2]float64) {
 	var all [][]complex128
 	var ds []rf.Derived
-	for _, a := range b.Antennas {
-		g := toComplex(a.S11)
+	for _, id := range ids {
+		i := b.index(id)
+		if i < 0 {
+			ds = append(ds, rf.Derived{})
+			continue
+		}
+		g := toComplex(b.Antennas[i].S11)
 		ds = append(ds, rf.Derive(g, nil))
 		if len(g) == len(b.Freq) {
 			all = append(all, g)
@@ -180,14 +228,45 @@ func lotDerived(b *Batch) ([]rf.Derived, rf.Derived, [][2]float64) {
 	return ds, rf.Derive(avg, nil), s11Of(avg)
 }
 
-// lotPlots renders page 1's plots: every antenna and the lot average.
+// lotPlots renders page 1's plots: every antenna (its current version) and
+// the lot average; the earlier versions of adjusted antennas are drawn
+// thin, light and dashed in the antenna's colour on the SWR and return
+// loss plots.
 func lotPlots(d *batchSheetData, b *Batch, swrH float64) {
 	v := d.V
 	styles := lotStyles(v)
-	ds, avg, avgS11 := lotDerived(b)
+	ids := make([]int, len(styles))
+	byPos := map[int]lotStyle{}
+	for i, st := range styles {
+		ids[i], byPos[st.Pos] = st.ID, st
+	}
+	ds, avg, avgS11 := lotDerived(b, ids)
 	acc := v.Accept
 	attr := func(id int) string { return fmt.Sprintf(` data-ant="%d"`, id) }
 	var swr, rl []svgSeries
+	var oldIDs []int
+	for _, a := range v.Antennas {
+		if !a.Current {
+			oldIDs = append(oldIDs, a.ID)
+		}
+	}
+	olds, _, _ := lotDerived(b, oldIDs)
+	for i, id := range oldIDs {
+		a := v.Antennas[0]
+		for _, x := range v.Antennas {
+			if x.ID == id {
+				a = x
+			}
+		}
+		if len(olds[i].SWR) != len(v.Freq) {
+			continue
+		}
+		st := byPos[a.Pos]
+		at := fmt.Sprintf(` data-old="%d"`, id)
+		swr = append(swr, svgSeries{Y: olds[i].SWR, Color: st.Color, Dash: "2.5 2", Width: 0.9, Op: 0.5, Attr: at})
+		rl = append(rl, svgSeries{Y: olds[i].S11dB, Color: st.Color, Dash: "2.5 2", Width: 0.9, Op: 0.5, Attr: at})
+	}
+	d.OldSwatch = swatch("#666", "2.5 2", 0.9)
 	for i, st := range styles {
 		if i >= len(ds) || len(ds[i].SWR) != len(v.Freq) {
 			continue
@@ -203,7 +282,7 @@ func lotPlots(d *batchSheetData, b *Batch, swrH float64) {
 		swr = append(swr, svgSeries{Y: avg.SWR, Color: svgAvg, Width: 3.4, Attr: ` data-avg="1"`})
 		rl = append(rl, svgSeries{Y: avg.S11dB, Color: svgAvg, Width: 3.4, Attr: ` data-avg="1"`})
 	}
-	title := fmt.Sprintf("SWR of the %d antennas and the lot average", len(v.Antennas))
+	title := fmt.Sprintf("SWR of the %d antennas and the lot average", len(styles))
 	hl := limitLines(acc)
 	if swrH <= 40 {
 		hl[1].Label = "" // no room for two labels between the lines
@@ -267,8 +346,9 @@ func lotPlots(d *batchSheetData, b *Batch, swrH float64) {
 	// Smith chart.
 	var sb strings.Builder
 	_, c, cy, R := smithFrame(&sb, 52, "smith lotsmith", "lotuc")
-	for i, st := range styles {
-		if i >= len(b.Antennas) {
+	for _, st := range styles {
+		i := b.index(st.ID)
+		if i < 0 {
 			continue
 		}
 		var pts strings.Builder
@@ -375,6 +455,10 @@ func lotFigures(v BatchView) []sheetFig {
 	return figs
 }
 
+// maxSheetSteps is how many adjustments page 2 lists with the compact
+// table (twice as many with the full one; the CSV has all).
+const maxSheetSteps = 3
+
 var gradeLabel = map[string][2]string{GradeFine: {"FINE", "good"}, GradeWorth: {"WORTH CORRECTING", "ok"}, GradeMust: {"MUST CORRECT", "bad"}}
 
 // buildBatchSheet renders the batch sheet (two pages).
@@ -411,18 +495,31 @@ func (s *Server) buildBatchSheet(id string, b *Batch) ([]byte, error) {
 	}
 	d.QR = qrSVG(c.Link, 22)
 	d.Rows = batchRows(d.V)
-	switch n := len(d.Rows); {
+	// A delta line under each adjusted version: in full in the full table
+	// (up to 10 lines), short in the compact one while each half stays
+	// within 11 lines; beyond that the adjustments block lists them (the
+	// first few).
+	n := len(d.Rows) + len(sm.Steps)
+	d.CompactDeltas = n <= 22
+	d.Steps = sm.Steps
+	if max := maxSheetSteps; n > 10 && len(d.Steps) > max || len(d.Steps) > 2*max {
+		if n <= 10 {
+			max *= 2
+		}
+		d.Steps, d.MoreSteps = d.Steps[:max], len(d.Steps)-max
+	}
+	switch {
 	case n > 40:
 		d.Size = "long"
 	case n > 10:
 		d.Size = "compact"
-		h := (n + 1) / 2
+		h := splitRows(d.Rows)
 		d.Halves = [][]batchRow{d.Rows[:h], d.Rows[h:]}
 	}
 	d.Spread = spreadSVG(d.V, 190, 0)
 	// Page 1: the plots shrink when the header's small print or the legend
 	// take more room, so the page stays one page (see smallPrintMm).
-	legendRows := math.Ceil(float64(len(c.Antennas)+1) / 8)
+	legendRows := math.Ceil(float64(sm.N+1+sm.Adjusted/(sm.Adjusted+1)) / 8)
 	swrH := 50 - finePrintMm(c.PhotoCaption, c.LinkNote) - math.Max(0, legendRows-3)*3.4
 	lotPlots(&d, c, math.Max(30, swrH))
 	d.Figs = lotFigures(d.V)
@@ -534,6 +631,7 @@ a.link { font-size: 6.2pt; line-height: 1.2; color: var(--ink2); text-decoration
 .lotlegend .lg.avg { font-weight: 700; max-width: none; }
 .lotlegend .lg.note { max-width: none; color: var(--muted); }
 .lotlegend .lg.outl { font-weight: 700; }
+.lotlegend .lg.old { max-width: none; color: var(--muted); }
 .lotlegend svg.sw { flex: none; }
 .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 4mm; align-items: start; }
 .kv td:first-child { color: var(--muted); width: 30%; }
@@ -568,6 +666,19 @@ td.lbl { max-width: 30mm; overflow: hidden; text-overflow: ellipsis; }
 .compact .concl { font-size: 7.4pt; padding: 1mm 2.2mm; } .compact table.bst td { padding: .2mm .9mm; }
 .long table.ants { break-inside: auto; page-break-inside: auto; }
 .long table.ants tr { break-inside: avoid; page-break-inside: avoid; }
+tr.old td { color: var(--muted); }
+tr.old td.st, tr.old td.v { color: var(--muted); font-weight: 400; }
+tr.old td.num { text-decoration: line-through; text-decoration-color: #b8b8b2; }
+tr.old td.out { box-shadow: none; font-weight: 400; }
+tr.vgrp td { border-bottom: 0; }
+tr.delta td { font-size: 6.6pt; color: var(--ink2); padding-top: 0; white-space: normal; }
+tr.delta td b { color: var(--ink); }
+.compact tr.delta td { font-size: 6.2pt; padding: 0 .7mm .15mm; }
+td.no { font-weight: 700; }
+.adjs { display: grid; grid-template-columns: 1fr; gap: .2mm; }
+.adjs table td { padding: .2mm .9mm; }
+h3 .learnt { text-transform: none; letter-spacing: 0; font-weight: 400; }
+.compact .adjs table td { padding: .1mm .7mm; font-size: 6.6pt; }
 .notes { white-space: pre-wrap; font-size: 7.4pt; max-height: 20mm; overflow: hidden; border: .3mm solid var(--line); background: var(--soft); border-radius: 1mm; padding: 1mm 2mm; }
 .p1 .notes { max-height: 18mm; } .p2 .notes { max-height: 14mm; }
 .tnote { font-size: 6.5pt; color: var(--muted); margin: .5mm 0 0; white-space: normal; }
@@ -595,7 +706,7 @@ td.lbl { max-width: 30mm; overflow: hidden; text-overflow: ellipsis; }
   <div>
     <div class="kicker">Batch sheet · the lot{{if .Simulated}}<span class="sim">SIMULATED DATA</span>{{end}}</div>
     <h1>{{.V.Name}}</h1>
-    <div class="what">{{len .V.Antennas}} antennas · {{.V.Label}} · {{.Band}}</div>
+    <div class="what">{{.V.Summary.N}} antennas{{if .V.Summary.Adjusted}} ({{.V.Summary.Captures}} captures, {{.V.Summary.Adjusted}} adjusted){{end}} · {{.V.Label}} · {{.Band}}</div>
     <dl class="meta">
       <dt>Measured</dt><dd>{{.Dates}}</dd>
       <dt>Device</dt><dd>{{if .Device}}{{.Device}}{{else}}–{{end}}</dd>
@@ -615,7 +726,7 @@ td.lbl { max-width: 30mm; overflow: hidden; text-overflow: ellipsis; }
 
 <div>{{.LotSWR}}</div>
 <div class="prow"><div class="stack"><div>{{.LotRL}}</div><div>{{.LotZ}}</div></div><div>{{.LotSmith}}</div></div>
-<div class="lotlegend"><span class="lg avg">{{.AvgSwatch}}lot average (bold)</span>{{range .LotLegend}}<span class="lg{{if .Outlier}} outl{{end}}" data-ant="{{.ID}}">{{.Swatch}}{{.Label}}{{if .Outlier}} ◆{{end}}</span>{{end}}<span class="lg note">{{with .V.Bands}}shaded: {{index . 0 | bandName}} MHz band · {{end}}◆ = statistical outlier (orange, dashed)</span></div>
+<div class="lotlegend"><span class="lg avg">{{.AvgSwatch}}lot average (bold)</span>{{range .LotLegend}}<span class="lg{{if .Outlier}} outl{{end}}" data-ant="{{.ID}}">{{.Swatch}}{{.Label}}{{if .Outlier}} ◆{{end}}</span>{{end}}{{if .V.Summary.Adjusted}}<span class="lg old">{{.OldSwatch}}as received (light): before adjustment</span>{{end}}<span class="lg note">{{with .V.Bands}}shaded: {{index . 0 | bandName}} MHz band · {{end}}◆ = statistical outlier (orange, dashed)</span></div>
 
 <div class="cols">
   <div><h3>Details</h3><table class="kv"><tbody>{{range .Details}}<tr><td>{{.K}}</td><td>{{.V}}</td></tr>{{end}}</tbody></table></div>
@@ -636,7 +747,7 @@ td.lbl { max-width: 30mm; overflow: hidden; text-overflow: ellipsis; }
     <h1>{{.V.Name}}</h1>
     <dl class="meta">
       <dt>Profile</dt><dd>{{.V.Label}} · {{.Band}}</dd>
-      <dt>Antennas</dt><dd><b>{{len .V.Antennas}}</b> · {{.Dates}}</dd>
+      <dt>Antennas</dt><dd><b>{{.V.Summary.N}}</b>{{if .V.Summary.Adjusted}} ({{.V.Summary.Captures}} captures, {{.V.Summary.Adjusted}} adjusted){{end}} · {{.Dates}}</dd>
       <dt>Target</dt><dd>{{.Target}} MHz · TUNE aim ± {{.Aim}} MHz</dd>
       <dt>Sheet</dt><dd>{{.ID}}</dd>
       <dt>Acceptance</dt><dd style="grid-column: span 3" class="criteria">{{.V.Summary.Window.Text}}</dd>
@@ -645,8 +756,8 @@ td.lbl { max-width: 30mm; overflow: hidden; text-overflow: ellipsis; }
 </header>
 
 <div class="sumrow">
-  <div class="tally {{if eq .V.Summary.OK (len .V.Antennas)}}good{{else if .V.Summary.Bad}}bad{{else}}ok{{end}}">
-    <b>{{.V.Summary.OK}} / {{len .V.Antennas}}</b><span>cover the band at SWR &lt; {{.Limit}}</span>
+  <div class="tally {{if eq .V.Summary.OK .V.Summary.N}}good{{else if .V.Summary.Bad}}bad{{else}}ok{{end}}">
+    <b>{{.V.Summary.OK}} / {{.V.Summary.N}}</b><span>cover the band at SWR &lt; {{.Limit}}</span>
     <span>{{.V.Summary.Tuned}} on the ± {{.Aim}} MHz TUNE aim</span>
     <span class="yield">PASS {{index .V.Summary.Yield "good"}} · OK {{index .V.Summary.Yield "ok"}} · FAIL {{index .V.Summary.Yield "bad"}}</span>
   </div>
@@ -658,22 +769,30 @@ td.lbl { max-width: 30mm; overflow: hidden; text-overflow: ellipsis; }
 <div class="tables">
 <h3>Antennas</h3>
 {{if .Halves}}<div class="halves">{{range .Halves}}<table class="ants"><thead><tr><th>#</th><th>Label</th><th>Status</th><th class="num">Res.</th><th class="num">Offset</th><th class="num">SWR@tgt</th><th class="num">Worst</th><th>Band</th></tr></thead><tbody>
-{{range .}}<tr{{if .Outlier}} class="outl"{{end}}><td>{{.ID}}</td><td class="lbl">{{.Label}}{{if not .CalOK}} <span class="calbad">†</span>{{end}}</td><td class="st {{.SClass}}">{{.Status}}</td><td class="num{{if .OutRes}} out{{end}}">{{.Res}}</td><td class="num{{if .OutRes}} out{{end}}">{{.Off}}</td><td class="num{{if .OutSWR}} out{{end}}">{{.SWRT}}</td><td class="num{{if .OutWorst}} out{{end}}">{{.Worst}}</td><td class="v {{.VClass}}">{{.Verdict}}</td></tr>
-{{end}}</tbody></table>{{end}}</div>
-<p class="tnote">Compact table ({{len .Rows}} antennas): bandwidth, return loss and band coverage are in the CSV export · Band = PASS (worst in-band SWR &lt; {{.Good}}) / OK (&lt; {{.Limit}}) / FAIL · † = not calibrated for this range · ◆ = statistical outlier for that figure (|x − median| &gt; 3.5 × 1.4826 × MAD), not the same as off target.</p>
+{{range .}}<tr class="{{if .Outlier}}outl{{end}}{{if .Old}} old{{end}}{{if and $.CompactDeltas .DeltaShort}} vgrp{{end}}" data-id="{{.ID}}"><td class="no">{{.No}}</td><td class="lbl">{{.Label}}{{if not .CalOK}} <span class="calbad">†</span>{{end}}</td><td class="st {{.SClass}}">{{.Status}}</td><td class="num{{if .OutRes}} out{{end}}">{{.Res}}</td><td class="num{{if .OutRes}} out{{end}}">{{.Off}}</td><td class="num{{if .OutSWR}} out{{end}}">{{.SWRT}}</td><td class="num{{if .OutWorst}} out{{end}}">{{.Worst}}</td><td class="v {{.VClass}}">{{.Verdict}}</td></tr>
+{{if and $.CompactDeltas .DeltaShort}}<tr class="delta"><td></td><td colspan="7">↳ {{.DeltaShort}}</td></tr>{{end}}{{end}}</tbody></table>{{end}}</div>
+<p class="tnote">Compact table ({{.V.Summary.N}} antennas{{if .V.Summary.Adjusted}}, {{len .Rows}} captures{{end}}): {{if .V.Summary.Adjusted}}2a, 2b = versions of antenna 2 (struck out: superseded) · {{end}}bandwidth, return loss and band coverage are in the CSV export · Band = PASS (worst in-band SWR &lt; {{.Good}}) / OK (&lt; {{.Limit}}) / FAIL · † = not calibrated for this range · ◆ = statistical outlier for that figure (|x − median| &gt; 3.5 × 1.4826 × MAD), not the same as off target.</p>
 {{else}}<table class="ants"><thead><tr><th>#</th><th>Label</th><th>Status</th><th class="num">Resonance</th><th class="num">Offset</th><th class="num">%</th><th class="num">SWR@tgt</th><th class="num">Worst</th><th class="num">BW&lt;2</th><th class="num">RL</th><th>Band</th><th>Calibration</th></tr></thead><tbody>
-{{range .Rows}}<tr{{if .Outlier}} class="outl"{{end}}><td>{{.ID}}</td><td class="lbl">{{.Label}}</td><td class="st {{.SClass}}">{{.Status}}</td><td class="num{{if .OutRes}} out{{end}}">{{.Res}}</td><td class="num{{if .OutRes}} out{{end}}">{{.Off}}</td><td class="num">{{.OffPct}}</td><td class="num{{if .OutSWR}} out{{end}}">{{.SWRT}}</td><td class="num{{if .OutWorst}} out{{end}}">{{.Worst}}</td><td class="num{{if .OutBW}} out{{end}}">{{.BW}}</td><td class="num{{if .OutRL}} out{{end}}">{{.RL}}</td><td class="v {{.VClass}}">{{.Verdict}} · {{.Cover}}</td><td class="{{if not .CalOK}}calbad{{end}}">{{.Cal}}</td></tr>
-{{end}}</tbody></table>
-<p class="tnote">MHz · resonance = return-loss peak nearest the target (as TUNE) · BW&lt;2 = SWR &lt; 2 bandwidth of that dip, MHz · RL = return loss at the target, dB · Band = PASS (worst in-band SWR &lt; {{.Good}}) / OK (&lt; {{.Limit}}) / FAIL, and the share of the band with SWR &lt; {{.Limit}} · ◆ = statistical outlier for that figure (|x − median| &gt; 3.5 × 1.4826 × MAD, from 3 antennas on), not the same as off target.</p>{{end}}
+{{range .Rows}}<tr class="{{if .Outlier}}outl{{end}}{{if .Old}} old{{end}}{{if .Delta}} vgrp{{end}}" data-id="{{.ID}}"><td class="no">{{.No}}</td><td class="lbl">{{.Label}}</td><td class="st {{.SClass}}">{{.Status}}</td><td class="num{{if .OutRes}} out{{end}}">{{.Res}}</td><td class="num{{if .OutRes}} out{{end}}">{{.Off}}</td><td class="num">{{.OffPct}}</td><td class="num{{if .OutSWR}} out{{end}}">{{.SWRT}}</td><td class="num{{if .OutWorst}} out{{end}}">{{.Worst}}</td><td class="num{{if .OutBW}} out{{end}}">{{.BW}}</td><td class="num{{if .OutRL}} out{{end}}">{{.RL}}</td><td class="v {{.VClass}}">{{.Verdict}} · {{.Cover}}</td><td class="{{if not .CalOK}}calbad{{end}}">{{.Cal}}</td></tr>
+{{if .Delta}}<tr class="delta"><td></td><td colspan="11">↳ {{.Delta}}</td></tr>{{end}}{{end}}</tbody></table>
+<p class="tnote">{{if .V.Summary.Adjusted}}# = lot position and version (2a as received, 2b adjusted; struck out = superseded: not in the lot figures) · {{end}}MHz · resonance = return-loss peak nearest the target (as TUNE) · BW&lt;2 = SWR &lt; 2 bandwidth of that dip, MHz · RL = return loss at the target, dB · Band = PASS (worst in-band SWR &lt; {{.Good}}) / OK (&lt; {{.Limit}}) / FAIL, and the share of the band with SWR &lt; {{.Limit}} · ◆ = statistical outlier for that figure (|x − median| &gt; 3.5 × 1.4826 × MAD, from 3 antennas on), not the same as off target.</p>{{end}}
 </div>
 
+{{if .Steps}}<div class="tables adjs">
+<h3>Adjustments{{with .V.Summary.Learnt}} <span class="muted learnt">· {{.Text}}{{if .MHzPerMm}}: the trim advice uses it{{end}}</span>{{end}}</h3>
+<table class="adj"><thead><tr><th>Antenna</th><th>Change</th><th class="num">Δ resonance</th><th class="num">Resonance</th><th class="num">SWR@tgt</th><th class="num">Margin used</th><th class="num">MHz/mm</th></tr></thead><tbody>
+{{range .Steps}}<tr><td><b>{{.Antenna}}</b> <span class="muted">{{.FromNo}} → {{.No}}</span></td><td class="lbl">{{.Change}}</td>{{if .Found}}<td class="num">{{sgn2 .DRes}} MHz</td><td class="num">{{mhz .ResFrom}} → {{mhz .ResTo}}</td>{{else}}<td class="num">–</td><td class="num">–</td>{{end}}<td class="num">{{swr .SWRFrom}} → {{swr .SWRTo}}</td><td class="num">{{pct .MarginFrom}} → {{pct .MarginTo}}</td><td class="num">{{if .MHzPerMm}}{{printf "%.2f" .MHzPerMm}}{{else}}–{{end}}</td></tr>
+{{end}}</tbody></table>
+{{if .MoreSteps}}<p class="tnote">… and {{.MoreSteps}} more adjustments (CSV export).</p>{{end}}
+</div>{{end}}
+
 <div class="tables">
-<h3>Lot statistics</h3>
+<h3>Lot statistics{{if .V.Summary.Adjusted}} <span class="muted">· current version of each antenna</span>{{end}}</h3>
 {{template "bstats" .V}}
 </div>
 
 {{with .V.Setup}}<p class="tnote setupline"><b>Setup check</b> {{.Time.Format "2006-01-02 15:04"}}: {{.Line}}</p>{{end}}
-{{if .V.Notes}}<div><h3>Notes</h3><div class="notes">{{.V.Notes}}</div></div>{{end}}
+{{if and .V.Notes (not .Steps)}}<div><h3>Notes</h3><div class="notes">{{.V.Notes}}</div></div>{{end}}
 
 <footer class="sfoot"><span>{{.App}} · by PiX (and the Claude, OpenAI and Deepseek AI band)</span><span>page 2 of 2 · {{.URL}}</span></footer>
 </div></div>
@@ -693,6 +812,8 @@ var batchFuncs = template.FuncMap{
 	},
 	"mhzRange": mhzRange,
 	"bandName": func(b rf.Band) string { return b.Name },
+	"sgn2":     func(hz float64) string { return signed2(hz / 1e6) },
+	"pct":      pctText,
 }
 
 var batchSheetTmpl = template.Must(template.Must(template.New("batch").Funcs(reportFuncs).Funcs(batchFuncs).Funcs(template.FuncMap{

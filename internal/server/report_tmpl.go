@@ -172,7 +172,7 @@ table.dips td:nth-child(-n+8) { white-space: nowrap; }
   </tbody></table>
 </section>{{end}}
 
-{{with .Batch}}<section class="card"><h2>Batch: {{.Name}} <small>· {{.Label}} · {{len .Antennas}} antennas · target {{mhz .Target}} MHz</small></h2>
+{{with .Batch}}<section class="card"><h2>Batch: {{.Name}} <small>· {{.Label}} · {{.Summary.N}} antennas{{if .Summary.Adjusted}} ({{.Summary.Captures}} captures, {{.Summary.Adjusted}} adjusted){{end}} · target {{mhz .Target}} MHz</small></h2>
   <p class="vrange criteria" style="margin:0 0 1mm">{{.Summary.Criteria}}</p>
   <div class="notes" style="margin-top:0"><b>Lot</b>{{range $i, $c := .Summary.Conclusion}}{{if eq $i 0}}<b class="headline">{{$c}}</b>{{else}}{{$c}}{{end}}
 {{end}}{{.Summary.TuningLine}}.</div>

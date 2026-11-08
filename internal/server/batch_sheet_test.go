@@ -175,3 +175,87 @@ func TestSpreadStripLayout(t *testing.T) {
 		t.Fatal("n=4: no CI")
 	}
 }
+
+// adjustedLot is lotBatch(n) with antennas 2, 4 and 5 trimmed once more
+// (adjusted versions, captured after the others).
+func adjustedLot(n int) *Batch {
+	b := lotBatch(n, 1.5e6)
+	for _, k := range []int{2, 4, 5} {
+		p := b.Antennas[k-1]
+		f := 866e6 + 1.5e6*float64(((k-1)*7)%5-2)/2 + 3.5e6
+		addAnt(b, f, 47, 13)
+		a := &b.Antennas[len(b.Antennas)-1]
+		a.AdjustedFrom, a.TrimMm, a.Change, a.Label = p.ID, 0.35, "", versionLabel(p.Label, 1)
+	}
+	return b
+}
+
+// The batch sheet with adjusted versions: page 1 draws each antenna once
+// (current version) plus its earlier version light and dashed; page 2
+// lists the versions grouped, the delta lines and the adjustments.
+func TestBatchSheetAdjusted(t *testing.T) {
+	s := sheetServer(t)
+	for _, n := range []int{8, 20} {
+		b := adjustedLot(n)
+		html, err := s.buildBatchSheet("test", b)
+		if err != nil {
+			t.Fatal(err)
+		}
+		h := string(html)
+		p1, p2, br := strings.Index(h, `class="paper page p1"`), strings.Index(h, `class="paper page p2"`), strings.Index(h, `class="pgbreak"`)
+		page1, page2 := h[p1:br], h[p2:]
+		for _, cls := range []string{"lotswr", "lotrl"} {
+			m := regexp.MustCompile(`<svg class="plot [^"]*` + cls + `"[^>]*>(?s:.*?)</svg>`).FindString(page1)
+			if a, o := strings.Count(m, `data-ant="`), strings.Count(m, `data-old="`); a != n || o != 3 {
+				t.Fatalf("n=%d %s: %d antennas, %d earlier versions", n, cls, a, o)
+			}
+		}
+		if !strings.Contains(page1, "as received (light)") || !strings.Contains(page1, fmt.Sprintf("%d antennas (%d captures, 3 adjusted)", n, n+3)) {
+			t.Fatalf("n=%d: page 1 legend / count", n)
+		}
+		if c := strings.Count(page1, `<span class="lg" data-ant=`) + strings.Count(page1, `<span class="lg outl" data-ant=`); c != n {
+			t.Fatalf("n=%d: %d legend items", n, c)
+		}
+		// Page 2: grouped versions, struck-out originals, delta lines, the
+		// adjustments block and the learnt MHz/mm.
+		if !strings.Contains(page2, `<td class="no">2a</td>`) || !strings.Contains(page2, `<td class="no">2b</td>`) || strings.Count(page2, `class=" old`)+strings.Count(page2, `class="outl old`) != 3 {
+			t.Fatalf("n=%d: versions in the table", n)
+		}
+		// Compact tables: with 8 antennas a short delta line under each
+		// adjusted version; with 20 the adjustments block has them.
+		deltas := 3
+		if n > 10 { // 23 captures and 3 delta lines: too many for the compact halves
+			deltas = 0
+		}
+		if strings.Count(page2, `<tr class="delta">`) != deltas || !strings.Contains(page2, "<h3>Adjustments") || !strings.Contains(page2, "learnt ") || strings.Count(page2, "0.35 mm shorter") != 3+deltas {
+			t.Fatalf("n=%d: delta lines / adjustments", n)
+		}
+		if i, j := strings.Index(page2, `<td class="no">2a</td>`), strings.Index(page2, `<td class="no">2b</td>`); j < i || strings.Contains(page2[i:j], `<td class="no">3`) {
+			t.Fatalf("n=%d: versions not grouped", n)
+		}
+		if !strings.Contains(page2, fmt.Sprintf("<b>%d</b> (%d captures, 3 adjusted)", n, n+3)) || !strings.Contains(page2, "As received → after adjustment (#2, #4, #5: 3 of") {
+			t.Fatalf("n=%d: counts / conclusion", n)
+		}
+		if !strings.Contains(page2, `class="halves"`) { // 11 captures and 3 delta lines: more than 10 lines
+			t.Fatalf("n=%d: compact", n)
+		}
+	}
+	// A small lot keeps the full table, delta lines in full.
+	b := lotBatch(3, 1.5e6)
+	addAnt(b, 868e6, 47, 13)
+	b.Antennas[3].AdjustedFrom, b.Antennas[3].TrimMm, b.Antennas[3].Change = 2, 0.3, "cut 0.3 mm"
+	html, _ := s.buildBatchSheet("test", b)
+	if h := string(html); strings.Contains(h, `class="halves"`) || !strings.Contains(h, "↳ #2: cut 0.3 mm → resonance &#43;") || !strings.Contains(h, "<h3>Adjustments") {
+		t.Fatal("small lot: full table with the delta line")
+	}
+	// Many adjustments: the block lists the first ones.
+	b = adjustedLot(20)
+	for k := 6; k <= 12; k++ {
+		addAnt(b, 868e6, 47, 13)
+		b.Antennas[len(b.Antennas)-1].AdjustedFrom = k
+	}
+	html, _ = s.buildBatchSheet("test", b)
+	if h := string(html); !strings.Contains(h, "… and 7 more adjustments (CSV export)") {
+		t.Fatal("many adjustments")
+	}
+}

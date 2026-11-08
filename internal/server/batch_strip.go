@@ -18,7 +18,7 @@ import (
 //	(b) the acceptance window (Auto: from the antennas' own SWR margin,
 //	    asymmetric; else ± the tolerance) as a filled bar, TUNE's fine aim
 //	    as a dark tick inside it, and the target line;
-//	(c) one marker per antenna with its label, colour and shape by status,
+//	(c) one marker per antenna (its current version) with its label, colour and shape by status,
 //	    stacked in rows so neither markers nor labels overlap; statistical
 //	    outliers are ringed;
 //	(d) the lot summary: the mean (n < 3), the mean with its 95 %
@@ -115,6 +115,20 @@ func shortLabel(s string, n int) string {
 	return string(r[:n-1]) + "…"
 }
 
+// stripLabel is an antenna's label on the strip: an adjusted antenna's
+// current version is its first label with a prime per version (#2′), which
+// keeps the lanes short.
+func stripLabel(a BatchAntennaView) string {
+	if a.Ver == 0 || a.Step == nil {
+		return a.Label
+	}
+	primes := []string{"′", "″", "‴"}
+	if a.Ver <= len(primes) {
+		return a.Step.Antenna + primes[a.Ver-1]
+	}
+	return fmt.Sprintf("%s v%d", a.Step.Antenna, a.Ver+1)
+}
+
 // stripMarker draws an antenna marker (radius about 6 units = 3 mm wide).
 func stripMarker(sb *strings.Builder, status string, x, y float64) {
 	switch status {
@@ -199,7 +213,7 @@ func spreadLayout(v BatchView, wmm float64) (string, []textBox, float64, float64
 	}
 	core := math.Max(hi-lo, 1e6)
 	for _, a := range v.Antennas {
-		if f := a.Metrics.ResFreq; a.Metrics.Found && f > lo-3*core && f < hi+3*core {
+		if f := a.Metrics.ResFreq; a.Current && a.Metrics.Found && f > lo-3*core && f < hi+3*core {
 			lo, hi = math.Min(lo, f), math.Max(hi, f)
 		}
 	}
@@ -295,10 +309,10 @@ func spreadLayout(v BatchView, wmm float64) (string, []textBox, float64, float64
 	}
 	var marks []mark
 	for _, a := range v.Antennas {
-		if !a.Metrics.Found {
+		if !a.Metrics.Found || !a.Current { // one mark per antenna: its current version
 			continue
 		}
-		m := mark{a: a, label: shortLabel(a.Label, 12)}
+		m := mark{a: a, label: shortLabel(stripLabel(a), 12)}
 		f := a.Metrics.ResFreq
 		switch {
 		case f < lo:

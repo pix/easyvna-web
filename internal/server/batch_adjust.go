@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/pix/easyvna-web/internal/rf"
@@ -111,11 +112,15 @@ func (b *Batch) nextOf(id int) int {
 // nextLabel is the default label of a new antenna: its position in the
 // lot (#3), skipping labels already used.
 func (b *Batch) nextLabel() string {
+	return b.labelFrom(b.physical() + 1)
+}
+
+// labelFrom is "#k", or the next free "#n" after it.
+func (b *Batch) labelFrom(k int) string {
 	used := map[string]bool{}
 	for _, a := range b.Antennas {
 		used[a.Label] = true
 	}
-	k := b.physical() + 1
 	for used[fmt.Sprintf("#%d", k)] {
 		k++
 	}
@@ -248,7 +253,11 @@ func (b *Batch) unlinkVersion(id int) (string, error) {
 		}
 	}
 	a.AdjustedFrom, a.Change, a.TrimMm = 0, "", 0
-	return a.Label + " is now an antenna of its own", nil
+	old := a.Label
+	if strings.Contains(a.Label, " adj ") && defaultLabelRe.MatchString(a.Label) {
+		b.Antennas[i].Label = b.labelFrom(b.physical()) // a default version label: its own number now
+	}
+	return fmt.Sprintf("%s is now an antenna of its own (%s)", old, b.Antennas[i].Label), nil
 }
 
 // removeCapture deletes capture id; its later version follows the one
@@ -406,12 +415,15 @@ func lotBriefOf(s BatchSummary) LotBrief {
 		NRes: s.NRes, MarginMax: s.MarginMax, Grade: s.Grade}
 }
 
-// trimText says a trim in words: "1.0 mm shorter".
+// mmText is a length as entered: "1", "0.35".
+func mmText(mm float64) string { return strconv.FormatFloat(math.Round(mm*100)/100, 'f', -1, 64) }
+
+// trimText says a trim in words: "1 mm shorter", "0.5 mm longer".
 func trimText(mm float64) string {
 	if mm < 0 {
-		return fmt.Sprintf("%.1f mm longer", -mm)
+		return mmText(-mm) + " mm longer"
 	}
-	return fmt.Sprintf("%.1f mm shorter", mm)
+	return mmText(mm) + " mm shorter"
 }
 
 // changeText is what was done: the change as entered, with the trim when
@@ -465,30 +477,27 @@ func adjustStep(b *Batch, ms []AntennaMetrics, root, j, k int, no, fromNo string
 	return st
 }
 
-// compareLine is the before / after sentence of the conclusion.
+// compareLine is the before / after sentence of the conclusion: "As
+// received → after adjustment (#2: 1 of 2 antennas): 2 → 2 of 2 cover the
+// band at SWR < 2.0, 1 → 2 on the TUNE aim, worst SWR 1.24 → 1.10, mean
+// offset −3.10 → −0.20 MHz."
 func compareLine(before, after LotBrief, adjusted []string, acc rf.Acceptance, auto bool) string {
 	aim := "on the TUNE aim"
 	if !auto {
 		aim = "within the tolerance"
 	}
-	part := func(l LotBrief, first bool) string {
-		s := fmt.Sprintf("%d of %d cover the band", l.Covered, l.N)
-		if first {
-			s += fmt.Sprintf(" at SWR < %.1f", acc.Limit())
-		}
-		s += fmt.Sprintf(", %d %s", l.Tuned, aim)
-		if l.WorstSWR > 0 {
-			s += ", worst SWR " + swrF(l.WorstSWR)
-		}
-		if l.NRes > 0 {
-			s += fmt.Sprintf(", mean offset %s MHz", signed2(l.BiasHz/1e6))
-		}
-		return s
+	parts := []string{fmt.Sprintf("%d → %d of %d cover the band at SWR < %.1f", before.Covered, after.Covered, after.N, acc.Limit()),
+		fmt.Sprintf("%d → %d %s", before.Tuned, after.Tuned, aim)}
+	if before.WorstSWR > 0 && after.WorstSWR > 0 {
+		parts = append(parts, fmt.Sprintf("worst SWR %s → %s", swrF(before.WorstSWR), swrF(after.WorstSWR)))
 	}
-	line := fmt.Sprintf("Adjusted: %s (%d of %d antenna%s). As received: %s; after adjustment: %s.", strings.Join(adjusted, ", "), len(adjusted), after.N,
-		plural(after.N), part(before, true), part(after, false))
+	if before.NRes > 0 && after.NRes > 0 {
+		parts = append(parts, fmt.Sprintf("mean offset %s → %s MHz", signed2(before.BiasHz/1e6), signed2(after.BiasHz/1e6)))
+	}
+	line := fmt.Sprintf("As received → after adjustment (%s: %d of %d antenna%s): %s", strings.Join(adjusted, ", "), len(adjusted), after.N, plural(after.N),
+		strings.Join(parts, ", "))
 	if before.Grade != after.Grade && before.Grade != "" && after.Grade != "" {
-		line += fmt.Sprintf(" Lot grade %s → %s.", strings.ToLower(gradeLabel[before.Grade][0]), strings.ToLower(gradeLabel[after.Grade][0]))
+		line += fmt.Sprintf("; lot grade %s → %s", strings.ToLower(gradeLabel[before.Grade][0]), strings.ToLower(gradeLabel[after.Grade][0]))
 	}
-	return line
+	return line + "."
 }

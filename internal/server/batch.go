@@ -660,14 +660,7 @@ func batchView(b *Batch, slope *trimSlope, acc rf.Acceptance) BatchView {
 		before, after := lotBriefOf(batchSummary(first, fms, sl2, acc)), lotBriefOf(*sm)
 		sm.AsReceived, sm.Current = &before, &after
 		sm.AdjustLine = compareLine(before, after, adjusted, acc, sm.Window.Mode == rf.TolAuto)
-		extra := []string{sm.AdjustLine}
-		if learnt != nil {
-			if learnt.MHzPerMm > 0 {
-				extra = append(extra, capFirst(learnt.Text)+": the trim advice uses it.")
-			} else {
-				extra = append(extra, capFirst(learnt.Text)+".")
-			}
-		}
+		extra := []string{sm.AdjustLine} // what was learnt is in Learnt and Slope
 		// After the headline and the sample-size line, before the details.
 		at := 1
 		if len(sm.Conclusion) > 1 && strings.HasPrefix(sm.Conclusion[1], "Indicative (n") || len(sm.Conclusion) > 1 && strings.HasPrefix(sm.Conclusion[1], "One antenna so far") {

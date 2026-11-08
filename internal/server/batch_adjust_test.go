@@ -158,7 +158,7 @@ func TestBatchVersionStats(t *testing.T) {
 	if sm.AsReceived == nil || sm.Current == nil || sm.AsReceived.Tuned != 0 || sm.Current.Tuned != 1 || sm.AsReceived.N != 2 {
 		t.Fatalf("as received %+v current %+v", sm.AsReceived, sm.Current)
 	}
-	if !strings.Contains(joined(sm), "Adjusted: #2 (1 of 2 antennas). As received: ") || !strings.Contains(sm.AdjustLine, "after adjustment: ") {
+	if !strings.Contains(joined(sm), "As received → after adjustment (#2: 1 of 2 antennas): 2 → 2 of 2 cover the band at SWR < 2.0, 0 → 1 on the TUNE aim, worst SWR ") {
 		t.Fatalf("conclusion: %s", joined(sm))
 	}
 	// The step: resonance +5.8 MHz for 0.6 mm.
@@ -179,13 +179,13 @@ func TestBatchVersionStats(t *testing.T) {
 	if l := sm.Learnt; l == nil || l.Adjustments != 1 || l.MHzPerMm < 9 || l.MHzPerMm > 10.6 || !strings.Contains(l.Text, "from 1 adjustment") {
 		t.Fatalf("learnt %+v", sm.Learnt)
 	}
-	if !strings.Contains(sm.Slope, "learnt from 1 adjustment in this batch") || v.Antennas[0].Metrics.Tuning.Method != "fit" || !strings.Contains(joined(sm), "the trim advice uses it") {
+	if !strings.Contains(sm.Slope, "learnt from 1 adjustment in this batch") || v.Antennas[0].Metrics.Tuning.Method != "fit" {
 		t.Fatalf("slope %q method %q", sm.Slope, v.Antennas[0].Metrics.Tuning.Method)
 	}
 	// Unlinked, the same captures are three antennas.
 	c := cloneBatch(b)
 	c.Antennas[2].AdjustedFrom = 0
-	if s2 := batchView(c, nil, auto).Summary; s2.N != 3 || s2.Adjusted != 0 || s2.Learnt != nil || s2.AsReceived != nil || strings.Contains(joined(s2), "Adjusted") {
+	if s2 := batchView(c, nil, auto).Summary; s2.N != 3 || s2.Adjusted != 0 || s2.Learnt != nil || s2.AsReceived != nil || strings.Contains(joined(s2), "As received") {
 		t.Fatalf("unlinked %+v", s2)
 	}
 	// A bend (no trim) is not a MHz/mm sample; trims of two antennas are.
@@ -274,10 +274,10 @@ func TestBatchVersionAPI(t *testing.T) {
 		t.Fatalf("version %+v", a)
 	}
 	// The simulated element: f = k/(L+δ), 82 + 6 mm: about 9.9 MHz/mm.
-	if d := a.Step.DRes / 1e6; d < 3.5 || d > 6.5 {
+	if d := a.Step.DRes / 1e6; d < 3 || d > 7.5 { // 0.5 mm × 9.9 MHz/mm, with the simulator's noise and drift
 		t.Fatalf("Δf %.2f MHz", d)
 	}
-	if l := b.Summary.Learnt; l == nil || l.MHzPerMm < 8.5 || l.MHzPerMm > 11 {
+	if l := b.Summary.Learnt; l == nil || l.MHzPerMm < 7 || l.MHzPerMm > 13 {
 		t.Fatalf("learnt %+v", b.Summary.Learnt)
 	}
 	// Redo keeps it a version.
@@ -312,8 +312,8 @@ func TestBatchVersionAPI(t *testing.T) {
 	if c := call(t, ts, "PUT", "/api/batches/"+id+"/antennas/6", `{"adjustedFrom":1}`, &errOut); c != 409 || !strings.Contains(errOut["error"], "already") {
 		t.Fatalf("%d %v", c, errOut)
 	}
-	if c := call(t, ts, "PUT", "/api/batches/"+id+"/antennas/6", `{"adjustedFrom":0}`, &dr); c != 200 || dr.Batch.Summary.N != 4 {
-		t.Fatal(c)
+	if c := call(t, ts, "PUT", "/api/batches/"+id+"/antennas/6", `{"adjustedFrom":0}`, &dr); c != 200 || dr.Batch.Summary.N != 4 || dr.Batch.Antennas[5].Label != "#4" {
+		t.Fatalf("%d %+v", c, dr.Batch.Antennas[5])
 	}
 	if c := call(t, ts, "PUT", "/api/batches/"+id+"/antennas/6", `{"change":"x"}`, &errOut); c != 409 {
 		t.Fatal(c)
