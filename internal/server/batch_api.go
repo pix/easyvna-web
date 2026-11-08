@@ -347,9 +347,18 @@ func (s *Server) hBatchCapture(w http.ResponseWriter, r *http.Request) {
 	}
 	s.mu.Lock()
 	var a *BatchAntenna
-	if res.Batch != nil && res.Batch.Captured > 0 && req.Replace == 0 && req.Adjust == 0 && s.batch.cur == b {
-		// Auto-capture took this very sweep.
-		a = &b.Antennas[b.index(res.Batch.Captured)]
+	if res.Batch != nil && res.Batch.Captured > 0 && req.Replace == 0 && s.batch.cur == b {
+		// Auto-capture took this very sweep (as a new antenna): an adjusted
+		// version is linked to its antenna instead.
+		if req.Adjust > 0 {
+			if _, err = b.linkVersion(res.Batch.Captured, req.Adjust, req.Change, req.TrimMm); err == nil {
+				err = s.store.SaveBatch(b)
+				s.batch.version++
+			}
+		}
+		if err == nil {
+			a = &b.Antennas[b.index(res.Batch.Captured)]
+		}
 	} else {
 		a, err = s.captureLocked(b, res, nil, capture{Replace: req.Replace, Label: req.Label, Adjust: req.Adjust, Change: req.Change, TrimMm: req.TrimMm})
 		if err == nil && s.batch.arr != nil && s.batch.cur == b {

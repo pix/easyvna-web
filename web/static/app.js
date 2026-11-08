@@ -2026,7 +2026,7 @@ function onBatchResult(r) {
   if (!bl) return;
   if (bl.captured && bl.captured !== S.batchLastAuto) {
     S.batchLastAuto = bl.captured;
-    toast(`#${bl.captured} captured automatically`);
+    toast(`Antenna ${bl.n} captured automatically`); // n: its position in the lot (the capture id is internal)
   }
   if (bview() && S.batch && S.batch.id === bl.id && bl.version !== S.batch.version && !S.batchLoading) {
     S.batchLoading = true;
