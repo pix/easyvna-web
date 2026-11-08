@@ -125,16 +125,7 @@ func PredictTrim(log []TrimPoint, target float64) (TrimPrediction, error) {
 		sxy += (p.LengthMm - mL) * (p.FreqHz - mF)
 	}
 	s0 := -last.FreqHz / last.LengthMm // Hz/mm
-	sigF := trimNoiseFrac * mF
-	precPrior := 1 / math.Pow(trimPriorSpread*s0, 2)
-	precData := sxx / (sigF * sigF)
-	slope := s0
-	conf := 0.0
-	if sxx > 0 {
-		sHat := sxy / sxx
-		slope = (sHat*precData + s0*precPrior) / (precData + precPrior)
-		conf = precData / (precData + precPrior)
-	}
+	slope, conf := posteriorSlope(sxx, sxy, trimNoiseFrac*mF, s0)
 	p := TrimPrediction{Method: "ratio", PriorMHzPerMm: -s0 / 1e6, Points: len(pts), Confidence: conf}
 	if slope >= 0 {
 		// Resonance rose with length: the log is inconsistent (probably a
@@ -163,4 +154,80 @@ func PredictTrim(log []TrimPoint, target float64) (TrimPrediction, error) {
 	p.EndEffectMm = -anchorF/slope - anchorL
 	p.FirstCutMm, p.Advice = CutAdvice(p.CutMm, p.Cautious)
 	return p, nil
+}
+
+// posteriorSlope is the Bayesian line fit of PredictTrim: the data's slope
+// sxy/sxx (centred sums), with measurement noise sigF (Hz), combined with
+// the prior slope s0 (Hz/mm, ±trimPriorSpread). s0 = 0 means no prior: the
+// data alone. conf is the data's share of the estimate.
+func posteriorSlope(sxx, sxy, sigF, s0 float64) (slope, conf float64) {
+	if sxx <= 0 {
+		return s0, 0
+	}
+	sHat := sxy / sxx
+	if s0 == 0 {
+		return sHat, 1
+	}
+	precPrior := 1 / math.Pow(trimPriorSpread*s0, 2)
+	precData := sxx / (sigF * sigF)
+	return (sHat*precData + s0*precPrior) / (precData + precPrior), precData / (precData + precPrior)
+}
+
+// SlopeFit is a resonance-versus-length sensitivity learnt by LearnSlope.
+type SlopeFit struct {
+	MHzPerMm   float64 `json:"mhzPerMm"`   // > 0 when learnt (shortening raises the resonance)
+	Confidence float64 `json:"confidence"` // the data's share of the estimate (see PredictTrim)
+	Steps      int     `json:"steps"`      // length changes in the data
+	// Inconsistent is set when the data say the resonance fell when the
+	// element got shorter: nothing is learnt then.
+	Inconsistent bool `json:"inconsistent,omitempty"`
+}
+
+// LearnSlope learns MHz/mm from several logs of elements of the same kind,
+// each log one element (its lengths and resonances): the slope is shared,
+// the lengths are not, so each log is centred on its own means and only
+// the length changes within a log count. It is PredictTrim's fit (same
+// noise model and prior) over the pooled logs. priorHzPerMm is the
+// textbook f/L (> 0), or 0 to use the data alone. Logs with fewer than two
+// usable points add nothing. MHzPerMm is 0 when nothing could be learnt.
+func LearnSlope(logs [][]TrimPoint, priorHzPerMm float64) SlopeFit {
+	var sxx, sxy, sumF float64
+	var nF, steps int
+	for _, lg := range logs {
+		var pts []TrimPoint
+		for _, p := range lg {
+			if p.LengthMm > 0 && p.FreqHz > 0 {
+				pts = append(pts, p)
+			}
+		}
+		if len(pts) < 2 {
+			continue
+		}
+		n := float64(len(pts))
+		var mL, mF float64
+		for _, p := range pts {
+			mL += p.LengthMm / n
+			mF += p.FreqHz / n
+		}
+		for i, p := range pts {
+			sxx += (p.LengthMm - mL) * (p.LengthMm - mL)
+			sxy += (p.LengthMm - mL) * (p.FreqHz - mF)
+			sumF += p.FreqHz
+			nF++
+			if i > 0 && p.LengthMm != pts[i-1].LengthMm {
+				steps++
+			}
+		}
+	}
+	fit := SlopeFit{Steps: steps}
+	if sxx <= 0 || nF == 0 {
+		return fit
+	}
+	slope, conf := posteriorSlope(sxx, sxy, trimNoiseFrac*sumF/float64(nF), -math.Abs(priorHzPerMm))
+	if slope >= 0 {
+		fit.Inconsistent = true
+		return fit
+	}
+	fit.MHzPerMm, fit.Confidence = -slope/1e6, conf
+	return fit
 }

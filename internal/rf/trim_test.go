@@ -1,6 +1,7 @@
 package rf
 
 import (
+	"math"
 	"strings"
 	"testing"
 )
@@ -49,5 +50,37 @@ func TestCautiousUntilLearnt(t *testing.T) {
 	}
 	if f, adv := CutAdvice(0.1, true); f != 0 || !strings.Contains(adv, "On target") {
 		t.Errorf("on target: %g %q", f, adv)
+	}
+}
+
+// LearnSlope pools logs of several elements: only the length changes within
+// a log count (different elements may have different lengths), and with
+// one log it agrees with PredictTrim.
+func TestLearnSlope(t *testing.T) {
+	log := []TrimPoint{{82, 856e6}, {80, 861e6}}
+	p, _ := PredictTrim(log, 869e6)
+	f := LearnSlope([][]TrimPoint{log}, 861e6/80) // PredictTrim: f/L of the last point
+	if math.Abs(f.MHzPerMm-p.MHzPerMm) > 1e-9 || math.Abs(f.Confidence-p.Confidence) > 1e-9 || f.Steps != 1 {
+		t.Fatalf("one log: %+v vs %+v", f, p)
+	}
+	// Two elements 3 MHz apart, each trimmed 1 mm (+10 MHz): 10 MHz/mm
+	// from the data alone, whatever their absolute lengths.
+	f = LearnSlope([][]TrimPoint{{{100, 860e6}, {99, 870e6}}, {{1000, 863e6}, {999, 873e6}}, {{50, 868e6}}}, 0)
+	if math.Abs(f.MHzPerMm-10) > 1e-6 || f.Confidence != 1 || f.Steps != 2 {
+		t.Fatalf("pooled: %+v", f)
+	}
+	// With the textbook prior the estimate is pulled a little towards it.
+	g := LearnSlope([][]TrimPoint{{{100, 860e6}, {99, 870e6}}}, 12e6)
+	if !(g.MHzPerMm > 10 && g.MHzPerMm < 12 && g.Confidence > 0.5 && g.Confidence < 1) {
+		t.Fatalf("prior: %+v", g)
+	}
+	// Nothing to learn: single points, no length change; inconsistent data.
+	for _, logs := range [][][]TrimPoint{nil, {{{82, 860e6}}}, {{{82, 860e6}, {82, 861e6}}}} {
+		if f := LearnSlope(logs, 10e6); f.MHzPerMm != 0 {
+			t.Fatalf("%v: %+v", logs, f)
+		}
+	}
+	if f := LearnSlope([][]TrimPoint{{{100, 870e6}, {99, 860e6}}}, 0); f.MHzPerMm != 0 || !f.Inconsistent {
+		t.Fatalf("inconsistent: %+v", f)
 	}
 }
