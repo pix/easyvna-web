@@ -44,6 +44,14 @@ type Antenna struct {
 	// pigtail: "open", "short", "load", "thru" (load on port 1, port 2
 	// connected) or "isoln" (both ports terminated).
 	Std string
+	// CommonMode is the relative resonance shift when a hand holds the
+	// cable (Bench.SetHand): an antenna without a proper ground plane uses
+	// the coax shield as its counterpoise, so the cable is part of it.
+	// HandLoss is the extra loss the hand adds (R × (1 + HandLoss), Q ÷
+	// (1 + HandLoss)): the SWR looks better while less is radiated. Zero
+	// for a choked cable: the hand changes nothing.
+	CommonMode float64
+	HandLoss   float64
 }
 
 // Scenarios selectable with -mock-antenna.
@@ -94,6 +102,19 @@ var Scenarios = map[string]func() Antenna{
 			Modes:    []Mode{{F0: 867e6, R: 46, Q: 13}, {F0: 2.6e9, R: 90, Q: 10}},
 			CableLen: 0.10, CableVF: 0.695, CableLossDB: 0.08, S21Coupling: 0.035,
 			Bend: 0.009, BendPeriod: 6,
+		}
+	},
+	// An 869 whip without a ground plane on a bare coax: the cable shield
+	// is its counterpoise (common-mode current), so holding the cable
+	// detunes it and adds loss (exercises the setup check). On its own it
+	// resonates high with a poor match; a hand on the cable pulls it down
+	// to the band and its loss makes the SWR look better.
+	"cm869": func() Antenna {
+		return Antenna{
+			Name:     "869 whip, no ground plane (the cable radiates)",
+			Modes:    []Mode{{F0: 877e6, R: 30, Q: 13}, {F0: 2.6e9, R: 90, Q: 10}},
+			CableLen: 0.10, CableVF: 0.695, CableLossDB: 0.08, Drift: 0.0004, S21Coupling: 0.03,
+			CommonMode: -0.009, HandLoss: 0.6,
 		}
 	},
 	// A well-tuned 915 MHz antenna.

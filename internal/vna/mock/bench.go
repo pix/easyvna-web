@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sort"
 	"sync"
+	"time"
 )
 
 // Bench is the simulated test bench behind `-mock` (and the browser
@@ -17,6 +18,9 @@ type Bench struct {
 	cutTotal  float64
 	maxPoints int
 	profiles  bool
+	hand      bool    // a hand holds the cable (Antenna.CommonMode)
+	seat      float64 // relative resonance offset of the current seating (Reseat)
+	seats     int
 }
 
 // antennaHolder is a simulator whose antenna can be swapped (Sim, SimV2).
@@ -62,7 +66,7 @@ func (b *Bench) SetAntenna(name string) error {
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	b.name, b.base, b.cutTotal = name, mkNew(), 0
+	b.name, b.base, b.cutTotal, b.seat = name, mkNew(), 0, 0
 	if b.current != nil {
 		b.current.SetAntenna(b.base)
 	}
@@ -96,7 +100,8 @@ func (b *Bench) AttachStandard(std string) {
 	}
 }
 
-// antennaLocked is the current scenario with the cuts applied.
+// antennaLocked is the current scenario with the cuts, the hand on the
+// cable and the seating applied.
 func (b *Bench) antennaLocked() Antenna {
 	a := b.base
 	a.Modes = append([]Mode(nil), a.Modes...)
@@ -104,7 +109,74 @@ func (b *Bench) antennaLocked() Antenna {
 		k := a.Modes[0].F0 * (benchLen + benchDelta)
 		a.Modes[0].F0 = k / (benchLen - b.cutTotal + benchDelta)
 	}
+	if len(a.Modes) > 0 && b.seat != 0 {
+		a.Modes[0].F0 *= 1 + b.seat
+	}
+	if len(a.Modes) > 0 && b.hand {
+		m := &a.Modes[0]
+		m.F0 *= 1 + a.CommonMode
+		m.R *= 1 + a.HandLoss
+		m.Q /= 1 + a.HandLoss
+	}
 	return a
+}
+
+// SetHand puts a hand on the cable (or takes it off).
+func (b *Bench) SetHand(on bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.hand = on
+	if b.current != nil {
+		b.current.SetAntenna(b.antennaLocked())
+	}
+}
+
+// Hand reports whether a hand is on the cable.
+func (b *Bench) Hand() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.hand
+}
+
+// ReseatTime is how long the cable stays open during Reseat.
+var ReseatTime = 700 * time.Millisecond
+
+// Reseat unscrews the antenna (the cable is open for ReseatTime) and
+// screws it on again: the connector and placement shift the resonance by
+// a few hundredths of a percent, differently each time.
+func (b *Bench) Reseat() {
+	b.mu.Lock()
+	a := b.antennaLocked()
+	open := Antenna{Name: "open cable (no antenna)", Open: true, CableLen: a.CableLen, CableVF: a.CableVF, CableLossDB: a.CableLossDB}
+	if b.current != nil {
+		b.current.SetAntenna(open)
+	}
+	b.seats++
+	k := b.seats
+	b.mu.Unlock()
+	time.AfterFunc(ReseatTime, func() {
+		b.mu.Lock()
+		defer b.mu.Unlock()
+		b.seat = 0.0004 * lotRand(k, 7) // ± 0.04 %: ± 0.35 MHz at 869 MHz
+		if b.current != nil {
+			b.current.SetAntenna(b.antennaLocked())
+		}
+	})
+}
+
+// Action is the simulator's Options.MockAction: hand-on, hand-off, reseat.
+func (b *Bench) Action(action string) error {
+	switch action {
+	case "hand-on":
+		b.SetHand(true)
+	case "hand-off":
+		b.SetHand(false)
+	case "reseat":
+		b.Reseat()
+	default:
+		return fmt.Errorf("unknown mock action %q (hand-on, hand-off, reseat)", action)
+	}
+	return nil
 }
 
 // NewSim powers on a fresh simulator with the current antenna (as when the
@@ -112,7 +184,11 @@ func (b *Bench) antennaLocked() Antenna {
 func (b *Bench) NewSim() *Sim {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	sim := New(Options{Antenna: b.base, MaxPoints: b.maxPoints, Profiles: b.profiles})
+	a := b.base
+	if b.hand || b.seat != 0 {
+		a = b.antennaLocked()
+	}
+	sim := New(Options{Antenna: a, MaxPoints: b.maxPoints, Profiles: b.profiles})
 	b.current = sim
 	return sim
 }
