@@ -2,6 +2,7 @@ package mock
 
 import (
 	"bytes"
+	"math"
 	"strings"
 	"testing"
 )
@@ -45,5 +46,61 @@ func TestBenchCutAndSwap(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "ch> ") {
 		t.Fatalf("no prompt: %q", out.String())
+	}
+}
+
+func TestLotUnits(t *testing.T) {
+	b, err := NewBench("lot869", 0, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sim := b.NewSim()
+	first := sim.opt.Antenna
+	if first.Name != b.base.Name || first.Modes[0].F0 == 0 {
+		t.Fatal("bench does not keep its unit")
+	}
+	// Selecting the lot again connects the next unit; cutting keeps the unit.
+	_ = b.SetAntenna("lot869")
+	second := sim.opt.Antenna
+	if second.Name == first.Name || second.Modes[0].F0 == first.Modes[0].F0 {
+		t.Fatalf("same unit twice: %s", second.Name)
+	}
+	b.Cut(1)
+	if sim.opt.Antenna.Name != second.Name || sim.opt.Antenna.Modes[0].F0 <= second.Modes[0].F0 {
+		t.Fatal("cut changed the unit")
+	}
+	if b.base.Modes[0].F0 != second.Modes[0].F0 {
+		t.Fatal("cut modified the stored unit")
+	}
+	// The lot: biased low, spread of a few tenths of a percent, an outlier
+	// every seventh unit; neighbours differ (BATCH auto-capture sees a
+	// new antenna).
+	var sum, sum2 float64
+	n := 0
+	for k := 1; k <= 70; k++ {
+		off := LotOffset(k)
+		if k%7 == 3 {
+			if off > -0.015 {
+				t.Fatalf("unit %d should be an outlier: %.4f", k, off)
+			}
+			continue
+		}
+		if off < -0.012 || off > 0.008 {
+			t.Fatalf("unit %d offset %.4f out of range", k, off)
+		}
+		sum += off
+		sum2 += off * off
+		n++
+	}
+	mean := sum / float64(n)
+	sd := math.Sqrt(sum2/float64(n) - mean*mean)
+	if math.Abs(mean-LotBias) > 0.001 || sd < 0.0012 || sd > 0.0035 {
+		t.Fatalf("lot mean %.4f sd %.4f", mean, sd)
+	}
+	for _, band := range LotBands {
+		a := LotAntenna(band, 1)
+		if !strings.Contains(a.Name, band) || len(a.Modes) != 2 {
+			t.Fatalf("%s: %+v", band, a)
+		}
 	}
 }

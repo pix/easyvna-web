@@ -13,6 +13,7 @@ type Bench struct {
 	mu        sync.Mutex
 	current   antennaHolder
 	name      string
+	base      Antenna // the connected antenna before trimming (one unit of a lot stays the same unit)
 	cutTotal  float64
 	maxPoints int
 	profiles  bool
@@ -33,7 +34,7 @@ func NewBench(antenna string, maxPoints int, profiles bool) (*Bench, error) {
 	if _, ok := Scenarios[antenna]; !ok {
 		return nil, fmt.Errorf("unknown mock antenna %q", antenna)
 	}
-	return &Bench{name: antenna, maxPoints: maxPoints, profiles: profiles}, nil
+	return &Bench{name: antenna, base: Scenarios[antenna](), maxPoints: maxPoints, profiles: profiles}, nil
 }
 
 // ScenarioNames lists the antenna scenarios, sorted.
@@ -61,9 +62,9 @@ func (b *Bench) SetAntenna(name string) error {
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	b.name, b.cutTotal = name, 0
+	b.name, b.base, b.cutTotal = name, mkNew(), 0
 	if b.current != nil {
-		b.current.SetAntenna(mkNew())
+		b.current.SetAntenna(b.base)
 	}
 	return nil
 }
@@ -97,7 +98,8 @@ func (b *Bench) AttachStandard(std string) {
 
 // antennaLocked is the current scenario with the cuts applied.
 func (b *Bench) antennaLocked() Antenna {
-	a := Scenarios[b.name]()
+	a := b.base
+	a.Modes = append([]Mode(nil), a.Modes...)
 	if len(a.Modes) > 0 && b.cutTotal != 0 {
 		k := a.Modes[0].F0 * (benchLen + benchDelta)
 		a.Modes[0].F0 = k / (benchLen - b.cutTotal + benchDelta)
@@ -110,7 +112,7 @@ func (b *Bench) antennaLocked() Antenna {
 func (b *Bench) NewSim() *Sim {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	sim := New(Options{Antenna: Scenarios[b.name](), MaxPoints: b.maxPoints, Profiles: b.profiles})
+	sim := New(Options{Antenna: b.base, MaxPoints: b.maxPoints, Profiles: b.profiles})
 	b.current = sim
 	return sim
 }
