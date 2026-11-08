@@ -57,3 +57,5 @@
 .fwcopy { position: absolute; top: 4px; right: 4px; }
 .fwmore { margin-top: 8px; font-size: 14px; }
 .fwmore summary { cursor: pointer; color: var(--ink2); }
+.fwdl { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+.fwsha { overflow-wrap: anywhere; font-size: 11px; }

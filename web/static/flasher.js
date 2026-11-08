@@ -644,7 +644,7 @@
       if (sum !== String(manifest.sha256).toLowerCase()) throw new Error(`the bundled firmware is damaged (SHA-256 ${sum.slice(0, 16)}…, expected ${String(manifest.sha256).slice(0, 16)}…)`);
       const img = F.loadImage(manifest.file, bytes);
       img.version = manifest.version; img.sha256 = sum; img.label = `EasyVNA ${manifest.version}`;
-      return { manifest, img };
+      return { manifest, img, bytes };
     }
     function ensureBundled() {
       if (!U.fwLoading) {
@@ -819,6 +819,36 @@
             (Linux: a udev rule; Windows: the WinUSB driver; macOS: nothing to install).</li>
         </ol></details>`;
     }
+    // dfuUtilHTML: the same job from a terminal with dfu-util, for browsers
+    // without WebUSB or people who prefer the command line; the bundled
+    // image can be downloaded from here.
+    function dfuUtilHTML(open) {
+      const m = U.fw && U.fw.manifest;
+      const file = m ? m.file : 'EasyVNA-H4-<version>.bin';
+      const dl = m ? `<button class="primary small" type="button" data-dl-fw>Download ${esc(m.file)}</button>
+          <span class="small muted">EasyVNA ${esc(m.version)}, ${F.fmtInt(m.size)} bytes, SHA-256 <code class="fwsha">${esc(m.sha256)}</code></span>`
+        : `<span class="small muted">${U.fwErr ? esc(U.fwErr) : 'Loading the bundled firmware…'}</span>`;
+      return `<details class="panel fwhelp" id="fwDfuUtil"${open ? ' open' : ''}><summary>Flash with dfu-util instead (command line)</summary>
+        <p class="small muted">Same result from a terminal, without WebUSB (any browser, or no browser at all).
+          dfu-util erases only the pages it writes, so the calibration and configuration are kept.</p>
+        <ol class="fwsteps">
+          <li><b>Download the firmware:</b> <span class="fwdl">${dl}</span></li>
+          <li><b>Install dfu-util:</b> Debian/Ubuntu <code>sudo apt install dfu-util</code>, Arch <code>sudo pacman -S dfu-util</code>,
+            Fedora <code>sudo dnf install dfu-util</code>, macOS <code>brew install dfu-util</code>, Windows: the release zip from
+            <a href="https://dfu-util.sourceforge.net/releases/" target="_blank" rel="noopener">dfu-util.sourceforge.net</a>
+            (it needs the WinUSB driver too, see <i>USB drivers and permissions</i>).</li>
+          <li><b>Put the NanoVNA in DFU mode</b> (see <i>How to enter DFU mode</i>); <code>dfu-util -l</code> lists it as <code>0483:df11</code>, "@Internal Flash".</li>
+          <li><b>Back up the whole flash</b> (firmware, calibration, configuration):
+            ${pre('fwCmdBackup', 'dfu-util -d 0483:df11 -a 0 -s 0x08000000:262144 -U nanovna-backup.bin')}</li>
+          <li><b>Flash</b> (in the folder where you downloaded it):
+            ${pre('fwCmdFlash', `dfu-util -d 0483:df11 -a 0 -s 0x08000000:leave -D ${file}`)}
+            <code>:leave</code> starts the firmware when done; without it, switch the NanoVNA off and on.</li>
+          <li><b>To go back</b>, write the backup the same way (this one also restores the calibration and configuration):
+            ${pre('fwCmdRestore', 'dfu-util -d 0483:df11 -a 0 -s 0x08000000:leave -D nanovna-backup.bin')}</li>
+        </ol>
+        <p class="small muted">Linux and macOS can check the download first: <code>sha256sum ${esc(file)}</code> (macOS: <code>shasum -a 256 ${esc(file)}</code>) must print the SHA-256 above.
+          Never use STM32CubeProgrammer's "full chip erase": it wipes the calibration.</p></details>`;
+    }
     // detectOS picks the drivers tab to show first.
     function detectOS() {
       const nav = root.navigator || {};
@@ -948,7 +978,8 @@ sudo udevadm control --reload-rules && sudo udevadm trigger`;
     }
     function choiceHTML() {
       const m = U.fw && U.fw.manifest;
-      const bundled = m ? `<b>EasyVNA ${esc(m.version)}</b> (bundled) · for the ${esc(m.target)} · ${F.fmtInt(m.size)} bytes`
+      const bundled = m ? `<b>EasyVNA ${esc(m.version)}</b> (bundled) · for the ${esc(m.target)} · ${F.fmtInt(m.size)} bytes
+          <button class="ghost small" type="button" data-dl-fw>Download .bin</button>`
         : U.fwErr ? `<b>EasyVNA</b> (bundled): <span class="fwbad">${esc(U.fwErr)}</span>` : '<b>EasyVNA</b> (bundled): loading…';
       const f = U.file, r = U.restore;
       const v = verdict(), c = chosen();
@@ -997,7 +1028,7 @@ sudo udevadm control --reload-rules && sudo udevadm trigger`;
       const err = U.err ? `<div class="wbanner bad" id="fwError" role="alert"><span class="wi">!</span><div><b>${esc(U.errTitle || 'Problem')}</b>${esc(U.err)}</div></div>` : '';
       body.innerHTML = `<div class="stepsub">Back up and update the firmware of a NanoVNA-H4 (or NanoVNA-H) over USB, in DFU mode, with the STM32's built-in bootloader.
         The calibration and configuration are kept.</div>
-        ${err}${progressHTML()}${deviceHTML()}${hasUSB ? backupHTML() + choiceHTML() : ''}${helpHTML(U.helpOpen != null ? U.helpOpen : !U.dfu)}${driversHTML(!!U.driversOpen)}${licenceHTML()}`;
+        ${err}${progressHTML()}${deviceHTML()}${hasUSB ? backupHTML() + choiceHTML() : ''}${helpHTML(U.helpOpen != null ? U.helpOpen : !U.dfu)}${dfuUtilHTML(U.dfuUtilOpen != null ? U.dfuUtilOpen : !hasUSB)}${driversHTML(!!U.driversOpen)}${licenceHTML()}`;
       paintProgress();
       bind();
       // Bring a new error, progress or result into view.
@@ -1028,6 +1059,16 @@ sudo udevadm control --reload-rules && sudo udevadm trigger`;
       on('fwRebootDFU', act(rebootDFU));
       const help = $('fwHelp');
       if (help) help.ontoggle = () => { U.helpOpen = help.open; };
+      const du = $('fwDfuUtil');
+      if (du) du.ontoggle = () => { U.dfuUtilOpen = du.open; };
+      for (const b of body.querySelectorAll('[data-dl-fw]')) {
+        b.onclick = (e) => {
+          e.preventDefault(); e.stopPropagation(); // inside the radio label: download only, no selection change
+          if (!U.fw) return;
+          saveBlob(new Blob([U.fw.bytes], { type: 'application/octet-stream' }), U.fw.manifest.file);
+          toastMsg(`Downloading ${U.fw.manifest.file}`);
+        };
+      }
       const drv = $('fwDrivers');
       if (drv) drv.ontoggle = () => { U.driversOpen = drv.open; };
       for (const b of body.querySelectorAll('.fwtab')) b.onclick = () => { U.os = b.dataset.os; U.driversOpen = true; render(); };

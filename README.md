@@ -354,6 +354,9 @@ browser version alike. *Tested against a simulated DFU device only.*
    full backup** rewrites that area, after an explicit confirmation.
    Everything written is read back and compared. **Start firmware** leaves
    DFU mode.
+   **Flash with dfu-util instead** gives the same steps for a terminal and
+   a **Download** button for the bundled firmware (also in Firefox and
+   Safari, which have no WebUSB).
 
 If it is interrupted, nothing is lost for good: the DFU bootloader is in
 ROM, so the NanoVNA can always be put back in DFU mode and flashed again.

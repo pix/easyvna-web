@@ -742,6 +742,22 @@ async function flasherFlow(browser, base, label, shots, ctxOpts = {}) {
     check(`${label}: drivers: macOS nothing to install`, /Nothing to install/.test(mac));
     if (shots) await fwShot(page, 'flasher-drivers-macos.png', false, '#fwDrivers');
     await page.click('#fwDrivers > summary');
+    // dfu-util alternative: download the bundled image, commands name it.
+    await page.click('#fwDfuUtil > summary');
+    const du = await page.textContent('#fwDfuUtil');
+    check(`${label}: dfu-util: backup, flash with the bundled file name, restore, sha256`,
+      du.includes('dfu-util -d 0483:df11 -a 0 -s 0x08000000:262144 -U nanovna-backup.bin') &&
+      du.includes(`dfu-util -d 0483:df11 -a 0 -s 0x08000000:leave -D ${FW_MANIFEST.file}`) &&
+      du.includes('-D nanovna-backup.bin') && du.includes(FW_MANIFEST.sha256));
+    const dl = await download(page, () => page.click('#fwDfuUtil [data-dl-fw]'));
+    check(`${label}: dfu-util: Download gives the bundled image, byte for byte`,
+      dl.name === FW_MANIFEST.file && sha(dl.body) === FW_MANIFEST.sha256 && dl.body.length === FW_MANIFEST.size, `${dl.name} ${dl.body.length}`);
+    if (shots) await fwShot(page, 'flasher-dfu-util.png', false, '#fwDfuUtil');
+    await page.click('#fwDfuUtil > summary');
+    const before = await page.evaluate(() => EasyVNAFlasherUI.state.choice);
+    const dl2 = await download(page, () => page.click('.fwchoices [data-dl-fw]'));
+    check(`${label}: Download .bin next to the bundled choice: same file, choice unchanged`,
+      sha(dl2.body) === FW_MANIFEST.sha256 && (await page.evaluate(() => EasyVNAFlasherUI.state.choice)) === before);
     if (shots) await fwShot(page, 'flasher-idle.png', true);
   });
   await step(`${label}: Connect without a device`, async () => {
@@ -894,6 +910,10 @@ async function flasherFlow(browser, base, label, shots, ctxOpts = {}) {
     await p2.click('#btnFirmware');
     await p2.waitForSelector('#fwNoUSB');
     check(`${label}: no WebUSB: "needs WebUSB: Chrome or Edge"`, /Firmware update needs WebUSB: Chrome or Edge on a computer/.test(await p2.textContent('#fwNoUSB')) && !(await p2.$('#fwConnect')));
+    await p2.waitForSelector('#fwDfuUtil [data-dl-fw]');
+    check(`${label}: no WebUSB: the dfu-util way is open, with the download`, (await p2.getAttribute('#fwDfuUtil', 'open')) !== null);
+    const d3 = await download(p2, () => p2.click('#fwDfuUtil [data-dl-fw]'));
+    check(`${label}: no WebUSB: the firmware still downloads`, sha(d3.body) === FW_MANIFEST.sha256);
     if (shots) await fwShot(p2, 'flasher-no-webusb.png', false);
   });
   c2.report();
