@@ -187,6 +187,12 @@ type TuneInfo struct {
 	Verdict     string  `json:"verdict"` // grade of SWR at target
 	EdgeLow     bool    `json:"edgeLow"` // best match sits at the window edge
 	EdgeHigh    bool    `json:"edgeHigh"`
+	AimHz       float64 `json:"aimHz"` // ± "on target" aim around the target
+	Limit       float64 `json:"limit"` // band SWR limit the verdict is graded against
+	// Accept is the acceptance setting resolved for this sweep (set by the
+	// server): the window, its text and the band margin.
+	Accept *Window `json:"accept,omitempty"`
+	Margin *Margin `json:"margin,omitempty"`
 }
 
 // OnTargetPct is the offset (percent of target) treated as "on target".
@@ -196,7 +202,12 @@ const OnTargetPct = 0.15
 // resonance is the return-loss peak nearest the target (parabolically
 // refined), or the best-match point when no proper dip is visible.
 func Tune(freq []float64, d Derived, target float64) TuneInfo {
-	t := TuneInfo{Target: target, Direction: "unknown"}
+	return TuneAt(freq, d, target, target*OnTargetPct/100, DefaultSWRLimit)
+}
+
+// TuneAt is Tune with an explicit "on target" aim (± Hz) and band SWR limit.
+func TuneAt(freq []float64, d Derived, target, aimHz, limit float64) TuneInfo {
+	t := TuneInfo{Target: target, Direction: "unknown", AimHz: aimHz, Limit: limit}
 	n := len(freq)
 	if n < 3 || target <= 0 {
 		return t
@@ -204,7 +215,7 @@ func Tune(freq []float64, d Derived, target float64) TuneInfo {
 	t.SWRAtTarget = InterpAt(freq, d.SWR, target)
 	t.RLAtTarget = InterpAt(freq, d.RL, target)
 	t.MLAtTarget = MismatchLoss(InterpAt(freq, d.GammaMag, target))
-	t.Verdict = Verdict(t.SWRAtTarget)
+	t.Verdict = VerdictAt(t.SWRAtTarget, limit)
 	dips := FindDips(freq, d, 1.0, 1.0)
 	if dp := NearestDip(dips, Band{Lo: target, Hi: target, Ref: target}); dp != nil {
 		t.Found, t.ResFreq, t.SWRAtRes = true, dp.Freq, dp.SWR
@@ -228,7 +239,7 @@ func Tune(freq []float64, d Derived, target float64) TuneInfo {
 		t.Direction = "lengthen"
 	case !t.Found:
 		t.Direction = "unknown"
-	case math.Abs(t.OffsetPct) <= OnTargetPct:
+	case math.Abs(t.Offset) <= aimHz*(1+1e-9):
 		t.Direction = "ok"
 	case t.Offset < 0:
 		t.Direction = "shorten" // resonance below target: element too long

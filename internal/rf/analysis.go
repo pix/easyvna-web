@@ -69,7 +69,14 @@ type BandSummary struct {
 	PctBelow15   float64 `json:"pctBelow15"`
 	Pass2        bool    `json:"pass2"`   // worst SWR < 2
 	Pass15       bool    `json:"pass15"`  // worst SWR < 1.5
-	Verdict      string  `json:"verdict"` // good / ok / bad / n/a
+	Verdict      string  `json:"verdict"` // good / ok / bad / n/a, against Limit
+	// Limit is the band SWR limit of the acceptance setting (2 by default),
+	// Good the GOOD threshold for it; PassLimit / PctBelowLimit are Pass2 /
+	// PctBelow2 at that limit.
+	Limit         float64 `json:"limit"`
+	Good          float64 `json:"good"`
+	PassLimit     bool    `json:"passLimit"`
+	PctBelowLimit float64 `json:"pctBelowLimit"`
 	// Nearest resonance dip to the band centre (if any dip was found).
 	DipFreq    *float64 `json:"dipFreq,omitempty"`
 	DipSWR     *float64 `json:"dipSWR,omitempty"`
@@ -141,6 +148,12 @@ const (
 // Analyze computes the headline summary from frequencies (Hz, ascending) and
 // derived per-point data. bands are summarised in order (may be empty).
 func Analyze(freq []float64, d Derived, bands []Band) (Summary, error) {
+	return AnalyzeAt(freq, d, bands, DefaultSWRLimit)
+}
+
+// AnalyzeAt is Analyze with the band verdicts graded against a band SWR
+// limit (see VerdictAt).
+func AnalyzeAt(freq []float64, d Derived, bands []Band, limit float64) (Summary, error) {
 	n := len(freq)
 	if n == 0 || len(d.SWR) != n {
 		return Summary{}, ErrEmpty
@@ -187,7 +200,7 @@ func Analyze(freq []float64, d Derived, bands []Band) (Summary, error) {
 		if !b.Valid() {
 			continue
 		}
-		bs := SummarizeBand(freq, d, b)
+		bs := SummarizeBandAt(freq, d, b, limit)
 		if dp := NearestDip(s.Dips, b); dp != nil {
 			f, sw, off := dp.Freq, dp.SWR, dp.Freq-b.Reference()
 			edge := 0.0
@@ -317,7 +330,15 @@ func interp(freq, y []float64, f float64) float64 {
 // Covered is false when the sweep does not span the whole band; then only the
 // overlapping part is evaluated.
 func SummarizeBand(freq []float64, d Derived, band Band) BandSummary {
-	bs := BandSummary{Band: band, WorstSWR: 0, BestSWR: math.Inf(1)}
+	return SummarizeBandAt(freq, d, band, DefaultSWRLimit)
+}
+
+// SummarizeBandAt is SummarizeBand graded against a band SWR limit.
+func SummarizeBandAt(freq []float64, d Derived, band Band, limit float64) BandSummary {
+	if limit <= 1 {
+		limit = DefaultSWRLimit
+	}
+	bs := BandSummary{Band: band, WorstSWR: 0, BestSWR: math.Inf(1), Limit: limit, Good: GoodLimitFor(limit)}
 	n := len(freq)
 	if n == 0 {
 		return bs
@@ -340,7 +361,7 @@ func SummarizeBand(freq []float64, d Derived, band Band) BandSummary {
 			bs.Points++
 		}
 	}
-	below2, below15 := 0, 0
+	below2, below15, belowL := 0, 0, 0
 	bs.WorstRL = math.Inf(1)
 	for _, s := range samples {
 		if s.swr > bs.WorstSWR {
@@ -358,12 +379,17 @@ func SummarizeBand(freq []float64, d Derived, band Band) BandSummary {
 		if s.swr < 1.5 {
 			below15++
 		}
+		if s.swr < limit {
+			belowL++
+		}
 	}
 	bs.PctBelow2 = 100 * float64(below2) / float64(len(samples))
 	bs.PctBelow15 = 100 * float64(below15) / float64(len(samples))
 	bs.Pass2 = bs.Covered && bs.WorstSWR < 2
 	bs.Pass15 = bs.Covered && bs.WorstSWR < 1.5
-	bs.Verdict = Verdict(bs.WorstSWR)
+	bs.PctBelowLimit = 100 * float64(belowL) / float64(len(samples))
+	bs.PassLimit = bs.Covered && bs.WorstSWR < limit
+	bs.Verdict = VerdictAt(bs.WorstSWR, limit)
 	if bs.WorstSWR > 0 {
 		bs.WorstML = MismatchLoss(GammaFromSWR(bs.WorstSWR))
 	}

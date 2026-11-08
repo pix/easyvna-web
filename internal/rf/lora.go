@@ -29,18 +29,9 @@ func (b Band) Reference() float64 {
 	return b.Centre()
 }
 
-// Verdict grades a worst-case in-band SWR.
-func Verdict(worstSWR float64) string {
-	switch {
-	case worstSWR <= 0 || math.IsNaN(worstSWR):
-		return "n/a"
-	case worstSWR < 1.5:
-		return "good"
-	case worstSWR < 2:
-		return "ok"
-	}
-	return "bad"
-}
+// Verdict grades a worst-case in-band SWR against the default limit (2):
+// good < 1.5, ok < 2, else bad. See VerdictAt.
+func Verdict(worstSWR float64) string { return VerdictAt(worstSWR, DefaultSWRLimit) }
 
 // Dip is a local minimum of SWR (maximum of return loss), i.e. a resonance
 // that the antenna is (more or less) matched at.
