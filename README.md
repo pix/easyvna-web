@@ -29,13 +29,18 @@ NanoVNA needed: <https://pix.github.io/easyvna-web/?demo>)
 - **One-click LoRa band profiles.** Tap *433*, *869* or *915* for a sweep
   around the band. *Wide* and *Survey* identify an unknown antenna.
 - **Verdict at a glance.** Each band gets PASS/OK/FAIL from its worst in-band
-  SWR. You also see the resonance and its offset, mismatch loss, return loss
-  and Q.
+  SWR, against the band SWR limit you choose (2:1 by default, as on most
+  antenna datasheets). You also see the resonance and its offset, the margin
+  left, mismatch loss, return loss and Q.
 - **TUNE with a trim calculator.** A big live readout says SHORTEN or
   LENGTHEN. The calculator learns your antenna's MHz/mm from each cut, and an
   optional tone lets you trim without looking.
 - **HOLD stable positions.** Bend the antenna, hold it, repeat. Only steady
   positions count, so you see how robust the match really is.
+- **Measure ×N and the setup check.** Average several fresh sweeps of one
+  antenna and see how repeatable the reading is (also with the antenna
+  re-seated in between), and check whether the cable is part of the
+  antenna before you trust a measurement.
 - **S21 COMPARE.** Rank antennas against a reference antenna, with no THRU
   calibration needed.
 - **Report card.** One button produces a clean A4 or Letter PDF with the verdicts,
@@ -46,10 +51,11 @@ NanoVNA needed: <https://pix.github.io/easyvna-web/?demo>)
   in the coax.
 - **BATCH: test a whole lot.** Measure the antennas of a lot one after
   the other (by hand, with a key, or captured by themselves as you swap
-  them). Each one gets a clear *tuned / shorten / lengthen / bad* status
-  with the trim to make; the lot gets its mean offset (is the pattern
-  length off?), its spread and its outliers, on screen and on a one-page
-  batch sheet.
+  them). Each one gets a clear status against your acceptance setting
+  (does it cover the band, with how much margin?) with the trim that
+  would centre it; the lot gets a graded conclusion, its mean offset (is
+  the pattern length off?), its spread and its outliers, on screen and on
+  a two-page batch print.
 - **Open measurement files.** Load a `.s1p`, `.s2p` or CSV from any VNA
   program and get the same verdict, plots, report and sheet, clearly
   marked *not live*. No NanoVNA needed, so it works in every browser.
@@ -225,9 +231,14 @@ so this is a one-time job per band.
 
 ### 3. Read the verdict
 
-Each band gets **PASS** (worst in-band SWR < 1.5), **OK** (< 2) or **FAIL**.
+Each band gets **PASS**, **OK** or **FAIL** from its worst in-band SWR
+against the band SWR limit of the **acceptance** setting (below): with the
+default limit 2, PASS is below 1.5, OK below 2, FAIL from 2 on.
 Next to the grade you see the resonance and how far it is from the band,
-mismatch loss, return loss and the SWR < 2 bandwidth. **REF** stores a trace
+mismatch loss, return loss and the SWR < 2 bandwidth. The line under the
+verdict states the criteria in use and how much of the margin the antenna
+uses (*Acceptance: band SWR < 2.0, resonance Auto ± 18.12 MHz · margin used
+15 %*). **REF** stores a trace
 as a dashed overlay with Δf / ΔSWR against it, which also makes a quick
 detuning test: free air, then in your hand or the enclosure. A **per band**
 line says what the change did in every band in view, e.g. *433: +3.1 MHz ·
@@ -240,11 +251,81 @@ that does not match this setup* (|Γ| above 1 over part of the sweep).
 
 ![A fake (resistive) antenna is flagged and its verdicts are marked CHECK](doc/screenshots/fake-antenna-warning.png)
 
+#### Acceptance: what counts as good
+
+There is no industry standard for how far an antenna's resonance may sit
+from the band. LoRa 868 / 915 MHz antenna datasheets specify the match
+over the whole operating band instead: typically **VSWR ≤ 2:1** (return
+loss ≥ 9.5 dB), ≤ 1.5:1 for good antennas, 2.2–2.5:1 for cheap ones. So
+**Acceptance…** (under the verdict) has two settings, per band profile or
+as the default for every profile; they are saved with your data and
+included in *Export data*:
+
+* **Band SWR limit:** 1.5 (strict), **2.0** (typical datasheet, default),
+  2.5 (loose) or custom. It decides PASS / OK / FAIL and "band covered"
+  everywhere: verdict, REPORT, antenna sheet, BATCH and HISTORY. OK means
+  the worst in-band SWR is below the limit L; PASS that it is below
+  1 + (L − 1) / 2, half the limit's excess over a perfect 1:1 match (1.5 for
+  L = 2, 1.25 for 1.5, 1.75 for 2.5).
+* **Resonance tolerance** (the tuning goal): **Auto** (default), Tight
+  ± 0.15 %, Normal ± 0.5 %, Loose ± 1 %, or custom in % or MHz. The dialog
+  shows each window in MHz at the band's target (*± 4.35 MHz at 869*).
+  **Auto** asks the antenna's own curve: around the resonance its SWR stays
+  below the limit from a to b; moving the resonance by d moves that region
+  by about d, so the band [lo, hi] stays covered while −(b − hi) < d <
+  lo − a. Measured from the target that is a window such as
+  *−24.7 / +17.8 MHz*; the symmetric Auto window is the smaller side. The
+  "margin used" is how off-centre the band sits in that region: 0 % when
+  centred, 100 % when a band edge reaches the limit.
+
+A narrower resonance window still matters as a margin: the case, a hand,
+temperature and the spread of a batch all move the resonance (an 868 MHz
+antenna 1 mm from a plastic case can shift by about 5 MHz, more in a
+hand), while a whip's SWR < 2 bandwidth is about 50 MHz wide. Sheets,
+reports and batch prints state the criteria they used.
+
+#### Measure ×N
+
+**Measure ×N** (×3, ×5 or ×10, under the verdict and in the PRINT, REPORT
+and HISTORY dialogs; per antenna in BATCH) takes N fresh sweeps of the
+antenna and keeps their **vector average** of S11 per point (not an
+average of SWR, which noise would bias upwards), with the min / max
+envelope on the plot and the **repeatability**: σ of the resonance, σ of
+the SWR at the target and the largest |ΔΓ| between two sweeps (*average of
+5 · resonance σ 0.08 MHz*). A bar shows the progress (*3/5*) and can
+cancel. With **re-seat**, it asks you to unscrew and reconnect (or move)
+the antenna between sweeps and continues by itself once the reading is
+steady again (HOLD's motion detector; **Continue** takes the next sweep at
+once), so σ includes the connector and the placement, not only the
+NanoVNA's noise. The result becomes the current measurement, so the sheet,
+report, HISTORY entry and REF use it and print its repeatability. AVG
+keeps working as before.
+
+#### Setup check: is the cable part of the antenna?
+
+**Setup check** (under the verdict) captures the antenna three ways, each
+an average of four sweeps: **A** hands off with the cable as installed,
+**B** holding the cable 10–20 cm below the antenna, optionally **C**
+touching the cable near the NanoVNA. It compares B and C with A: the
+resonance shift (MHz and % of the tolerance window), the SWR at the target,
+the band's worst SWR and the RMS |ΔΓ| of the two curves. A change only
+counts above 3 σ of the measurement noise of the steps. The cable is
+**quiet** (measurements are trustworthy) when touching it moves the
+resonance by less than 10 % of the window, the curve by less than 0.01 RMS
+|ΔΓ| and the band's worst SWR by less than 0.1; it is **part of the
+antenna** from half the window, 0.03 RMS |ΔΓ| or a quarter of the limit's
+excess (0.25 at SWR 2) in the band's worst SWR; in between it has a small
+effect. The last result goes on the antenna's next sheet and, during a
+batch, into the batch's conclusion. In the simulator the **cm869** antenna
+has a radiating cable and a *Simulated hand on the cable* switch.
+
 ### 4. TUNE and trim
 
 **TUNE** opens a full-screen live view. It shows the resonance in large
 numbers, the offset to the target with **▼ SHORTEN / ▲ LENGTHEN /
-✓ ON TARGET**, and SWR at the target. Enter the element length once. After
+✓ ON TARGET**, and SWR at the target. ON TARGET is the resonance
+tolerance of the acceptance setting; with Auto, TUNE keeps a fine ± 0.15 %
+aim and shows whether the band is covered and with how much margin. Enter the element length once. After
 each cut, enter how much you cut and tap **Measure & log**. The trim
 calculator learns this antenna's MHz/mm and tells you the next cut. Until
 it has learnt it (before your first logged cut), it only suggests a
@@ -302,7 +383,10 @@ antenna fits on two pages. See the A4 sample:
 **PRINT** makes a one-page datasheet for the antenna you just measured.
 Give it a name; type, band, connector, length, ground plane, cable, maker,
 owner, notes, a product or source link and a photo are optional. They are
-remembered for that name. Add the photo by pasting it (**Ctrl+V**, or
+remembered for that name, and so are a **photo caption** and a **link
+note**: optional plain text (up to 200 characters) printed in small type
+under the photo and under the link's QR code (the link note can be kept as
+the default for new antennas and batches). Add the photo by pasting it (**Ctrl+V**, or
 **Paste image** where the browser allows it), dropping a file on it, or
 choosing one; large phone photos are reduced to 1600 px (JPEG) before
 they are stored. The link must be an `http://` or `https://` address;
@@ -356,41 +440,70 @@ e.g. 25 LoRa whips) on one band profile and tells you two things: whether
    Touching the antenna and letting go, or slow drift, does not capture it
    again.
 
-Each antenna gets a status against TUNE's target (the band reference,
-e.g. 869.00 MHz) with TUNE's ✓ ON TARGET tolerance (± 0.15 %:
-± 1.30 MHz at 869 MHz): **✓ tuned**, **↓ shorten 0.3 mm** (resonates
-low: too long), **↑ lengthen 0.5 mm** (resonates high: too short, do not
-cut), or **✗ out of band** / **✗ poor match** when the band is not covered
-at SWR < 2. The mm come from the trim calculator: the learnt MHz/mm when
-a trim log has it, else the first estimate from the element length with
-TUNE's cautious first cut, else a percentage of the length. Next to it:
-resonance and offset (MHz and %), SWR at the target, worst SWR in the
-band, SWR < 2 bandwidth, return loss and the PASS / OK / FAIL band
-verdict.
+Each antenna is judged by the **acceptance** setting of the profile
+(band SWR limit 2 and Auto by default), against TUNE's target (the band
+reference, e.g. 869.00 MHz): **✓ tuned** (within TUNE's fine ± 0.15 %
+aim), **✓ OK · 15 % margin used** (Auto: the band is covered at the SWR
+limit; the trim that would centre it is given as optional), **✗ out of
+band** (not covered at the limit; with the cut that would bring it back)
+or **✗ poor match** (not covered, and moving the resonance would not fix
+it). With a fixed tolerance (± 0.5 %…) antennas outside it get **↓ shorten
+0.3 mm** (resonates low: too long) or **↑ lengthen 0.5 mm** (resonates
+high: too short, do not cut). The mm come from the trim calculator: the
+learnt MHz/mm when a trim log has it, else the first estimate from the
+element length with TUNE's cautious first cut, else a percentage of the
+length. Next to it: resonance and offset (MHz and %), SWR at the target,
+worst SWR in the band, SWR < 2 bandwidth, return loss, the PASS / OK /
+FAIL band verdict, the margin used, and with Measure ×N the repeatability
+(*×5, σ 0.08 MHz*).
 
 The lot gets n, mean, standard deviation, min, max and spread of each
-figure, the yield, and a plain-words conclusion that separates the
-**systematic offset** (*the whole lot resonates 3 MHz low: the pattern is
-~0.3 mm too long*) from the **unit-to-unit spread** (σ compared with the
-tolerance window). **Statistical outliers** (antennas unlike the rest of
-the lot, ◆) are flagged with a robust rule that works from 3 antennas on:
-|x − median| > 3.5 × 1.4826 × MAD (the modified z-score; the median and
-MAD are not pulled by the odd antenna, and a small repeatability floor
-keeps identical antennas from being flagged). An outlier is not the same
-as off target: an antenna can be both, either or neither. The view shows
-all SWR curves with the lot's min/max envelope and the live trace, and a
-resonance strip with the target, the tolerance window, the mean ± 1σ and
-one mark per antenna.
+figure, the yield, and a graded, plain-words conclusion. The judgement is
+margin-based, as antenna datasheets are: does every antenna cover the band
+at the SWR limit, and with how much margin?
 
-**Batch sheet** (or Ctrl+P in BATCH) prints one A4 or Letter page: the
-conclusion, the SWR overlay, the resonance strip, the statistics and every
-antenna (up to 40 on one page; from 15 on, in two compact columns). **CSV**
-gives one row per antenna plus the statistics, **JSON** the whole batch
-with every sweep, which **Import a batch** reads back. The REPORT can
-include a batch's statistics. Batches are kept with your data
-(`batches/`, included in *Export data*). In the simulator
-(`?demo&antenna=lot869`, or `-mock -mock-antenna lot869`) **Next
-simulated antenna** connects the next unit of a simulated lot.
+* **Fine:** *all 10 antennas cover 863.00–870.00 MHz at SWR < 2.0 (worst
+  1.31). The lot resonates 6.3 MHz low (−0.72 %, 95 % CI ± 0.9 MHz), which
+  uses 25 % of the margin: no correction needed (a ~0.7 mm shorter pattern
+  would centre it).*
+* **Worth correcting:** the mean offset uses more than half of the lot's
+  window (the median of the antennas' Auto windows, or the fixed
+  tolerance), or an antenna uses more than 75 % of its own margin.
+* **Must correct:** antennas fail the SWR limit; the conclusion says
+  whether the lot's offset is the cause (correct the pattern) or the lot is
+  centred and those antennas are individually off.
+
+It is sample-size aware: no spread verdict below 3 antennas; below 5 the
+figures are called *indicative* and the mean offset comes with its 95 %
+confidence interval (Student t). The **unit-to-unit spread** (± 2σ) is
+compared with the lot's window, never with TUNE's fine aim, and when the
+antennas were measured ×N with the repeatability: *spread between antennas
+σ 1.0 MHz vs repeatability σ 0.1 MHz (Measure ×N): the spread is real*.
+**Statistical outliers** (antennas unlike the rest of the lot, ◆) are
+flagged with a robust rule that works from 3 antennas on: |x − median| >
+3.5 × 1.4826 × MAD (the modified z-score; the median and MAD are not
+pulled by the odd antenna, and a small repeatability floor keeps identical
+antennas from being flagged). An outlier is not the same as off target: an
+antenna can be both, either or neither. The view shows all SWR curves with
+the lot's min/max envelope and the live trace, and a resonance strip in
+lanes: the band, the acceptance window with TUNE's aim and the target,
+one labelled mark per antenna (shape and colour by status, outliers
+ringed), and the lot's mean with its 95 % CI (3–4 antennas) or ± σ (5 and
+more).
+
+**Batch sheet** (or Ctrl+P in BATCH) prints two A4 or Letter pages. Page
+1 looks like the antenna sheet, for the whole lot: photo, link and QR
+code, the lot's key figures (mean resonance, worst SWR, margin used,
+repeatability…), the grade, the criteria, and every antenna's SWR, return
+loss, impedance and Smith curves with the lot average (vector average of
+S11) in bold and a legend of the labels. Page 2 has the conclusion, the
+resonance strip, the statistics and every antenna (up to 40; from 11 on,
+in two compact columns). **CSV** gives one row per antenna plus the
+statistics, **JSON** the whole batch with every sweep, which **Import a
+batch** reads back. The REPORT can include a batch's statistics. Batches
+are kept with your data (`batches/`, included in *Export data*). In the
+simulator (`?demo&antenna=lot869`, or `-mock -mock-antenna lot869`)
+**Next simulated antenna** connects the next unit of a simulated lot.
 
 ### 11. Open a measurement file
 
@@ -462,10 +575,13 @@ WinUSB driver for DFU mode; macOS needs nothing: see
 | **REF** | one-tap reference trace, Δf / ΔSWR, detuning test, per-band effect of a change (resonance shift and SWR before → after for 433 / 869 / 915 and each dip of a Wide / Survey sweep) in the main view, TUNE, sheet and report |
 | **HOLD** | stable-positions envelope with motion rejection and resonance spread |
 | **AVG** | averaging over ×1 / 2 / 4 / 8 / 16 sweeps |
+| **Acceptance** | band SWR limit (1.5 / 2.0 / 2.5 / custom, per profile or default) driving PASS / OK / FAIL everywhere; resonance tolerance Auto (from the antenna's own SWR margin), ± 0.15 / 0.5 / 1 % or custom; printed on every sheet |
+| **Measure ×N** | N fresh sweeps vector-averaged, min / max envelope, σ of the resonance and SWR, max \|ΔΓ\|; re-seat mode with automatic continue |
+| **Setup check** | hands off vs a hand on the cable: resonance shift, SWR and \|ΔΓ\| against the noise and the tolerance window; tells whether the cable is part of the antenna |
 | **COMPARE** | S21 against antenna A, live Δ dB in band, leaderboard |
 | **Warnings** | no antenna or open cable, reflection above 1 (bad calibration, also over part of the sweep), lossy / fake antenna, noisy measurement (point-to-point jitter and sweep-to-sweep repeatability, 4× real H4 noise; moving the antenna does not count) |
 | **History** | per-antenna measurement log (sheet, report, *Log this measurement*), resonance and SWR sparklines, drift warnings (resonance moved, SWR worse, rising loss), previous-measurement line on the sheet and report, CSV export |
-| **Batch** | a lot of antennas on one profile: capture by hand, by key or automatically; per-antenna tuned / shorten / lengthen / bad with the trim in mm; mean offset, spread, outliers (median / MAD), yield; SWR overlay and resonance strip; one-page batch sheet; CSV and JSON export, JSON import |
+| **Batch** | a lot of antennas on one profile: capture by hand, by key or automatically, optionally ×N each; per-antenna tuned / OK / shorten / lengthen / bad with the margin used and the trim in mm; graded, margin-based lot conclusion (mean offset with its 95 % CI, spread vs window and repeatability, outliers by median / MAD), yield; SWR overlay and resonance strip; two-page batch print; CSV and JSON export, JSON import |
 | **Report** | printable A4 / Letter report with vector plots (SWR, return loss, impedance, Smith) and tables, saved in the data folder |
 | **Antenna sheet** | PRINT: a one-page datasheet of the antenna (photo, key figures, all four graphs, notes, trim log); its details are remembered per antenna name |
 | **Files** | open `.s1p` / `.s2p` / CSV (Touchstone 1 and 2.0, any S format and unit, other reference impedances renormalised to 50 Ω) as a labelled *not live* measurement with the full analysis; export Touchstone `.s1p` / `.s2p`, CSV, named snapshots |
@@ -485,7 +601,7 @@ WinUSB driver for DFU mode; macOS needs nothing: see
 | `-readonly` | off | never change anything stored on the device: calibration, save, recall and on-device profile switching are refused. Sweeps still work |
 | `-data` | per OS | folder for settings, REF traces, trim logs, compare session, reports and snapshots |
 | `-mock` | off | simulate a NanoVNA-H4 (no hardware needed) |
-| `-mock-antenna` | `dual` | simulated antenna: `dual`, `869`, `869tuned`, `915`, `dummy`, `open`, `bend`, and `lot433`, `lot869`, `lot915` (each selection connects the next unit of a simulated lot) |
+| `-mock-antenna` | `dual` | simulated antenna: `dual`, `869`, `869tuned`, `915`, `dummy`, `open`, `bend`, `cm869` (a whip whose cable radiates: for the setup check), and `lot433`, `lot869`, `lot915` (each selection connects the next unit of a simulated lot) |
 | `-mock-firmware` | `custom` | `custom` simulates the EasyVNA firmware, `stock` plain NanoVNA-D, `v2` a NanoVNA V2 (binary protocol, raw data, host calibration) |
 | `-maxpoints` | auto | points per device scan (401 on H4, 101 on H) |
 | `-cal-settle` | `1.5s` | time with a standard attached before `cal <std>` (older firmware) |
@@ -594,6 +710,18 @@ Check that the NanoVNA is in DFU mode (blank screen; USB `0483:df11`,
 *STM32 BOOTLOADER*). See
 [USB drivers and permissions](#usb-drivers-and-permissions) (Linux udev
 rule, Windows WinUSB); close STM32CubeProgrammer or dfu-util. Firefox and Safari have no WebUSB.
+
+**My antenna looks better when I hold the cable**
+A whip or monopole without a proper ground plane uses the outside of the
+coax shield as its other half: common-mode current flows on the cable, so
+the cable is part of the antenna. A hand on the cable adds a lossy load and
+changes that counterpoise: the resonance shifts, and the SWR can look
+*better* because loss hides the mismatch, while less is radiated. The
+hand-held reading is not the real performance. A PETG or other plastic
+mast is nearly transparent to RF (εr ≈ 2.5–3, low loss) unless the element
+touches it. Fix it with a choke at the feed point (clip-on ferrites, a
+sleeve balun) and measure in the final installation. **Setup check** shows
+how much the cable matters on your setup.
 
 **"Cannot open this file"**
 EasyVNA Web reads S-parameter files only: Touchstone with one or two

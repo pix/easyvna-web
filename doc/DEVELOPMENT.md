@@ -85,8 +85,8 @@ How the pieces fit:
   page can rebuild its own exact file. That is the hosted page's
   *Download for offline use*, hidden on `file://`. Sources are normalised
   to LF first; `.gitattributes` keeps LF in checkouts.
-* **Size.** The module is about 13.7 MB, 3.4 MB gzipped (most of it is
-  `net/http`); the page is about 5.3 MB (the bundled firmware, gzipped, about 0.15 MB of it). `wasm-opt -Oz` saves under 1 %
+* **Size.** The module is about 15 MB, 3.7 MB gzipped (most of it is
+  `net/http`); the page is about 5.5 MB (the bundled firmware, gzipped, about 0.15 MB of it). `wasm-opt -Oz` saves under 1 %
   after gzip, so it is not used.
 
 `scripts/e2e-html.sh` covers it over `file://` and a local Pages-like
@@ -95,9 +95,17 @@ server:
   Letter), the report, Export/Import data and reload persistence;
 * BATCH on a simulated lot (`?demo&antenna=lot869`): captures by button,
   key and auto-capture, rename, redo, delete + undo, the refusal on another
-  profile, CSV / JSON export, JSON import, the batch sheet (one page on A4
-  and Letter with 8 and 20 antennas), the report section, reload
-  (`E2E_ONLY=batch` runs only those);
+  profile, CSV / JSON export, JSON import, the batch print (exactly two
+  pages on A4 and Letter with 5, 8 and 20 antennas, one trace per antenna
+  plus the average, labels of the resonance strip neither overlapping nor
+  clipped), the report section, reload (`E2E_ONLY=batch` runs only those);
+* acceptance, Measure ×N and the setup check (`E2E_ONLY=tolerance`): the
+  SWR limit and tolerance change the verdicts, TUNE's aim and the batch
+  statuses and are printed; Auto window; Measure ×5 with its progress,
+  cancel and re-seat; batch capture ×3 (repeatability vs spread); the setup
+  check on the `cm869` (cable radiates) and `869tuned` (quiet) antennas;
+  photo caption and link note (200 characters, escaped, one page, default,
+  reload, Export data);
 * Web Serial through a fake `navigator.serial` whose port is backed by the
   Go simulator (`goMockShell`): request, open, driver, unplug, replug,
   reconnect after reload;
@@ -164,20 +172,24 @@ use it.
 | `GET /api/export?format=s1p\|s2p\|csv[&snapshot=name]` | download |
 | `POST /api/file {"name","data"}` | open a measurement file (`.s1p`, `.s2p`, CSV) as the current result, `source` set, LIVE stopped |
 | `POST /api/avg {"n":4}` | averaging (1, 2, 4, 8, 16) |
+| `POST /api/acceptance {"profile","scope":"profile"\|"default","accept":{"swrLimit","tol","tolPct","tolMHz"}}` or `{"profile","reset":true}` | acceptance setting (band SWR limit, resonance tolerance auto / tight / normal / loose / custom), in `settings.json`; re-grades the results in memory |
+| `POST /api/measure {"n","reseat","for":"measure"\|"batch"\|"setup","step","replace","label"}`, `POST /api/measure/cancel`, `POST /api/measure/continue` | Measure ×N (progress in `state.measure`): the vector average becomes the last result with `multi` (repeatability); `batch` captures it into the active batch, `setup` is a setup-check step |
+| `GET /api/setup`, `POST /api/setup {"reset":true}` | setup check (steps A / B / C, verdict); also in `state.setup` |
+| `POST /api/mock/action {"action":"hand-on"\|"hand-off"\|"reseat"}` | mock only: a hand on the cable (the `cm869` antenna's cable radiates), unscrew and reconnect the antenna |
 | `POST /api/tune {"on":true,"target":869000000}` / `{"on":false}` | TUNE mode |
 | `POST /api/ref`, `DELETE /api/ref`, `POST /api/ref/undo`, `GET /api/ref?profile=` | REF trace per profile |
 | `GET /api/trim`, `GET /api/trim/{name}`, `POST /api/trim/{name}/log {"lengthMm"} or {"cutMm"}`, `.../undo`, `.../target`, `.../select` | trim sessions |
 | `POST /api/compare {"on"}`, `POST /api/compare/a {"name"}`, `POST /api/compare/add {"name"}`, `POST /api/compare/undo`, `DELETE /api/compare` | S21 compare |
-| `POST /api/report {"name","profiles","trim","notes","batch","photo","link"}`, `GET /api/reports`, `GET /api/reports/{file}[?download=1]` | reports |
+| `POST /api/report {"name","profiles","trim","notes","batch","photo","link","photoCaption","linkNote"}`, `GET /api/reports`, `GET /api/reports/{file}[?download=1]` | reports |
 | `POST /api/hold {"on"}` / `{"n"}` / `{"sensitivity"}` / `{"clear":true}` / `{"remove":id}` / `{"undo":true}`, `GET /api/hold` | HOLD stable positions |
 | `POST /api/mock/antenna {"name"}` | mock only: swap the simulated antenna |
 | `GET/POST /api/snapshots`, `GET/DELETE /api/snapshots/{name}` | snapshots |
 | `GET /api/cal`, `POST /api/cal/step/{reset,open,short,load,isoln,thru,done,on,off}`, `POST /api/cal/save {"slot"}`, `POST /api/cal/recall {"slot"}` | calibration |
-| `PUT /api/profiles/{id}/slot {"slot"}`, `POST /api/settings {"autoRecall"}` | settings |
-| `POST /api/sheet {"antenna":{name,type,band,connector,lengthMm,ground,cable,maker,owner,notes,link,photo}}` | one-page antenna sheet from the last sweep (saved with the reports); the antenna record is remembered |
+| `PUT /api/profiles/{id}/slot {"slot"}`, `POST /api/settings {"autoRecall","linkNoteDefault"}` | settings |
+| `POST /api/sheet {"antenna":{name,type,band,connector,lengthMm,ground,cable,maker,owner,notes,link,photo,photoCaption,linkNote}}` | one-page antenna sheet from the last sweep (saved with the reports); the antenna record is remembered |
 | `GET /api/antennas`, `GET /api/antennas/{name}` | remembered antenna records (`antennas/<name>.json`) |
 | `GET /api/antennas/{name}/history`, `POST /api/antennas/{name}/history` (log the current result), `POST .../history/undo`, `GET .../history.csv` | antenna history (kept in the antenna record) with the drift report |
-| `GET /api/batches`, `POST /api/batches {"name","notes","lengthMm","trim"}` (on the current band profile) | BATCH: list, create (and make it active) |
+| `GET /api/batches`, `POST /api/batches {"name","notes","lengthMm","trim","link","photo","photoCaption","linkNote"}` (on the current band profile) | BATCH: list, create (and make it active) |
 | `POST /api/batch {"active":id}` / `{"auto":bool}` | choose the active batch, switch auto-capture |
 | `GET/PUT/DELETE /api/batches/{id}`, `POST .../restore` | a batch with every figure (per-antenna tuning, statistics, conclusion); rename / notes / length / trim log; delete and restore |
 | `POST /api/batches/{id}/capture {"label"}` or `{"replace":n}`, `PUT/DELETE /api/batches/{id}/antennas/{n}`, `POST .../undo` | capture (a fresh sweep, refused on another profile), redo, rename, delete, undo the last change |
@@ -284,5 +296,13 @@ pasted link; nothing added), `LinkText` and the QR code on the sheet,
 report and batch sheet. BATCH has tests of the lot statistics and the outlier rule
 (n = 1, 2, identical values, non-finite values), the tuning status and trim
 advice, the conclusion, the next-antenna detector (hand touch, drift,
-swaps), persistence and the whole API on the simulated lot. Simulations of a trim session and of a hand-bent antenna check that
+swaps), persistence and the whole API on the simulated lot. Acceptance: the
+SWR-limit mapping, the presets and the Auto window (synthetic curves), the
+API and its persistence in `settings.json` / *Export data*; the
+margin-based lot grades (n = 2 with its confidence interval, 0.7 % offset
+with a wide margin, near the margin, failures, repeatability vs spread);
+the batch print's two pages and the strip's label layout. Measure ×N: the
+vector average and repeatability, the re-seat detector, cancel and
+continue, batch capture; the setup check thresholds and both simulated
+cables. Simulations of a trim session and of a hand-bent antenna check that
 the trim fit and the HOLD motion rejection work.
