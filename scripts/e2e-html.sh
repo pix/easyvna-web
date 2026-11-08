@@ -2,7 +2,8 @@
 # End-to-end test of the single-file browser build in headless Chromium
 # (see scripts/e2e-html/e2e.js). Builds dist/easyvna-web.html first, and the
 # native program, whose FIRMWARE dialog (go:embed firmware) is tested too.
-# E2E_ONLY=flasher runs only the FIRMWARE dialog checks, E2E_ONLY=batch only BATCH.
+# E2E_ONLY=flasher runs only the FIRMWARE dialog checks, E2E_ONLY=batch only BATCH,
+# E2E_ONLY=tolerance only the acceptance / setup check / Measure ×N checks.
 #   scripts/e2e-html.sh [SCREENSHOT_DIR]
 # Needs node with Playwright and its Chromium (PLAYWRIGHT_DIR can point at a
 # directory containing node_modules/playwright).

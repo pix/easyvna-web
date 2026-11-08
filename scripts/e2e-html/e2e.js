@@ -32,7 +32,7 @@ const { chromium } = require(process.env.PLAYWRIGHT_DIR
 
 const HTML = path.resolve(process.argv[2] || 'dist/easyvna-web.html');
 const SHOTS = process.argv[3] ? path.resolve(process.argv[3]) : '';
-const ONLY = process.env.E2E_ONLY || ''; // "flasher": only the FIRMWARE dialog checks; "batch": only BATCH
+const ONLY = process.env.E2E_ONLY || ""; // "flasher": only the FIRMWARE dialog checks; "batch": only BATCH; "tolerance": only acceptance / setup check / Measure ×N
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'easyvna-e2e-'));
 const sha = (b) => crypto.createHash('sha256').update(b).digest('hex');
 const PAGE_SHA = sha(fs.readFileSync(HTML));
@@ -596,11 +596,14 @@ async function batchFlow(browser, base, label, shots) {
     check(`${label}: unit #3 is flagged as a statistical outlier and as bad (out of band)`, b.summary.stats[0].outliers.join() === '3' && statuses[2] === 'bad' &&
       (await page.isVisible('#batchBody tr[data-id="3"] td.bout')), JSON.stringify(b.summary.stats[0].outliers));
     const tl = await page.textContent('.bconcl');
-    check(`${label}: tuning status per antenna and a summary line ("n of 6 tuned")`, statuses.every((x) => ['tuned', 'shorten', 'lengthen', 'bad'].includes(x)) &&
-      /\d of 6 tuned/.test(tl) && /(shorten|tuned)/.test(await page.textContent('#batchBody table.bants')), tl);
-    check(`${label}: plain-words conclusion separates offset and spread`, /(Systematic offset|On target on average|On average the lot)/.test(tl) && /(Consistent lot|Spread σ|manufacturing variance)/.test(tl) && /outlier/.test(tl), tl);
-    const shortOK = b.antennas.filter((a) => a.metrics.tuning.status === 'shorten').every((a) => /↓ shorten \d+\.\d mm/.test(a.metrics.tuning.text) && a.metrics.tuning.method === 'ratio');
-    check(`${label}: trim advice in mm from the element length (TUNE's calculator)`, shortOK, JSON.stringify(b.antennas.map((a) => a.metrics.tuning.text)));
+    check(`${label}: status per antenna against the acceptance (Auto) and a summary line ("n of 6 cover the band")`, statuses.every((x) => ['tuned', 'ok', 'shorten', 'lengthen', 'bad'].includes(x)) &&
+      /\d of 6 cover the band at SWR < 2\.0 \(\d on the ± 1\.30 MHz tuning aim\)/.test(tl) && /(OK · \d+ % margin used|tuned)/.test(await page.textContent('#batchBody table.bants')), tl);
+    check(`${label}: graded, margin-based lot conclusion (unit #3 fails: must correct, the lot itself is centred)`, b.summary.grade === 'must' && /^MUST CORRECT/.test(tl) &&
+      /Must correct: 1 of 6 antennas do not cover 863\.00–870\.00 MHz at SWR < 2\.0 \(#3\)/.test(tl) && /(onsistent lot|spread)/.test(tl) && /outlier/.test(tl) &&
+      /Acceptance: band SWR < 2\.0, resonance Auto ±/.test(await page.textContent('#bvCrit')), tl);
+    const okLow = b.antennas.filter((a) => a.metrics.tuning.status === 'ok' && a.metrics.offset < 0);
+    check(`${label}: trim advice in mm from the element length, optional while the band is covered`, okLow.length > 0 && okLow.every((a) => /Optional: shorten \d+\.\d mm would centre it/.test(a.metrics.tuning.detail) && a.metrics.tuning.method === 'ratio'),
+      JSON.stringify(b.antennas.map((a) => a.metrics.tuning.text)));
     const ink = await page.evaluate(() => ['bvPlot', 'bvStrip'].map((cid) => { const c = document.getElementById(cid), d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data; let k = 0; for (let i = 0; i < d.length; i += 16) if (d[i + 3] > 0) k++; return k; }));
     check(`${label}: overlay and resonance strip drawn`, ink.every((k) => k > 500), String(ink));
     if (shots) await batchShot(page, 'batch-light.png', 1900);
@@ -673,19 +676,59 @@ async function batchFlow(browser, base, label, shots) {
     await sp.waitForURL(/#print$/, { timeout: 20000 });
     await sp.waitForSelector('.sheet');
     await sp.waitForFunction(() => window.__printed >= 1, null, { timeout: 5000 });
-    const txt = await sp.textContent('.sheet');
-    const svg = await sp.evaluate(() => [document.querySelectorAll('svg.overlay polyline').length, document.querySelectorAll('svg.spread circle, svg.spread path').length]);
-    check(`${label}: batch sheet opens and prints, with overlay, spread chart, tables and conclusion`, /869 whip lot A/.test(txt) && /tuned \(± 1\.30 MHz\)/.test(txt) && /Lot statistics/.test(txt) &&
-      /SN 0042/.test(txt) && /(Systematic offset|On target on average|On average)/.test(txt) && svg[0] >= 8 && svg[1] >= 8 && (await sp.$('td.out')) !== null, JSON.stringify(svg));
-    check(`${label}: batch sheet has the lot's photo, link and QR code`, (await sp.$('.photo img')) !== null && (await sp.$('svg.qr')) !== null && /aliexpress\.com\/item\/1005006123456789\.html\?aff_fcid=f1&sk=s4/.test(txt));
+    const txt = await sp.textContent('.page.p2 .sheet');
+    const svg = await sp.evaluate(() => [document.querySelectorAll('svg.overlay polyline[data-ant]').length, document.querySelectorAll('svg.overlay polyline[data-avg]').length,
+      document.querySelectorAll('svg.lotsmith polyline[data-ant]').length, document.querySelectorAll('svg.lotrl polyline[data-ant]').length,
+      document.querySelectorAll('.lotlegend .lg[data-ant]').length, [...document.querySelectorAll('.lotlegend .lg[data-ant]')].map((e) => e.textContent).join('|'),
+      document.querySelectorAll('svg.spread text.lbl').length]);
+    check(`${label}: batch print page 1: every antenna on each graph plus the lot average, with a legend of their labels`, svg[0] === 8 && svg[1] === 1 && svg[2] === 8 && svg[3] === 8 && svg[4] === 8 &&
+      /SN 0042/.test(svg[5]) && !!(await sp.$('.page.p1 .crit .criteria')), JSON.stringify(svg));
+    check(`${label}: batch print page 2: conclusion, strip, tables, criteria`, /869 whip lot A/.test(txt) && /\d \/ 8\s*cover the band at SWR < 2/.test(txt) && /Lot statistics/.test(txt) &&
+      /SN 0042/.test(txt) && /(Fine|Worth correcting|Must correct)/.test(txt) && /band SWR < 2\.0, resonance Auto/.test(txt) && svg[6] >= 10 && (await sp.$('.page.p2 td.out')) !== null,
+      JSON.stringify([/\d \/ 8\s*cover the band at SWR < 2/.test(txt), /Lot statistics/.test(txt), /SN 0042/.test(txt), /(Fine|Worth correcting|Must correct)/.test(txt), /band SWR < 2\.0, resonance Auto/.test(txt), svg[6]]));
+    const lay = await sp.evaluate(() => { // strip labels: no overlap, nothing outside the drawing
+      const svgEl = document.querySelector('svg.spread'), R = svgEl.getBoundingClientRect();
+      const bx = [...svgEl.querySelectorAll('text.lbl')].map((t) => t.getBoundingClientRect()).filter((r) => r.width > 0);
+      let over = 0, out = 0;
+      for (let i = 0; i < bx.length; i++) {
+        const a = bx[i];
+        if (a.left < R.left - 0.5 || a.right > R.right + 0.5 || a.top < R.top - 0.5 || a.bottom > R.bottom + 0.5) out++;
+        for (let j = i + 1; j < bx.length; j++) { const c = bx[j]; if (a.left < c.right - 0.5 && c.left < a.right - 0.5 && a.top < c.bottom - 0.5 && c.top < a.bottom - 0.5) over++; }
+      }
+      return [bx.length, over, out];
+    });
+    check(`${label}: resonance strip labels do not overlap and are not clipped`, lay[0] >= 10 && lay[1] === 0 && lay[2] === 0, JSON.stringify(lay));
+    check(`${label}: batch sheet has the lot's photo, link and QR code`, (await sp.$('.photo img')) !== null && (await sp.$('svg.qr')) !== null && /aliexpress\.com\/item\/1005006123456789\.html\?aff_fcid=f1&sk=s4/.test(await sp.textContent('body')));
     for (const paper of ['a4', 'letter']) {
       await sp.evaluate((p) => setPaper(p, false), paper);
       await sp.emulateMedia({ media: 'print' });
       const pdf = await sp.pdf({ preferCSSPageSize: true, printBackground: true });
-      check(`${label}: batch sheet fits one ${paper === 'a4' ? 'A4' : 'Letter'} page`, pdfPages(pdf) === 1, String(pdfPages(pdf)));
+      check(`${label}: batch print is exactly 2 ${paper === 'a4' ? 'A4' : 'Letter'} pages (8 antennas)`, pdfPages(pdf) === 2, String(pdfPages(pdf)));
       if (shots) pdfShot(pdf, `batch-sheet-${paper}`);
     }
     await sp.close();
+  });
+  await step(`${label}: 5 antennas: 2 pages`, async () => {
+    // A second batch of 5, printed, then the first one is active again.
+    const b5 = await api(page, 'POST', 'api/batches', { name: '869 lot of five' });
+    for (let i = 0; i < 5; i++) { await api(page, 'POST', 'api/mock/antenna', { name: 'lot869' }); await api(page, 'POST', 'api/sweep'); await api(page, 'POST', `api/batches/${b5.id}/capture`, {}); }
+    const r = await api(page, 'POST', `api/batches/${b5.id}/sheet`, {});
+    const [sp] = await Promise.all([ctx.waitForEvent('page', { timeout: 20000 }), page.evaluate(async (u) => { const w = window.open('', '_blank'); await EasyVNAHost.openReport(w, u.url, u.file); }, r)]);
+    await sp.waitForSelector('.sheet');
+    const n = await sp.evaluate(() => [document.querySelectorAll('svg.overlay polyline[data-ant]').length, document.querySelectorAll('.lotlegend .lg[data-ant]').length]);
+    let ok = n[0] === 5 && n[1] === 5;
+    for (const paper of ['a4', 'letter']) {
+      await sp.evaluate((p) => setPaper(p, false), paper);
+      await sp.emulateMedia({ media: 'print' });
+      const pdf = await sp.pdf({ preferCSSPageSize: true, printBackground: true });
+      ok = ok && pdfPages(pdf) === 2;
+      if (shots) pdfShot(pdf, `tolerance/batch-5-${paper}`);
+    }
+    check(`${label}: a 5-antenna batch print is 2 pages on A4 and Letter, 5 traces and labels`, ok, JSON.stringify(n));
+    await sp.close();
+    await api(page, 'DELETE', `api/batches/${b5.id}`);
+    await api(page, 'POST', 'api/batch', { active: id });
+    await page.evaluate((i) => loadBatch(i), id);
   });
   await step(`${label}: 20 antennas still fit one page`, async () => {
     for (let i = 0; i < 12; i++) { await api(page, 'POST', 'api/mock/antenna', { name: 'lot869' }); await api(page, 'POST', `api/batches/${id}/capture`, {}); }
@@ -698,10 +741,11 @@ async function batchFlow(browser, base, label, shots) {
       await sp.evaluate((p) => setPaper(p, false), paper);
       await sp.emulateMedia({ media: 'print' });
       const pdf = await sp.pdf({ preferCSSPageSize: true, printBackground: true });
-      ok = ok && pdfPages(pdf) === 1;
+      ok = ok && pdfPages(pdf) === 2;
       if (shots) pdfShot(pdf, `batch-sheet-20-${paper}`);
     }
-    check(`${label}: a 20-antenna batch sheet is one page on A4 and Letter (compact table)`, ok && (await sp.$('.halves')) !== null);
+    const tr = await sp.evaluate(() => document.querySelectorAll('svg.overlay polyline[data-ant]').length);
+    check(`${label}: a 20-antenna batch print is 2 pages on A4 and Letter (compact table), 20 traces`, ok && tr === 20 && (await sp.$('.halves')) !== null, String(tr));
     await sp.close();
     await page.evaluate(() => loadBatch(S.batch.id));
   });
@@ -796,6 +840,228 @@ async function batchPhone(browser, base) {
   await batchShot(page, 'batch-phone.png');
   await page.evaluate(() => { document.getElementById('batchView').scrollTop = document.querySelector('#bvPlot').offsetTop - 60; });
   await batchShot(page, 'batch-phone-2.png');
+  ctx.report();
+  await ctx.close();
+}
+
+// ---------- acceptance, setup check, Measure ×N ----------
+// waitMeasure waits until the Measure ×N job id is over and returns it.
+async function waitMeasure(page, timeout = 40000) {
+  await page.waitForFunction(() => S.state.measure && !S.state.measure.running, null, { timeout });
+  return page.evaluate(() => S.state.measure);
+}
+async function startMeasure(page, sel) {
+  const before = await page.evaluate(() => (S.state.measure ? S.state.measure.id : 0));
+  await page.click(sel);
+  await page.waitForFunction((b) => S.state.measure && S.state.measure.id > b, before, { timeout: 10000 });
+}
+const LONG_CAP = 'Photo caption <b>x</b> ' + 'taken on the bench, free air, 1 m above the table, RG316 pigtail '.repeat(4);
+const LONG_NOTE = 'Link note <b>x</b> ' + 'small print under the link, plain text only, wraps in its block '.repeat(4);
+async function toleranceFlow(browser, base, label, shots) {
+  const url = base + '?demo&antenna=869';
+  const ctx = await newCtx(browser, url, label);
+  const page = await ctx.newPage();
+  await page.goto(url);
+  await ready(page, true);
+  await sweepDone(page, () => page.locator('.profile', { hasText: '869' }).first().click());
+  await step(`${label}: acceptance changes the verdicts`, async () => {
+    const b0 = await page.evaluate(() => S.res.summary.bands[0]);
+    check(`${label}: default acceptance: SWR limit 2, GOOD below 1.5, Auto tolerance`, b0.limit === 2 && b0.good === 1.5 &&
+      /band SWR < 2\.0, resonance Auto ± \d+\.\d\d MHz/.test(await page.textContent('#accBar')), JSON.stringify([b0.limit, b0.verdict]));
+    check(`${label}: the antenna (resonating 13 MHz low) is OK at SWR 2`, b0.verdict !== 'bad' && b0.worstSWR > 1.5, b0.worstSWR.toFixed(2));
+    await page.click('#accOpen');
+    await page.waitForSelector('#accView:not([hidden])');
+    check(`${label}: acceptance dialog shows the windows in MHz, Auto from the sweep, and the datasheet context`,
+      /± 1\.30 MHz at 869/.test(await page.textContent('#accW_tight')) && /± 4\.3[45] MHz at 869/.test(await page.textContent('#accW_normal')) &&
+      /MHz at 869 \(from the latest sweep\)/.test(await page.textContent('#accW_auto')) && /VSWR over the whole band, usually 2:1/.test(await page.textContent('.acchelp')));
+    await page.check('input[name=accL][value="1.5"]');
+    check(`${label}: GOOD / OK / BAD mapping follows the limit`, /GOOD: worst in-band SWR below 1\.25 · OK: below 1\.50/.test(await page.textContent('#accMap')));
+    await page.check('input[name=accT][value=normal]');
+    await page.check('input[name=accScope][value=profile]');
+    if (shots) await shot(page, 'tolerance/acceptance-dialog.png', false);
+    await page.click('#accSave');
+    await page.waitForFunction(() => S.res && S.res.summary.bands[0].limit === 1.5, null, { timeout: 10000 });
+    const r = await page.evaluate(() => [S.res.summary.bands[0].verdict, S.state.acceptance.own, document.getElementById('accBar').textContent, document.querySelector('.vcard .badge').textContent]);
+    check(`${label}: SWR limit 1.5 for this profile: the band is BAD, the criteria line says so`, r[0] === 'bad' && r[1] && /band SWR < 1\.5, resonance ± 0\.5 % \(± 4\.35 MHz\)/.test(r[2]) && /BAD/.test(r[3]), JSON.stringify(r));
+    if (shots) await shot(page, 'tolerance/verdict-strict.png', false);
+    // Persisted with the data: reload keeps it.
+    await page.reload(); await ready(page, true);
+    await sweepDone(page, () => page.locator('.profile', { hasText: '869' }).first().click());
+    check(`${label}: the acceptance setting survives a reload`, await page.evaluate(() => S.state.acceptance.limit === 1.5 && S.state.acceptance.setting.tol === 'normal' && S.res.summary.bands[0].limit === 1.5));
+    // TUNE uses the tolerance as its aim.
+    await page.click('#aTune');
+    await page.waitForFunction(() => S.res && S.res.tune && S.res.tune.accept, null, { timeout: 20000 });
+    const ta = await page.textContent('#tAccept');
+    check(`${label}: TUNE aims at the acceptance tolerance and prints the criteria`, /aim ± 4\.35 MHz/.test(ta) && /band SWR < 1\.5/.test(ta), ta);
+    await page.click('#tuneClose');
+    await page.waitForFunction(() => !S.state.tune.active, null, { timeout: 10000 });
+    // Back to the default, Auto: TUNE keeps its fine ± 0.15 % aim.
+    await page.click('#accOpen');
+    await page.click('#accReset');
+    await page.waitForFunction(() => !S.state.acceptance.own && S.state.acceptance.limit === 2, null, { timeout: 10000 });
+    await page.click('#aTune');
+    await page.waitForFunction(() => S.res && S.res.tune && S.res.tune.accept && S.res.tune.accept.mode === 'auto', null, { timeout: 20000 });
+    const tb = await page.textContent('#tAccept');
+    check(`${label}: with Auto, TUNE keeps ± 0.15 % as its fine aim and shows the margin`, /aim ± 1\.30 MHz \(fine tuning aim\)/.test(tb) && /resonance Auto/.test(tb), tb);
+    if (shots) await shot(page, 'tolerance/tune-accept.png', false);
+    await page.click('#tuneClose');
+    await page.waitForFunction(() => !S.state.tune.active, null, { timeout: 10000 });
+    await sweepDone(page, () => page.click('#aSweep'));
+  });
+  await step(`${label}: Measure ×5 with progress, cancel, re-seat`, async () => {
+    await page.selectOption('#mmMN', '5');
+    await startMeasure(page, '#mmMGo');
+    await page.waitForFunction(() => /^[1-5]\/5$/.test((document.getElementById('measureCount') || {}).textContent || ''), null, { timeout: 10000 });
+    check(`${label}: Measure ×5 shows its progress (n/5)`, !(await page.isHidden('#measureBar')));
+    if (shots) await shot(page, 'tolerance/measure-progress.png', false);
+    const m = await waitMeasure(page);
+    const mu = await page.evaluate(() => S.res.multi);
+    check(`${label}: Measure ×5: vector average with repeatability on screen`, m.status === 'done' && mu && mu.n === 5 && mu.mode === 'still' && mu.envMin.length === 401 &&
+      /average of 5 · resonance σ \d\.\d\d MHz · SWR σ/.test(await page.textContent('#multiLine')) && /×5: min \/ max/.test(await page.textContent('#legend')), JSON.stringify(m));
+    check(`${label}: AVG is unchanged by Measure ×N`, (await page.evaluate(() => S.state.config.avg)) === 1);
+    // Cancel.
+    await page.selectOption('#mmMN', '10');
+    await startMeasure(page, '#mmMGo');
+    await page.waitForFunction(() => S.state.measure.done >= 1, null, { timeout: 10000 });
+    await page.click('#measureCancel');
+    const c = await waitMeasure(page);
+    check(`${label}: Measure ×10 can be cancelled`, c.status === 'cancelled' && c.done < 10 && (await page.isHidden('#measureBar')), JSON.stringify(c));
+    // Re-seat: waits for the antenna to be unscrewed and steady again.
+    await page.selectOption('#mmMN', '3');
+    await page.check('#mmMR');
+    await startMeasure(page, '#mmMGo');
+    for (let k = 1; k <= 2; k++) {
+      await page.waitForFunction((k) => S.state.measure.done === k && S.state.measure.phase === 'waiting', k, { timeout: 15000 });
+      if (k === 1) {
+        check(`${label}: re-seat mode asks to unscrew and reconnect, with Continue`, /Unscrew and reconnect/.test(await page.textContent('#measureBar')) && !!(await page.$('#measureCont')));
+        if (shots) await shot(page, 'tolerance/measure-reseat.png', false);
+      }
+      await page.click('#measureSim');
+    }
+    const rs = await waitMeasure(page);
+    check(`${label}: re-seat: continues by itself once the antenna is steady again, labelled re-seated`, rs.status === 'done' && rs.done === 3 &&
+      (await page.evaluate(() => S.res.multi.mode)) === 'reseat' && /re-seated/.test(await page.textContent('#multiLine')), JSON.stringify(rs));
+    await page.uncheck('#mmMR');
+    await page.selectOption('#mmMN', '5');
+  });
+  await step(`${label}: setup check`, async () => {
+    for (const [ant, verdict, rx] of [['cm869', 'coupled', /The cable is part of the antenna/], ['869tuned', 'quiet', /Cable is quiet: measurements are trustworthy/]]) {
+      await api(page, 'POST', 'api/mock/antenna', { name: ant });
+      await sweepDone(page, () => page.click('#aSweep'));
+      await page.click('#setupOpen');
+      await page.waitForSelector('#setupView:not([hidden])');
+      if (await page.$('#setupReset:not([disabled])')) { await page.click('#setupReset'); await page.waitForFunction(() => !S.state.setup); }
+      await page.click('[data-setup=A]');
+      await page.waitForFunction(() => S.state.setup && S.state.setup.steps.length === 1 && !S.state.measure.running, null, { timeout: 30000 });
+      await page.check('#setupHand');
+      await page.waitForFunction(() => S.state.mockHand, null, { timeout: 5000 });
+      await page.click('[data-setup=B]');
+      await page.waitForFunction(() => S.state.setup && S.state.setup.result && !S.state.measure.running, null, { timeout: 30000 });
+      await page.uncheck('#setupHand');
+      await page.waitForFunction(() => !S.state.mockHand, null, { timeout: 5000 });
+      const v = await page.evaluate(() => S.state.setup.result);
+      check(`${label}: setup check on ${ant}: ${verdict}`, v.verdict === verdict && rx.test(await page.textContent('#setupResult')), JSON.stringify([v.verdict, v.line]));
+      if (shots) await shot(page, `tolerance/setup-${verdict}.png`, false);
+      await page.click('#setupClose');
+    }
+  });
+  await step(`${label}: BATCH with Measure ×3 per antenna; acceptance changes the statuses`, async () => {
+    await api(page, 'POST', 'api/mock/antenna', { name: 'lot869' });
+    await sweepDone(page, () => page.click('#aSweep'));
+    await page.click('#aBatch');
+    await page.waitForSelector('#bnGo', { timeout: 10000 });
+    await page.fill('#bnName', 'lot ×3');
+    await page.fill('#bnLen', '82');
+    await page.click('#bnGo');
+    await page.waitForSelector('#bvCapture', { timeout: 10000 });
+    await page.selectOption('#bvN', '3');
+    for (let i = 1; i <= 4; i++) {
+      if (i > 1) { await api(page, 'POST', 'api/mock/antenna', { name: 'lot869' }); await page.waitForTimeout(100); }
+      await page.click('#bvCapture');
+      if (i === 1) {
+        await page.waitForFunction(() => S.state.measure && S.state.measure.running && S.state.measure.for === 'batch', null, { timeout: 10000 });
+        check(`${label}: batch capture ×3 shows its progress`, /Batch capture ×3/.test(await page.textContent('#measureBar')));
+      }
+      await waitMeasure(page);
+      await page.waitForFunction((k) => S.batch && S.batch.antennas.length === k, i, { timeout: 15000 });
+    }
+    const b = await page.evaluate(() => S.batch);
+    const c = await page.textContent('.bconcl');
+    check(`${label}: each batch antenna is the average of 3, with its repeatability; the lot compares spread with repeatability`, b.antennas.every((a) => a.rep && a.rep.n === 3 && a.avgN === 3) &&
+      b.summary.nRepeat === 4 && /×3, σ \d\.\d\d MHz/.test(await page.textContent('#batchBody table.bants')) && /Spread between antennas σ \d+\.\d\d MHz vs repeatability σ \d\.\d\d MHz \(Measure ×N\)/.test(c) && /Indicative: /.test(c), c);
+    if (shots) await batchShot(page, 'tolerance/batch-repeat.png', 1900);
+    // Tight tolerance: statuses and the criteria follow.
+    await api(page, 'POST', 'api/acceptance', { profile: '869', scope: 'profile', accept: { tol: 'tight' } });
+    await page.evaluate(() => loadBatch(S.batch.id));
+    const t = await page.evaluate(() => [S.batch.summary.window.mode, S.batch.antennas.map((a) => a.metrics.tuning.status), document.getElementById('bvCrit').textContent, document.querySelector('.btally .tl').textContent]);
+    check(`${label}: tight tolerance: batch statuses become tuned / shorten / lengthen and the criteria say ± 0.15 %`, t[0] === 'tight' && t[1].every((x) => ['tuned', 'shorten', 'lengthen', 'bad'].includes(x)) &&
+      /band SWR < 2\.0, resonance ± 0\.15 % \(± 1\.30 MHz\)/.test(t[2]) && t[3] === 'Tuned', JSON.stringify(t));
+    const r = await api(page, 'POST', `api/batches/${b.id}/sheet`, {});
+    const [sp] = await Promise.all([ctx.waitForEvent('page', { timeout: 20000 }), page.evaluate(async (u) => { const w = window.open('', '_blank'); await EasyVNAHost.openReport(w, u.url, u.file); }, r)]);
+    await sp.waitForSelector('.sheet');
+    check(`${label}: the batch print states its criteria and the repeatability`, /band SWR < 2\.0, resonance ± 0\.15 % \(± 1\.30 MHz\)/.test(await sp.textContent('body')) && /repeatab/i.test(await sp.textContent('body')));
+    await sp.close();
+    await api(page, 'POST', 'api/acceptance', { profile: '869', reset: true });
+    await page.click('#batchClose');
+  });
+  await step(`${label}: antenna sheet: criteria, measurement, setup check, small print`, async () => {
+    await api(page, 'POST', 'api/mock/antenna', { name: '869' });
+    await sweepDone(page, () => page.click('#aSweep'));
+    await page.click('#aPrint');
+    await page.waitForSelector('#sheetView:not([hidden])');
+    await page.fill('#sh_name', 'whip-tol');
+    await page.fill('#sh_link', 'https://example.com/antenna-869');
+    await page.fill('#sh_Cap', LONG_CAP.slice(0, 200));
+    await page.fill('#sh_Note', LONG_NOTE.slice(0, 200));
+    await page.check('#sh_NoteDef');
+    await page.setInputFiles('#shPhotoFile', PHOTO);
+    await page.waitForFunction(() => S.sheetPhoto.startsWith('data:image/png'), null, { timeout: 10000 });
+    await page.selectOption('#shMN', '3');
+    await startMeasure(page, '#shMGo');
+    await waitMeasure(page);
+    await page.waitForFunction(() => /average of 3/.test(document.getElementById('shMeas').textContent), null, { timeout: 5000 });
+    if (shots) await shot(page, 'tolerance/sheet-dialog.png', false);
+    const [sp] = await Promise.all([ctx.waitForEvent('page', { timeout: 20000 }), page.click('#shPrint')]);
+    await sp.waitForSelector('.sheet');
+    const txt = await sp.textContent('.sheet');
+    check(`${label}: the sheet states its criteria, the measurement and the last setup check`, /Acceptance: band SWR < 2\.0, resonance Auto ±/.test(txt) &&
+      /Measurement: average of 3/.test(txt) && /Setup check/.test(txt) && /PASS = worst in-band SWR < 1\.5, OK < 2/.test(txt));
+    const sp1 = await sp.evaluate(() => {
+      const c = document.querySelector('.pbox .smallprint.photocaption'), n = document.querySelector('.qrbox .smallprint.linknote');
+      const fs = c && parseFloat(getComputedStyle(c).fontSize);
+      return c && n ? [c.textContent, n.textContent, fs, !!c.querySelector('b'), c.closest('.pbox').querySelector('.photo') !== null, n.closest('.qrbox').querySelector('svg.qr') !== null] : null;
+    });
+    check(`${label}: photo caption under the photo and link note under the QR code, small and escaped`, !!sp1 && sp1[0].startsWith('Photo caption <b>x</b>') && sp1[1].startsWith('Link note <b>x</b>') &&
+      sp1[0].length === 200 && sp1[2] < 9.5 && !sp1[3] && sp1[4] && sp1[5], JSON.stringify(sp1 && sp1.slice(2)));
+    for (const paper of ['a4', 'letter']) {
+      await sp.evaluate((p) => setPaper(p, false), paper);
+      await sp.emulateMedia({ media: 'print' });
+      const pdf = await sp.pdf({ preferCSSPageSize: true, printBackground: true });
+      check(`${label}: sheet with 200-character small print fits one ${paper === 'a4' ? 'A4' : 'Letter'} page`, pdfPages(pdf) === 1, String(pdfPages(pdf)));
+      if (shots) pdfShot(pdf, `tolerance/sheet-smallprint-${paper}`);
+    }
+    await sp.close();
+    // The link note default pre-fills a new antenna; the fields come back after a reload.
+    await page.reload(); await ready(page, true);
+    check(`${label}: the link note default is persisted`, (await page.evaluate(() => S.state.cal.settings.linkNoteDefault)) === LONG_NOTE.slice(0, 200).trim());
+    await sweepDone(page, () => page.locator('.profile', { hasText: '869' }).first().click());
+    await page.click('#aPrint');
+    await page.waitForSelector('#sheetView:not([hidden])');
+    await page.fill('#sh_name', 'whip-new'); await page.dispatchEvent('#sh_name', 'change');
+    await page.waitForFunction(() => /New antenna/.test(document.getElementById('shKnown').textContent), null, { timeout: 5000 });
+    const pre = await page.inputValue('#sh_Note');
+    await page.fill('#sh_name', 'whip-tol'); await page.dispatchEvent('#sh_name', 'change');
+    await page.waitForFunction(() => /Known antenna/.test(document.getElementById('shKnown').textContent), null, { timeout: 5000 });
+    check(`${label}: link note pre-filled for a new antenna; caption and note come back for a known one`, pre === LONG_NOTE.slice(0, 200).trim() &&
+      (await page.inputValue('#sh_Cap')) === LONG_CAP.slice(0, 200).trim() && (await page.inputValue('#sh_Note')) === LONG_NOTE.slice(0, 200).trim(), pre.slice(0, 30));
+    await page.click('#shCancel');
+    // Export / Import data carries them (settings and the antenna record).
+    const ex = await download(page, () => page.click('#hostExport'));
+    const files = JSON.parse(ex.body.toString()).files.map((f) => f.name);
+    const body = ex.body.toString();
+    check(`${label}: Export data includes the acceptance setting and the small print`, files.includes('settings.json') && /linkNoteDefault/.test(JSON.parse(body).files.find((f) => f.name === 'settings.json').data) &&
+      files.some((f) => /antennas\/whip-tol/.test(f)), files.join(','));
+  });
   ctx.report();
   await ctx.close();
 }
@@ -1354,7 +1620,7 @@ async function nativeFlasher(browser) {
 }
 
 (async () => {
-  if (SHOTS) fs.mkdirSync(SHOTS, { recursive: true });
+  if (SHOTS) fs.mkdirSync(path.join(SHOTS, 'tolerance'), { recursive: true });
   const browser = await chromium.launch({ headless: true });
   console.log(`page: ${HTML} (${fs.statSync(HTML).size} bytes), Chromium ${browser.version()}`);
   const srv = await serve();
@@ -1369,6 +1635,11 @@ async function nativeFlasher(browser) {
         await flasherSerialFlow(browser, base, label + ' flasher-serial', label === 'http' && !!SHOTS);
         continue;
       }
+      if (ONLY === 'tolerance') { // E2E_ONLY=tolerance: acceptance, setup check, Measure ×N
+        console.log(`\n== acceptance, setup check, Measure ×N over ${label}`);
+        await toleranceFlow(browser, base, label + ' tolerance', label === 'http' && !!SHOTS);
+        continue;
+      }
       if (ONLY === 'batch') { // E2E_ONLY=batch: just the BATCH checks (and their screenshots)
         console.log(`\n== BATCH over ${label}`);
         await batchFlow(browser, base, label + ' batch', label === 'http' && !!SHOTS);
@@ -1378,6 +1649,8 @@ async function nativeFlasher(browser) {
       await demoFlow(browser, base, label, label === 'http' && !!SHOTS);
       console.log(`\n== BATCH over ${label}`);
       await batchFlow(browser, base, label + ' batch', label === 'http' && !!SHOTS);
+      console.log(`\n== acceptance, setup check, Measure ×N over ${label}`);
+      await toleranceFlow(browser, base, label + ' tolerance', label === 'http' && !!SHOTS);
       console.log(`\n== Web Serial (fake port) over ${label}`);
       await serialFlow(browser, base, label + ' usb', label === 'http' && !!SHOTS);
       console.log(`\n== NanoVNA V2 (experimental) over ${label}`);
@@ -1388,9 +1661,9 @@ async function nativeFlasher(browser) {
       await flasherFlow(browser, base, label + ' flasher', label === 'http' && !!SHOTS);
       await flasherSerialFlow(browser, base, label + ' flasher-serial', label === 'http' && !!SHOTS);
     }
-    if (ONLY !== 'batch') await nativeFlasher(browser);
+    if (ONLY !== 'batch' && ONLY !== 'tolerance') await nativeFlasher(browser);
     if (ONLY === 'batch') await batchPhone(browser, httpBase);
-    if (ONLY !== 'flasher' && ONLY !== 'batch') {
+    if (ONLY !== 'flasher' && ONLY !== 'batch' && ONLY !== 'tolerance') {
       await batchPhone(browser, httpBase);
       console.log('\n== offline download (http)');
       await offlineFlow(browser, httpBase, 'offline');
