@@ -26,6 +26,11 @@ jobs:
           GOOS=js GOARCH=wasm go vet ./...
       - name: test
         run: go test -race ./...
+      - uses: actions/setup-node@v4.1.0
+        with:
+          node-version: 22
+      - name: JavaScript unit tests (firmware flasher)
+        run: scripts/test-js.sh
       - name: cross-build
         run: |
           for t in windows/amd64 windows/arm64 linux/arm64 darwin/arm64; do
