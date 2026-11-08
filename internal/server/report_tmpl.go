@@ -89,7 +89,7 @@ table.dips td:nth-child(-n+8) { white-space: nowrap; }
   .toolbar, .noprint { display: none !important; }
   .foot { display: none; }
 }
-@media (max-width: 700px) {
+@media screen and (max-width: 700px) {
   .paper { padding: 5mm; } .meta { grid-template-columns: auto 1fr; } .row2, .cols { grid-template-columns: 1fr; }
 }
 </style>

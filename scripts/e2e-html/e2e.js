@@ -706,6 +706,17 @@ async function batchFlow(browser, base, label, shots) {
       check(`${label}: batch print is exactly 2 ${paper === 'a4' ? 'A4' : 'Letter'} pages (8 antennas)`, pdfPages(pdf) === 2, String(pdfPages(pdf)));
       if (shots) pdfShot(pdf, `batch-sheet-${paper}`);
     }
+    // Printing zoomed in (page zoom or the print dialog's Scale) narrows the
+    // page in CSS px under the phone layout's 700 px: the print must keep
+    // the paper layout (a phone rule once stacked page 1 onto 3 pages).
+    {
+      const vp = sp.viewportSize();
+      await sp.setViewportSize({ width: 640, height: 900 });
+      await sp.emulateMedia({ media: 'print' });
+      const cols = await sp.evaluate(() => [...document.querySelectorAll('.prow')].map((e) => getComputedStyle(e).gridTemplateColumns.split(' ').length));
+      check(`${label}: printing on a page narrower than 700 CSS px (zoomed print) keeps the paper layout`, cols.length > 0 && cols.every((n) => n >= 2), JSON.stringify(cols));
+      await sp.setViewportSize(vp);
+    }
     await sp.close();
   });
   await step(`${label}: 5 antennas: 2 pages`, async () => {

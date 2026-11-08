@@ -579,7 +579,7 @@ td.lbl { max-width: 30mm; overflow: hidden; text-overflow: ellipsis; }
   .toolbar, .noprint { display: none !important; }
   .sheet:not(.long) { break-inside: avoid; page-break-inside: avoid; }
 }
-@media (max-width: 700px) {
+@media screen and (max-width: 700px) {
   .paper { padding: 4mm; } .sh { grid-template-columns: 1fr; } .meta { grid-template-columns: auto 1fr; }
   .figs { grid-template-columns: repeat(3, 1fr); } .prow, .cols, .kf { grid-template-columns: 1fr; }
   .tables { overflow-x: auto; }

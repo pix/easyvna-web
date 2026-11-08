@@ -83,7 +83,7 @@ td.num, th.num { text-align: right; }
   .toolbar, .noprint { display: none !important; }
   .sheet { break-inside: avoid; page-break-inside: avoid; }
 }
-@media (max-width: 700px) {
+@media screen and (max-width: 700px) {
   .paper { padding: 4mm; } .figs { grid-template-columns: repeat(3, 1fr); } .prow, .cols, .kf { grid-template-columns: 1fr; }
   .meta { grid-template-columns: auto 1fr; }
 }
