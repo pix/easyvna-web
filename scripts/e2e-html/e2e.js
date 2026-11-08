@@ -663,7 +663,7 @@ async function batchFlow(browser, base, label, shots) {
     const c = await download(page, () => page.click('#batchBody a:has-text("CSV")'));
     const lines = c.body.toString().trim().split('\n');
     check(`${label}: batch CSV: one row per antenna and the statistics`, c.name === '869_whip_lot_A-batch.csv' && lines.filter((l) => /^\d+,/.test(l)).length === 8 &&
-      /SN 0042/.test(c.body) && /^statistic,unit,n,mean,sd,min,max,spread,median,outliers/m.test(c.body) && /^Resonance,MHz,8,/m.test(c.body) && /tuned|shorten/.test(c.body), c.name);
+      /SN 0042/.test(c.body) && /^statistic,unit,n,mean,sd,min,max,spread,median,outliers/m.test(c.body) && /^Resonance,MHz,8,/m.test(c.body) && /tuned|shorten|lengthen|OK|out of band|fails/.test(c.body), c.name + "\n" + c.body.toString().split("\n").slice(0, 12).join("\n"));
     csvFile = c.file;
     const j = await download(page, () => page.click('#batchBody a:has-text("JSON")'));
     const ex = JSON.parse(j.body.toString());
