@@ -670,8 +670,15 @@ async function fwFlash(page, confirmCheck) {
 }
 // fwShot photographs the FIRMWARE dialog: the whole of it when full (the
 // viewport grows to its height), else what is in view.
-async function fwShot(page, name, full) {
+async function fwShot(page, name, full, sel) {
   if (!SHOTS) return;
+  if (sel) { // just that element
+    await page.evaluate(() => { const t = document.getElementById('toast'); if (t) t.hidden = true; });
+    await page.waitForTimeout(200);
+    await page.locator(sel).screenshot({ path: path.join(SHOTS, name) });
+    console.log('  saved ' + path.join(SHOTS, name));
+    return;
+  }
   const vp = page.viewportSize();
   if (full) {
     const h = await page.evaluate(() => { const v = document.getElementById('fwView'); v.scrollTop = 0; return v.scrollHeight; });
@@ -699,8 +706,23 @@ async function flasherFlow(browser, base, label, shots, ctxOpts = {}) {
     check(`${label}: bundled EasyVNA ${FW_MANIFEST.version} loaded, SHA-256 checked`, !fwErr && t.includes(`EasyVNA ${FW_MANIFEST.version} (bundled)`), fwErr);
     const lic = await page.getAttribute('.fwlic a', 'href');
     check(`${label}: GPL-3.0 notice links to the source tag`, /GPL-3\.0/.test(await page.textContent('.fwlic')) && lic === FW_MANIFEST.source, lic);
-    check(`${label}: help: DFU entry, udev rule, Zadig, serial connection`, (await page.getAttribute('#fwHelp', 'open')) !== null &&
-      /hold the jog wheel pushed in and switch it on/.test(t) && /reset dfu/.test(t) && /TAG\+="uaccess"/.test(t) && /Zadig/.test(t) && /WinUSB/.test(t) && /macOS/.test(t));
+    check(`${label}: help: DFU entry, serial connection`, (await page.getAttribute('#fwHelp', 'open')) !== null &&
+      /hold the jog wheel pushed in and switch it on/.test(t) && /reset dfu/.test(t) && /USB drivers and permissions/.test(t));
+    // USB drivers: one tab per OS; Linux = udev rule (both modes), Windows = Zadig/WinUSB, macOS = nothing.
+    await page.click('#fwDrivers > summary');
+    const tab = async (os) => { await page.click(`.fwtab[data-os="${os}"]`); await page.waitForSelector(`#fwDriversBody[data-os="${os}"]`); return page.textContent('#fwDriversBody'); };
+    const lin = await tab('linux');
+    check(`${label}: drivers: Linux udev rule for 0483:5740 and 0483:df11, uaccess, reload`, (await page.getAttribute('#fwDrivers', 'open')) !== null &&
+      /idProduct}=="5740".*TAG\+="uaccess"/s.test(lin) && /idProduct}=="df11", TAG\+="uaccess"/.test(lin) && /70-nanovna\.rules/.test(lin) &&
+      /udevadm control --reload-rules/.test(lin) && /dialout/.test(lin) && /uucp/.test(lin));
+    if (shots) await fwShot(page, 'flasher-drivers-linux.png', false, '#fwDrivers');
+    const win = await tab('windows');
+    check(`${label}: drivers: Windows Zadig, WinUSB, check 0483 DF11, way back`, /Zadig/.test(win) && /WinUSB/.test(win) && /0483 DF11/.test(win) && /Uninstall device/.test(win));
+    if (shots) await fwShot(page, 'flasher-drivers-windows.png', false, '#fwDrivers');
+    const mac = await tab('macos');
+    check(`${label}: drivers: macOS nothing to install`, /Nothing to install/.test(mac));
+    if (shots) await fwShot(page, 'flasher-drivers-macos.png', false, '#fwDrivers');
+    await page.click('#fwDrivers > summary');
     if (shots) await fwShot(page, 'flasher-idle.png', true);
   });
   await step(`${label}: Connect without a device`, async () => {

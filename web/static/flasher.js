@@ -674,7 +674,9 @@
         dev = await navigator.usb.requestDevice({ filters: [{ vendorId: F.VID, productId: F.PID }] });
       } catch (e) {
         if (e && e.name === 'NotFoundError') {
-          throw new Error('No device chosen. Put the NanoVNA in DFU mode (see "How to enter DFU mode" below), plug it in and press Connect again: it shows up as "STM32 BOOTLOADER" (USB 0483:df11).');
+          U.driversOpen = true;
+          throw new Error('No device chosen. Put the NanoVNA in DFU mode (see "How to enter DFU mode" below), plug it in and press Connect again: it shows up as "STM32 BOOTLOADER" (USB 0483:df11). ' +
+            'Not in the list? Windows needs the WinUSB driver, Linux a udev rule: see "USB drivers and permissions" below.');
         }
         throw e;
       }
@@ -685,7 +687,8 @@
       try { await dfu.connect(); } catch (e) {
         await dfu.close();
         if (e && (e.name === 'SecurityError' || e.name === 'NetworkError' || /access denied|unable to claim/i.test(e.message || ''))) {
-          throw new Error(`Could not open the DFU device (${e.message}). On Linux add the udev rule below; on Windows bind WinUSB to "STM32 BOOTLOADER" with Zadig; close other programs using it (STM32CubeProgrammer, dfu-util).`);
+          U.driversOpen = true;
+          throw new Error(`Could not open the DFU device (${e.message}). On Linux install the udev rule, on Windows the WinUSB driver: see USB drivers and permissions below. Also close other programs using it (STM32CubeProgrammer, dfu-util).`);
         }
         throw e;
       }
@@ -803,7 +806,7 @@
       txt.textContent = p ? `${verb} ${F.hex8(p.addr)} · ${F.kb(p.done)} of ${F.kb(p.total)} (${pct} %)` : `${verb}…`;
     }
     function helpHTML(open) {
-      return `<details class="panel fwhelp" id="fwHelp"${open ? ' open' : ''}><summary>How to enter DFU mode, and USB drivers</summary>
+      return `<details class="panel fwhelp" id="fwHelp"${open ? ' open' : ''}><summary>How to enter DFU mode</summary>
         <ol class="fwsteps">
           <li><b>NanoVNA-H4 in DFU mode.</b> From stock firmware: power the H4 off, hold the jog wheel pushed in and switch it on.
             The screen stays blank and the H4 shows up as USB <code>0483:df11</code> ("STM32 BOOTLOADER").
@@ -812,14 +815,89 @@
           <li><b>EasyVNA Web's own connection.</b> In DFU mode the NanoVNA's serial port disappears, so the connection to it ends
             (and comes back after <b>Start firmware</b>). While it is connected, <b>Reboot into DFU</b> (step 1) sends <code>reset dfu</code> for you.
             Close other programs that use the DFU device (STM32CubeProgrammer, dfu-util).</li>
-          <li><b>Linux:</b> allow your user to open the device, e.g. <code>/etc/udev/rules.d/50-stm32-dfu.rules</code>:
-            <pre class="fwpre">SUBSYSTEM=="usb", ATTRS{idVendor}=="0483", ATTRS{idProduct}=="df11", TAG+="uaccess"</pre>
-            then <code>sudo udevadm control --reload</code> and plug the NanoVNA in again.</li>
-          <li><b>Windows:</b> the browser needs the WinUSB driver on "STM32 BOOTLOADER"; ST's own DFU driver is not WinUSB.
-            With <a href="https://zadig.akeo.ie/" target="_blank" rel="noopener">Zadig</a>: Options &gt; List All Devices, pick STM32 BOOTLOADER, WinUSB, Replace Driver.
-            (STM32CubeProgrammer needs ST's driver back afterwards.)</li>
-          <li><b>macOS and ChromeOS:</b> nothing to install.</li>
+          <li><b>Connect (DFU) finds nothing or cannot open the device?</b> See <i>USB drivers and permissions</i> below
+            (Linux: a udev rule; Windows: the WinUSB driver; macOS: nothing to install).</li>
         </ol></details>`;
+    }
+    // detectOS picks the drivers tab to show first.
+    function detectOS() {
+      const nav = root.navigator || {};
+      const ua = String(nav.userAgent || '');
+      const p = String((nav.userAgentData && nav.userAgentData.platform) || nav.platform || ua).toLowerCase();
+      if (/cros/i.test(ua) || p === 'chrome os' || p === 'chromeos') return 'chromeos';
+      if (/mac|iphone|ipad/.test(p)) return 'macos';
+      if (/win/.test(p)) return 'windows';
+      return 'linux';
+    }
+    const UDEV_RULES = `# /etc/udev/rules.d/70-nanovna.rules
+# NanoVNA-H / H4 in normal mode: USB serial (Web Serial, the EasyVNA Web program)
+SUBSYSTEM=="tty", ATTRS{idVendor}=="0483", ATTRS{idProduct}=="5740", TAG+="uaccess", ENV{ID_MM_DEVICE_IGNORE}="1"
+# NanoVNA V2 / LiteVNA: USB serial
+SUBSYSTEM=="tty", ATTRS{idVendor}=="04b4", ATTRS{idProduct}=="0008", TAG+="uaccess", ENV{ID_MM_DEVICE_IGNORE}="1"
+# NanoVNA in DFU mode, "STM32 BOOTLOADER" (WebUSB firmware update)
+SUBSYSTEM=="usb", ATTRS{idVendor}=="0483", ATTRS{idProduct}=="df11", TAG+="uaccess"`;
+    const UDEV_INSTALL = `sudo tee /etc/udev/rules.d/70-nanovna.rules >/dev/null <<'EOF'
+${UDEV_RULES.split('\n').slice(1).join('\n')}
+EOF
+sudo udevadm control --reload-rules && sudo udevadm trigger`;
+    const copyBtn = (id) => `<button class="ghost small fwcopy" type="button" data-copy="${id}">Copy</button>`;
+    const pre = (id, text) => `<div class="fwprewrap">${copyBtn(id)}<pre class="fwpre" id="${id}">${esc(text)}</pre></div>`;
+    function driversHTML(open) {
+      const os = U.os || (U.os = detectOS());
+      const tabs = [['linux', 'Linux'], ['macos', 'macOS'], ['windows', 'Windows'], ['chromeos', 'ChromeOS']];
+      const body = {
+        linux: `<p>Chrome reads and writes the NanoVNA through <code>/dev</code>: your user needs permission on the
+            serial port (normal mode, <code>0483:5740</code>) and on the USB device (DFU mode, <code>0483:df11</code>).
+            Without it, the device is listed but cannot be opened (or is not listed at all).</p>
+          <ol class="fwsteps">
+            <li><b>Install the udev rule</b> (once): it gives the logged-in user access to the NanoVNA in both modes, and keeps
+              ModemManager away from its serial port. Paste in a terminal:
+              ${pre('fwUdevInstall', UDEV_INSTALL)}
+              The file name must sort before <code>73-seat-late.rules</code> for <code>uaccess</code> to work: keep <code>70-</code>.</li>
+            <li><b>Unplug the NanoVNA and plug it in again</b>, then press Connect.</li>
+            <li><b>Check:</b> <code>lsusb -d 0483:</code> lists <code>0483:5740</code> (normal mode) or <code>0483:df11</code>
+              (DFU mode, "STM Device in DFU Mode"). Nothing listed: try another (data) cable or USB port.</li>
+            <li><b>Serial port only, without the rule:</b> add yourself to the serial group, then log out and in again:
+              ${pre('fwGroup', 'sudo usermod -aG uucp "$USER"     # Arch, Manjaro\nsudo usermod -aG dialout "$USER"  # Debian, Ubuntu, Fedora, openSUSE')}
+              The group does not cover DFU mode: the firmware update needs the rule.</li>
+            <li><b>Chromium installed as a Snap</b> (Ubuntu): also allow raw USB, <code>sudo snap connect chromium:raw-usb</code>.</li>
+          </ol>
+          <details class="fwmore"><summary>The rule file itself</summary>${pre('fwUdevRules', UDEV_RULES)}</details>`,
+        macos: `<p><b>Nothing to install.</b> macOS has the drivers for both modes built in, and Chrome or Edge can use them directly.</p>
+          <ol class="fwsteps">
+            <li><b>Normal mode</b>: the NanoVNA appears as a serial port (<code>/dev/cu.usbmodem…</code>); Connect lists it by name.</li>
+            <li><b>DFU mode</b>: it appears as <b>STM32 BOOTLOADER</b> in the Connect (DFU) list.</li>
+            <li><b>Not listed?</b> Check that macOS sees it: Apple menu &gt; About This Mac &gt; More Info &gt; System Report &gt; USB,
+              or in a terminal:
+              ${pre('fwMacCheck', 'system_profiler SPUSBDataType | grep -B2 -A6 -i -E "nanovna|stm32|0x0483"')}
+              Not there: use a data cable (some only charge), another port, or no hub. On some Macs, allow the accessory
+              to connect when macOS asks (System Settings &gt; Privacy &amp; Security &gt; Allow accessories to connect).</li>
+          </ol>`,
+        windows: `<ol class="fwsteps">
+            <li><b>Normal mode: nothing to install.</b> Windows 10 and 11 use their built-in driver: the NanoVNA is a
+              <i>USB Serial Device (COMx)</i> under Device Manager &gt; Ports. Never put WinUSB on it: Web Serial would lose it.</li>
+            <li><b>DFU mode: install WinUSB once</b> (a browser can only reach a USB device that uses the WinUSB driver;
+              Windows installs none, or ST's own DFU driver if you have STM32CubeProgrammer):
+              <ol class="fwsub">
+                <li>Put the NanoVNA in DFU mode and plug it in.</li>
+                <li>Download and run <a href="https://zadig.akeo.ie/" target="_blank" rel="noopener">Zadig</a> (no install needed; allow it to change the system).</li>
+                <li>Menu <b>Options &gt; List All Devices</b>.</li>
+                <li>In the list, pick <b>STM32 BOOTLOADER</b>. <b>Check that USB ID reads <code>0483 DF11</code></b>; if it shows anything else
+                  (your mouse, keyboard, the NanoVNA's <code>0483 5740</code>…), stop: that is the wrong device.</li>
+                <li>On the right of the green arrow choose <b>WinUSB</b>, then press <b>Replace Driver</b> (or <b>Install Driver</b>). It takes up to a minute.</li>
+                <li>Back here, press <b>Connect (DFU)</b>. Windows keeps this driver for the NanoVNA's DFU mode on this PC: you do this once.</li>
+              </ol></li>
+            <li><b>dfu-util</b> works with WinUSB too. <b>STM32CubeProgrammer</b> needs ST's driver: to go back, Device Manager &gt;
+              STM32 BOOTLOADER &gt; Uninstall device, tick <i>Attempt to remove the driver</i>, then unplug and plug in again.</li>
+            <li><b>WinUSB landed on the wrong device</b> (e.g. the COM port is gone): Device Manager &gt; that device &gt; Uninstall device,
+              tick <i>Attempt to remove the driver</i>, unplug and plug in again; Windows puts its own driver back.</li>
+          </ol>`,
+        chromeos: `<p><b>Nothing to install.</b> Chrome on a Chromebook reaches the NanoVNA in both modes directly: press Connect
+            (normal mode) or Connect (DFU) and pick it in the list. If ChromeOS asks where to connect a new USB device, choose Chrome, not Linux.</p>`,
+      }[os];
+      return `<details class="panel fwhelp fwdrivers" id="fwDrivers"${open ? ' open' : ''}><summary>USB drivers and permissions (Linux, macOS, Windows)</summary>
+        <div class="fwtabs" role="tablist">${tabs.map(([k, n]) => `<button type="button" role="tab" class="fwtab${k === os ? ' on' : ''}" aria-selected="${k === os}" data-os="${k}">${n}</button>`).join('')}</div>
+        <div class="fwtabbody" id="fwDriversBody" data-os="${os}">${body}</div></details>`;
     }
     function licenceHTML() {
       if (!U.fw) return '';
@@ -919,7 +997,7 @@
       const err = U.err ? `<div class="wbanner bad" id="fwError" role="alert"><span class="wi">!</span><div><b>${esc(U.errTitle || 'Problem')}</b>${esc(U.err)}</div></div>` : '';
       body.innerHTML = `<div class="stepsub">Back up and update the firmware of a NanoVNA-H4 (or NanoVNA-H) over USB, in DFU mode, with the STM32's built-in bootloader.
         The calibration and configuration are kept.</div>
-        ${err}${progressHTML()}${deviceHTML()}${hasUSB ? backupHTML() + choiceHTML() : ''}${helpHTML(U.helpOpen != null ? U.helpOpen : !U.dfu)}${licenceHTML()}`;
+        ${err}${progressHTML()}${deviceHTML()}${hasUSB ? backupHTML() + choiceHTML() : ''}${helpHTML(U.helpOpen != null ? U.helpOpen : !U.dfu)}${driversHTML(!!U.driversOpen)}${licenceHTML()}`;
       paintProgress();
       bind();
       // Bring a new error, progress or result into view.
@@ -950,6 +1028,18 @@
       on('fwRebootDFU', act(rebootDFU));
       const help = $('fwHelp');
       if (help) help.ontoggle = () => { U.helpOpen = help.open; };
+      const drv = $('fwDrivers');
+      if (drv) drv.ontoggle = () => { U.driversOpen = drv.open; };
+      for (const b of body.querySelectorAll('.fwtab')) b.onclick = () => { U.os = b.dataset.os; U.driversOpen = true; render(); };
+      for (const b of body.querySelectorAll('[data-copy]')) {
+        b.onclick = async () => {
+          const el = $(b.dataset.copy);
+          try { await root.navigator.clipboard.writeText(el.textContent); toastMsg('Copied'); } catch (e) {
+            const r = document.createRange(); r.selectNodeContents(el); const sel = root.getSelection(); sel.removeAllRanges(); sel.addRange(r);
+            toastMsg('Selected: press Ctrl+C to copy');
+          }
+        };
+      }
       for (const r of body.querySelectorAll('input[name=fwChoice]')) r.onchange = () => { U.choice = r.value; render(); };
       const readFile = async (input, setter) => {
         const f = input.files[0];

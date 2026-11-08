@@ -45,3 +45,15 @@
 .fwserial { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; color: var(--ink2); border-top: 1px solid var(--border); padding-top: 8px; }
 @media (max-width: 600px) { #fwView .ovbar .muted { display: none; } }
 @media print { #btnFirmware, #fwView { display: none !important; } }
+.fwdrivers p { margin: 8px 0; font-size: 14px; color: var(--ink2); }
+.fwdrivers p b { color: var(--ink); }
+.fwtabs { display: flex; flex-wrap: wrap; gap: 4px; margin: 10px 0 4px; border-bottom: 1px solid var(--border); }
+.fwtab { border: 1px solid transparent; border-bottom: none; border-radius: 6px 6px 0 0; background: none; color: var(--ink2); padding: 6px 12px; font: inherit; font-size: 14px; cursor: pointer; margin-bottom: -1px; }
+.fwtab:hover { color: var(--ink); }
+.fwtab.on { border-color: var(--border); background: var(--surface); color: var(--ink); font-weight: 600; }
+.fwsub { margin: 6px 0 0; padding-left: 20px; display: flex; flex-direction: column; gap: 4px; }
+.fwprewrap { position: relative; }
+.fwprewrap .fwpre { padding-right: 64px; }
+.fwcopy { position: absolute; top: 4px; right: 4px; }
+.fwmore { margin-top: 8px; font-size: 14px; }
+.fwmore summary { cursor: pointer; color: var(--ink2); }

@@ -122,14 +122,80 @@ go install github.com/pix/easyvna-web@latest
 easyvna-web
 ```
 
-On Linux your user needs access to the serial port: group `uucp` on Arch,
-`dialout` on Debian/Ubuntu. Data is kept in `~/.local/share/easyvna-web`.
+On Linux your user needs access to the serial port: see
+[USB drivers and permissions](#usb-drivers-and-permissions). Data is kept in
+`~/.local/share/easyvna-web`.
 
 ### No NanoVNA at hand?
 
 Run `easyvna-web -mock`. It simulates a NanoVNA-H4 and a test antenna, so
 you can try every feature. All screenshots on this page were taken that
 way.
+
+## USB drivers and permissions
+
+The NanoVNA shows up in two ways: **normal mode** is a USB serial port
+(`0483:5740`; V2/LiteVNA `04b4:0008`), used by the program and by the
+browser's Web Serial; **DFU mode** is the STM32 bootloader (`0483:df11`,
+*STM32 BOOTLOADER*), used only for a firmware update (WebUSB). The FIRMWARE
+dialog has the same help, with a tab per system.
+
+### Linux
+
+Install this udev rule once. It gives the logged-in user access to both
+modes (`uaccess`) and keeps ModemManager off the serial port:
+
+```sh
+sudo tee /etc/udev/rules.d/70-nanovna.rules >/dev/null <<'EOF'
+# NanoVNA-H / H4 in normal mode: USB serial (Web Serial, the EasyVNA Web program)
+SUBSYSTEM=="tty", ATTRS{idVendor}=="0483", ATTRS{idProduct}=="5740", TAG+="uaccess", ENV{ID_MM_DEVICE_IGNORE}="1"
+# NanoVNA V2 / LiteVNA: USB serial
+SUBSYSTEM=="tty", ATTRS{idVendor}=="04b4", ATTRS{idProduct}=="0008", TAG+="uaccess", ENV{ID_MM_DEVICE_IGNORE}="1"
+# NanoVNA in DFU mode, "STM32 BOOTLOADER" (WebUSB firmware update)
+SUBSYSTEM=="usb", ATTRS{idVendor}=="0483", ATTRS{idProduct}=="df11", TAG+="uaccess"
+EOF
+sudo udevadm control --reload-rules && sudo udevadm trigger
+```
+
+Then unplug the NanoVNA and plug it in again. Keep the `70-` prefix: the
+file must sort before `73-seat-late.rules` for `uaccess` to apply.
+`lsusb -d 0483:` shows which mode the NanoVNA is in.
+
+For the serial port alone, membership of the serial group also works
+(`sudo usermod -aG uucp "$USER"` on Arch, `dialout` on Debian, Ubuntu,
+Fedora, openSUSE; log out and in again), but it does not cover DFU mode.
+Chromium installed as a Snap also needs `sudo snap connect chromium:raw-usb`
+for the firmware update.
+
+### macOS and ChromeOS
+
+Nothing to install for either mode. If the NanoVNA is not listed, check
+that the system sees it (macOS: *System Report → USB*, or
+`system_profiler SPUSBDataType`), and try a data cable (some only charge),
+another port, or no hub. On ChromeOS, connect a new USB device to Chrome,
+not to Linux.
+
+### Windows
+
+**Normal mode:** nothing to install. Windows 10 and 11 use their built-in
+driver; the NanoVNA is a *USB Serial Device (COMx)* under *Device Manager →
+Ports*. Do not put WinUSB on it.
+
+**DFU mode:** a browser can only open a USB device that uses the WinUSB
+driver, and Windows installs none for the STM32 bootloader (or ST's own
+driver, if STM32CubeProgrammer is installed). Once per PC:
+
+1. Put the NanoVNA in DFU mode and plug it in.
+2. Run [Zadig](https://zadig.akeo.ie/), then *Options → List All Devices*.
+3. Pick **STM32 BOOTLOADER** and check that *USB ID* reads `0483 DF11`. If
+   it shows anything else, stop: it is the wrong device.
+4. Choose **WinUSB** on the right of the green arrow, then **Replace
+   Driver** (or **Install Driver**).
+
+`dfu-util` works with WinUSB too. STM32CubeProgrammer needs ST's driver: to
+go back, or if WinUSB landed on the wrong device, open *Device Manager*,
+*Uninstall device* with *Attempt to remove the driver* ticked, then unplug
+and plug in again.
 
 ## Workflow
 
@@ -292,11 +358,9 @@ browser version alike. *Tested against a simulated DFU device only.*
 If it is interrupted, nothing is lost for good: the DFU bootloader is in
 ROM, so the NanoVNA can always be put back in DFU mode and flashed again.
 A read-protected NanoVNA is refused: removing the protection erases the
-whole flash, calibration included. On Linux, allow your user to open the
-device with a udev rule (`SUBSYSTEM=="usb", ATTRS{idVendor}=="0483",
-ATTRS{idProduct}=="df11", TAG+="uaccess"`); on Windows, bind the WinUSB
-driver to *STM32 BOOTLOADER* with [Zadig](https://zadig.akeo.ie/); macOS
-needs nothing. The dialog explains all of this.
+whole flash, calibration included. Linux needs a udev rule and Windows the
+WinUSB driver for DFU mode; macOS needs nothing: see
+[USB drivers and permissions](#usb-drivers-and-permissions).
 
 ### On a phone
 
@@ -407,8 +471,8 @@ second copy of EasyVNA Web. Close it, then press **Reconnect**.
 Check that the NanoVNA is switched on and connected with a *data* USB cable
 (some cables only charge). On Windows, look under *Device Manager → Ports*
 for a "USB Serial Device (COMx)"; if it shows another ID, start with
-`-port COMx`. On Linux, check the serial-port permissions (`uucp` or
-`dialout` group).
+`-port COMx`. On Linux, check the serial-port permissions (see
+[USB drivers and permissions](#usb-drivers-and-permissions)).
 
 **Windows says "Windows protected your PC"**
 The program is not code-signed. Click *More info → Run anyway*.
@@ -442,13 +506,14 @@ http://127.0.0.1:8080) yourself, or use `-no-browser` and bookmark it.
 Use Chrome or Edge on a computer, press **Connect** and pick the NanoVNA in
 the list. If opening fails, another program or tab has the port (close
 NanoVNA-Saver, a serial terminal or a second EasyVNA Web tab). On Linux your
-user needs the serial-port group (`uucp` or `dialout`), as for the program.
+user needs access to the serial port, as for the program (see
+[USB drivers and permissions](#usb-drivers-and-permissions)).
 
 **Firmware: Connect (DFU) finds nothing, or the device cannot be opened**
 Check that the NanoVNA is in DFU mode (blank screen; USB `0483:df11`,
-*STM32 BOOTLOADER*). On Linux add the udev rule above; on Windows bind
-WinUSB to *STM32 BOOTLOADER* with Zadig; close STM32CubeProgrammer or
-dfu-util. Firefox and Safari have no WebUSB.
+*STM32 BOOTLOADER*). See
+[USB drivers and permissions](#usb-drivers-and-permissions) (Linux udev
+rule, Windows WinUSB); close STM32CubeProgrammer or dfu-util. Firefox and Safari have no WebUSB.
 
 **"Cannot open this file"**
 EasyVNA Web reads S-parameter files only: Touchstone with one or two
