@@ -89,6 +89,7 @@ type State struct {
 	TrimActive     string              `json:"trimActive,omitempty"`
 	ReportChoices  []ReportChoice      `json:"reportChoices"`
 	Hold           HoldView            `json:"hold"`
+	Batch          BatchState          `json:"batch"`
 }
 
 // Result is one processed sweep, as sent to the UI and stored in snapshots.
@@ -109,6 +110,7 @@ type Result struct {
 	Tune       *rf.TuneInfo `json:"tune,omitempty"`    // TUNE view readout
 	Compare    *CompareLive `json:"compare,omitempty"` // S21 compare against stored antenna A
 	Hold       *HoldLive    `json:"hold,omitempty"`    // stable-positions HOLD
+	Batch      *BatchLive   `json:"batch,omitempty"`   // BATCH: the active batch and auto-capture
 	// Source is set for a measurement opened from a file (not live).
 	Source *FileSource `json:"source,omitempty"`
 }
@@ -194,6 +196,7 @@ type Server struct {
 	compareOn        bool
 	compareS21Prev   bool
 	hold             *holdState
+	batch            *batchState
 
 	continuous atomic.Bool
 	wake       chan struct{}
@@ -219,6 +222,8 @@ func New(opt Options) *Server {
 	s.refs = s.store.LoadRefs()
 	s.compare = s.store.LoadCompare()
 	s.hold = newHoldState()
+	s.batch = &batchState{undo: map[string]*Batch{}}
+	s.loadActiveBatch()
 	return s
 }
 
@@ -425,8 +430,8 @@ func (s *Server) sweepOnce(ctx context.Context) (*Result, error) {
 	res.Seq = s.seq
 	s.last = res
 	s.postProcessLocked(res)
-	hadErr := s.lastErr != ""
-	s.lastErr = ""
+	hadErr := s.lastErr != "" || s.batch.publish
+	s.lastErr, s.batch.publish = "", false
 	s.mu.Unlock()
 	if hadErr {
 		s.publishState()
@@ -531,6 +536,7 @@ func (s *Server) state() State {
 	st.Compare = s.compareViewLocked()
 	st.ReportChoices = s.reportChoicesLocked()
 	st.Hold = s.hold.view()
+	st.Batch = s.batchStateLocked()
 	if a := s.cal.Active; a != nil {
 		m := a.Start == s.cfg.Start && a.Stop == s.cfg.Stop
 		st.Cal.Matches = &m

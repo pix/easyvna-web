@@ -69,15 +69,22 @@ func (a *AntennaInfo) clean() error {
 	if a.LengthMm < 0 || a.LengthMm > 1e5 || math.IsNaN(a.LengthMm) {
 		return errors.New("length must be between 0 and 100000 mm")
 	}
-	if a.Photo != "" {
-		ok := false
-		for _, p := range []string{"data:image/jpeg;base64,", "data:image/png;base64,", "data:image/webp;base64,"} {
-			ok = ok || strings.HasPrefix(a.Photo, p)
-		}
-		b64 := a.Photo[strings.IndexByte(a.Photo, ',')+1:]
-		if !ok || len(a.Photo) > maxPhotoBytes || strings.Trim(b64, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=") != "" {
-			return errors.New("the photo must be a JPEG, PNG or WebP image under 2 MB")
-		}
+	return checkPhoto(a.Photo)
+}
+
+// checkPhoto accepts "" or a JPEG, PNG or WebP data: URL under the size
+// limit.
+func checkPhoto(photo string) error {
+	if photo == "" {
+		return nil
+	}
+	ok := false
+	for _, p := range []string{"data:image/jpeg;base64,", "data:image/png;base64,", "data:image/webp;base64,"} {
+		ok = ok || strings.HasPrefix(photo, p)
+	}
+	b64 := photo[strings.IndexByte(photo, ',')+1:]
+	if !ok || len(photo) > maxPhotoBytes || strings.Trim(b64, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=") != "" {
+		return errors.New("the photo must be a JPEG, PNG or WebP image under 2 MB")
 	}
 	return nil
 }

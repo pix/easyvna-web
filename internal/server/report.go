@@ -76,6 +76,8 @@ type reportData struct {
 	Hold      *reportHold
 	Compare   *CompareSession
 	Warnings  []rf.Warning
+	Batch     *BatchView    // BATCH: statistics of a lot (optional)
+	BatchPlot template.HTML // its resonance strip
 }
 
 var verdictLabel = map[string]string{"good": "PASS", "ok": "OK", "bad": "FAIL"}
@@ -111,6 +113,7 @@ var reportFuncs = template.FuncMap{
 	"inc":     func(i int) int { return i + 1 },
 	"dmhz":    func(f, t float64) string { return signed1((f - t) / 1e6) },
 	"refname": refName,
+	"mhzOf":   func(f float64) float64 { return f / 1e6 },
 	"z": func(r, x float64) string {
 		sign := "+"
 		if x < 0 {
@@ -136,7 +139,7 @@ var reportFuncs = template.FuncMap{
 	},
 }
 
-var reportTmpl = template.Must(template.New("report").Funcs(reportFuncs).Parse(reportHTML))
+var reportTmpl = template.Must(template.Must(template.New("report").Funcs(reportFuncs).Funcs(batchFuncs).Parse(batchStatsHTML)).Parse(reportHTML))
 
 // refName names the REF of a comparison: its file, or when it was stored.
 func refName(d *rf.RefDelta) string {
@@ -208,7 +211,7 @@ func verdictClass(v string) string {
 }
 
 // buildReport assembles the report for the chosen profiles.
-func (s *Server) buildReport(id, name, notes string, profiles []string, trimName string, hist []HistoryEntry) ([]byte, []HistoryEntry, error) {
+func (s *Server) buildReport(id, name, notes string, profiles []string, trimName string, hist []HistoryEntry, batch *Batch) ([]byte, []HistoryEntry, error) {
 	var logged []HistoryEntry
 	s.mu.Lock()
 	d := reportData{ReportID: id, Name: name, Notes: notes, Generated: time.Now()}
@@ -332,7 +335,14 @@ func (s *Server) buildReport(id, name, notes string, profiles []string, trimName
 			d.TrimSpark = sparkSVG(t.Entries, t.Target)
 		}
 	}
-	if len(d.Sections) == 0 && d.Trim == nil && d.Compare == nil && d.Hold == nil {
+	if batch != nil && len(batch.Antennas) > 0 {
+		s.mu.Lock()
+		c := cloneBatch(batch)
+		s.mu.Unlock()
+		v := batchView(c, s.batchSlope(c))
+		d.Batch, d.BatchPlot = &v, spreadSVG(v, 182, 27)
+	}
+	if len(d.Sections) == 0 && d.Trim == nil && d.Compare == nil && d.Hold == nil && d.Batch == nil {
 		return nil, nil, errors.New("nothing to report yet: sweep at least one profile")
 	}
 	var buf bytes.Buffer
@@ -452,6 +462,7 @@ func (s *Server) hReport(w http.ResponseWriter, r *http.Request) {
 		Notes    string   `json:"notes"`
 		Profiles []string `json:"profiles"`
 		Trim     string   `json:"trim"`
+		Batch    string   `json:"batch"`
 	}
 	if err := readJSON(r, &req); err != nil {
 		writeErr(w, 400, err)
@@ -474,7 +485,14 @@ func (s *Server) hReport(w http.ResponseWriter, r *http.Request) {
 	if a, err := s.store.LoadAntenna(name); err == nil {
 		hist = a.History
 	}
-	html, logged, err := s.buildReport(strings.TrimSuffix(file, ".html"), name, req.Notes, req.Profiles, req.Trim, hist)
+	var batch *Batch
+	if req.Batch != "" {
+		if batch, err = s.loadBatchFor(req.Batch); err != nil {
+			batchErr(w, err)
+			return
+		}
+	}
+	html, logged, err := s.buildReport(strings.TrimSuffix(file, ".html"), name, req.Notes, req.Profiles, req.Trim, hist, batch)
 	if err != nil {
 		writeErr(w, 409, err)
 		return

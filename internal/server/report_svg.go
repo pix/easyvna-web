@@ -45,6 +45,20 @@ type svgMark struct {
 	Label string
 }
 
+// svgEnv is a shaded min/max envelope (BATCH: the spread of a lot).
+type svgEnv struct {
+	Min, Max []float64
+	Fill     string
+}
+
+// svgVLine is a vertical marker (a target frequency).
+type svgVLine struct {
+	F     float64
+	Label string
+	Color string
+	Dash  string
+}
+
 type svgPlot struct {
 	Wmm, Hmm   float64
 	Freq       []float64
@@ -58,6 +72,8 @@ type svgPlot struct {
 	Marks      []svgMark
 	Title      string
 	Class      string
+	Env        *svgEnv
+	VLines     []svgVLine
 }
 
 func niceTicks(lo, hi float64, n int) []float64 {
@@ -141,6 +157,16 @@ func (p svgPlot) render() template.HTML {
 	}
 	fmt.Fprintf(&sb, `<svg x="%.1f" y="%.1f" width="%.1f" height="%.1f" viewBox="%.1f %.1f %.1f %.1f" overflow="hidden">`,
 		x0, y0-1, x1-x0, y1-y0+2, x0, y0-1, x1-x0, y1-y0+2)
+	if e := p.Env; e != nil && len(e.Min) == len(p.Freq) && len(e.Max) == len(p.Freq) {
+		var pts strings.Builder
+		for i, f := range p.Freq {
+			fmt.Fprintf(&pts, "%.1f,%.1f ", fx(f), fy(e.Max[i]))
+		}
+		for i := len(p.Freq) - 1; i >= 0; i-- {
+			fmt.Fprintf(&pts, "%.1f,%.1f ", fx(p.Freq[i]), fy(e.Min[i]))
+		}
+		fmt.Fprintf(&sb, `<polygon points="%s" fill="%s" stroke="none"/>`, pts.String(), e.Fill)
+	}
 	for _, s := range p.Series {
 		var pts strings.Builder
 		for i, f := range p.Freq {
@@ -159,6 +185,17 @@ func (p svgPlot) render() template.HTML {
 		fmt.Fprintf(&sb, `<polyline points="%s" fill="none" stroke="%s" stroke-width="%.1f" stroke-linejoin="round"%s/>`, pts.String(), s.Color, w, dash)
 	}
 	sb.WriteString(`</svg>`)
+	for _, v := range p.VLines {
+		if v.F < fmin || v.F > fmax {
+			continue
+		}
+		x := fx(v.F)
+		fmt.Fprintf(&sb, `<line x1="%.1f" x2="%.1f" y1="%.1f" y2="%.1f" stroke="%s" stroke-width="1.6" stroke-dasharray="%s"/>`, x, x, y0, y1, v.Color, v.Dash)
+		if v.Label != "" {
+			fmt.Fprintf(&sb, `<text x="%.1f" y="%.1f" font-size="%.0f" fill="%s" text-anchor="middle" font-weight="700">%s</text>`,
+				math.Max(x0+30, math.Min(x1-30, x)), y0-4, svgFont-1, v.Color, esc(v.Label))
+		}
+	}
 	for _, m := range p.Marks {
 		if m.F < fmin || m.F > fmax {
 			continue

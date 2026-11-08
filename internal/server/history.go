@@ -69,17 +69,7 @@ func (s *Server) historyEntryLocked(r *Result, kind string) HistoryEntry {
 		}
 	}
 	e.Key = e.Profile + "@" + r.Time.UTC().Format(time.RFC3339Nano)
-	_, calOK := s.calNoteLocked(r)
-	switch {
-	case r.Source != nil:
-		e.Cal = "from file"
-	case !r.CalApplied:
-		e.Cal = "not calibrated"
-	case calOK:
-		e.Cal = "calibrated"
-	default:
-		e.Cal = "calibration does not fit"
-	}
+	e.Cal, _ = s.calLabelLocked(r)
 	sum := r.Summary
 	var bs *rf.BandSummary
 	var dip *rf.Dip
@@ -124,6 +114,22 @@ func (s *Server) historyEntryLocked(r *Result, kind string) HistoryEntry {
 	e.R, _ = interpAt(r.Freq, r.Derived.R, e.Target)
 	e.X, _ = interpAt(r.Freq, r.Derived.X, e.Target)
 	return e
+}
+
+// calLabelLocked is the short calibration state of r: "calibrated",
+// "not calibrated", "calibration does not fit" or "from file"; ok is true
+// only for "calibrated". s.mu must be held.
+func (s *Server) calLabelLocked(r *Result) (label string, ok bool) {
+	_, calOK := s.calNoteLocked(r)
+	switch {
+	case r.Source != nil:
+		return "from file", false
+	case !r.CalApplied:
+		return "not calibrated", false
+	case calOK:
+		return "calibrated", true
+	}
+	return "calibration does not fit", false
 }
 
 // addHistory appends entries to an antenna's history (creating the record

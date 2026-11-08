@@ -71,6 +71,7 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/antennas/{name}/history", s.hHistoryLog)
 	mux.HandleFunc("POST /api/antennas/{name}/history/undo", s.hHistoryUndo)
 	mux.HandleFunc("GET /api/antennas/{name}/history.csv", s.hHistoryCSV)
+	s.batchRoutes(mux)
 	if s.opt.Backup {
 		mux.HandleFunc("GET /api/backup", s.hBackupGet)
 		mux.HandleFunc("POST /api/backup", s.hBackupPost)

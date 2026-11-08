@@ -67,6 +67,7 @@ td.num, th.num { text-align: right; }
 .kv4 { margin-top: 2mm; } .kv4 td { width: auto !important; } .kv4 td:nth-child(odd) { color: var(--muted); white-space: nowrap; }
 table.dips td:nth-child(-n+8) { white-space: nowrap; }
 .cols { display: grid; grid-template-columns: 70mm 1fr; gap: 4mm; align-items: start; margin-top: 2mm; }
+.muted { color: var(--muted); }
 .pos { color: var(--pass); font-weight: 700; } .neg { color: var(--fail); font-weight: 700; }
 .foot { margin-top: 6mm; padding-top: 2mm; border-top: .3mm solid var(--line); font-size: 7.5pt; color: var(--muted); display: flex; justify-content: space-between; gap: 4mm; }
 
@@ -155,6 +156,14 @@ table.dips td:nth-child(-n+8) { white-space: nowrap; }
   <table><thead><tr><th>#</th><th>Antenna</th><th class="num">Δ in band (avg)</th><th class="num">Worst</th><th class="num">Best</th><th>Measured</th></tr></thead><tbody>
   {{range $i, $e := .Leaderboard}}<tr><td>{{inc $i}}</td><td><b>{{$e.Name}}</b></td><td class="num {{if gt $e.MeanDB 0.05}}pos{{else if lt $e.MeanDB -0.05}}neg{{end}}">{{sgn1 $e.MeanDB}} dB</td><td class="num">{{sgn1 $e.WorstDB}} dB</td><td class="num">{{sgn1 $e.BestDB}} dB</td><td>{{hms $e.Time}}</td></tr>{{end}}
   </tbody></table>
+</section>{{end}}
+
+{{with .Batch}}<section class="card"><h2>Batch: {{.Name}} <small>· {{.Label}} · {{len .Antennas}} antennas · target {{mhz .Target}} MHz ± {{f2 (mhzOf .Summary.ToleranceHz)}}</small></h2>
+  <div class="notes" style="margin-top:0"><b>Lot</b>{{range .Summary.Conclusion}}{{.}}
+{{end}}{{.Summary.TuningLine}}.</div>
+  <div style="margin-top:2mm">{{$.BatchPlot}}</div>
+  {{template "bstats" .}}
+  <p class="vrange" style="margin:1mm 0 0">The batch sheet (BATCH → Batch sheet) has every antenna and the SWR overlay. Outliers: |x − median| &gt; 3.5 × 1.4826 × MAD.</p>
 </section>{{end}}
 
 <p class="vrange" style="margin-top:4mm">Grades: PASS = worst in-band SWR &lt; 1.5, OK &lt; 2, FAIL otherwise (band edges interpolated). Q is estimated from the SWR &lt; 2 bandwidth assuming a match at resonance. Mismatch loss = −10·log10(1−|Γ|²).</p>

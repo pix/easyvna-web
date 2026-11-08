@@ -31,6 +31,7 @@ type Settings struct {
 	Slots        map[int]SlotMeta `json:"slots"`
 	AutoRecall   bool             `json:"autoRecall"`
 	TrimActive   string           `json:"trimActive,omitempty"`
+	BatchActive  string           `json:"batchActive,omitempty"`
 }
 
 // Store manages the data directory: settings and snapshots.
@@ -41,7 +42,7 @@ type Store struct {
 }
 
 // storeDirs are the sub-directories of the data directory.
-var storeDirs = []string{"snapshots", "refs", "trim", "reports", "antennas", "hostcal"}
+var storeDirs = []string{"snapshots", "refs", "trim", "reports", "antennas", "hostcal", "batches"}
 
 // NewStore creates the data directory layout.
 func NewStore(dir string) (*Store, error) {

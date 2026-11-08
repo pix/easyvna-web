@@ -58,6 +58,7 @@ func (s *Server) postProcessLocked(res *Result) {
 		res.Ref = s.refDeltaLocked(res, ref)
 	}
 	s.feedHoldLocked(res)
+	s.feedBatchLocked(res)
 	if s.compareOn {
 		c := s.compare
 		if c == nil {
