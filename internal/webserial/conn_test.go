@@ -146,3 +146,15 @@ func TestDriverOverConn(t *testing.T) {
 		t.Fatal("scan after unplug succeeded")
 	}
 }
+
+func TestUSBID(t *testing.T) {
+	for in, want := range map[string]string{
+		"USB 0483:5740 (Web Serial)": "0483:5740",
+		"USB 04b4:0008 (Web Serial)": "04b4:0008",
+		"Web Serial":                 "",
+	} {
+		if got := USBID(in); got != want {
+			t.Errorf("USBID(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

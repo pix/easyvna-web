@@ -56,16 +56,31 @@ func dirExists(p string) bool {
 	return err == nil && fi.IsDir()
 }
 
-// pickPort chooses the NanoVNA serial port from the candidates.
-func pickPort(goos string, cands []serialport.Candidate) (string, error) {
-	for _, c := range cands {
-		if c.ID == serialport.IDNanoVNAH {
-			return c.Path, nil
-		}
+// Device kinds: which driver opens a port.
+const (
+	kindH  = "nanovna-h"  // text shell (NanoVNA-H / H4, NanoVNA-D firmware)
+	kindV2 = "nanovna-v2" // binary protocol (NanoVNA V2, LiteVNA), experimental
+)
+
+// kindOf returns the driver for a USB ID ("" when unknown).
+func kindOf(id serialport.USBID) string {
+	switch id {
+	case serialport.IDNanoVNAH:
+		return kindH
+	case serialport.IDNanoVNAV2:
+		return kindV2
 	}
-	for _, c := range cands {
-		if c.ID == serialport.IDNanoVNAV2 {
-			return "", fmt.Errorf("found a NanoVNA V2 (%s, %s): its binary protocol is not implemented yet", c.Path, c.ID)
+	return ""
+}
+
+// pickPort chooses the NanoVNA serial port from the candidates and the
+// driver for it. A NanoVNA-H wins over a V2 when both are plugged in.
+func pickPort(goos string, cands []serialport.Candidate) (string, string, error) {
+	for _, kind := range []string{kindH, kindV2} {
+		for _, c := range cands {
+			if kindOf(c.ID) == kind {
+				return c.Path, kind, nil
+			}
 		}
 	}
 	if goos == "darwin" { // no VID:PID on macOS without cgo: accept a lone usbmodem
@@ -76,10 +91,10 @@ func pickPort(goos string, cands []serialport.Candidate) (string, error) {
 			}
 		}
 		if len(unknown) == 1 {
-			return unknown[0], nil
+			return unknown[0], kindH, nil
 		}
 		if len(unknown) > 1 {
-			return "", fmt.Errorf("several USB serial ports (%s): choose one with -port", strings.Join(unknown, ", "))
+			return "", "", fmt.Errorf("several USB serial ports (%s): choose one with -port (and -driver nanovna-v2 for a V2)", strings.Join(unknown, ", "))
 		}
 	}
 	var seen []string
@@ -89,13 +104,13 @@ func pickPort(goos string, cands []serialport.Candidate) (string, error) {
 	if len(seen) == 0 {
 		switch goos {
 		case "windows":
-			return "", errors.New("no NanoVNA found: no COM port with USB ID 0483:5740. Is it plugged in and switched on? (Windows 10/11 needs no driver; check Device Manager > Ports)")
+			return "", "", errors.New("no NanoVNA found: no COM port with USB ID 0483:5740 (NanoVNA-H) or 04b4:0008 (V2). Is it plugged in and switched on? (Windows 10/11 needs no driver; check Device Manager > Ports)")
 		case "darwin":
-			return "", errors.New("no NanoVNA found: no /dev/cu.usbmodem* device (is it plugged in and switched on?)")
+			return "", "", errors.New("no NanoVNA found: no /dev/cu.usbmodem* device (is it plugged in and switched on?)")
 		}
-		return "", errors.New("no NanoVNA found: no /dev/ttyACM* devices (is it plugged in and switched on?)")
+		return "", "", errors.New("no NanoVNA found: no /dev/ttyACM* devices (is it plugged in and switched on?)")
 	}
-	return "", fmt.Errorf("no NanoVNA (USB %s) found among %s; use -port", serialport.IDNanoVNAH, strings.Join(seen, ", "))
+	return "", "", fmt.Errorf("no NanoVNA (USB %s or %s) found among %s; use -port", serialport.IDNanoVNAH, serialport.IDNanoVNAV2, strings.Join(seen, ", "))
 }
 
 // listenFallback listens on addr; if that port is taken and fallback is

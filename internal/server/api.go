@@ -551,7 +551,14 @@ func (s *Server) hCalStep(w http.ResponseWriter, r *http.Request) {
 		s.cal.Active = nil
 		s.mu.Unlock()
 	}
-	if err := dev.Calibrate(ctx, step, &rng); err != nil {
+	if s.opt.MockStandard != nil && step.Measures() {
+		s.opt.MockStandard(string(step)) // the simulated user fits the standard
+	}
+	err = dev.Calibrate(ctx, step, &rng)
+	if s.opt.MockStandard != nil && step.Measures() {
+		s.opt.MockStandard("")
+	}
+	if err != nil {
 		s.calFail(step, err)
 		writeErr(w, 500, err)
 		return

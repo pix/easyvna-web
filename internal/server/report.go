@@ -219,6 +219,9 @@ func (s *Server) buildReport(id, name, notes string, profiles []string, trimName
 			d.Firmware += " · " + s.info.Fork
 		}
 		d.Simulated = s.info.Mock
+		if s.info.Experimental {
+			d.Device += " (experimental driver)"
+		}
 	}
 	switch st := s.cal.Status; {
 	case !st.Known:

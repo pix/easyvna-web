@@ -6,6 +6,7 @@ package webserial
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"sync"
 	"time"
@@ -134,4 +135,14 @@ func (c *Conn) Close() error {
 		}
 	})
 	return err
+}
+
+// USBID returns the "vvvv:pppp" USB ID of the port named by Open (from the
+// name "USB vvvv:pppp (Web Serial)"), or "".
+func USBID(name string) string {
+	var v, p string
+	if n, _ := fmt.Sscanf(name, "USB %4s:%4s", &v, &p); n == 2 {
+		return v + ":" + p
+	}
+	return ""
 }

@@ -312,6 +312,9 @@ func (s *Server) buildSheet(id string, a AntennaInfo) ([]byte, *HistoryEntry, er
 	}
 	if s.info != nil {
 		d.Device, d.Firmware, d.Simulated = s.info.Model, s.info.Version, s.info.Mock
+		if s.info.Experimental {
+			d.Device += " (experimental driver)"
+		}
 		if s.info.Fork != "" {
 			d.Firmware += " · " + s.info.Fork
 		}

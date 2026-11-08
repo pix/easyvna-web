@@ -40,6 +40,10 @@ type Antenna struct {
 	// short motion bursts. BendPeriod is still time + motion time.
 	Bend       float64
 	BendPeriod float64 // seconds (default 6)
+	// Std makes this an ideal calibration standard at the end of the
+	// pigtail: "open", "short", "load", "thru" (load on port 1, port 2
+	// connected) or "isoln" (both ports terminated).
+	Std string
 }
 
 // Scenarios selectable with -mock-antenna.
@@ -108,6 +112,14 @@ func DefaultAntenna() Antenna { return Scenarios["dual"]() }
 // Impedance of the bare antenna at frequency f, t seconds after start.
 func (a Antenna) Impedance(f, t float64) complex128 {
 	scale := 1 + a.Drift*math.Sin(2*math.Pi*t/23) + a.bendOffset(t)
+	switch a.Std {
+	case "open":
+		return complex(1e15, 0)
+	case "short":
+		return 0
+	case "load", "thru", "isoln":
+		return 50
+	}
 	if a.Open {
 		// A few tenths of a pF of fringing capacitance at the open end.
 		return 1 / complex(1e-7, 2*math.Pi*f*0.3e-12)
@@ -147,6 +159,12 @@ func (a Antenna) Measure(f, t float64) (s11, s21 complex128) {
 	s11 = g * cmplx.Rect(att*att, -2*w*tau)
 	mg := cmplx.Abs(g)
 	s21 = cmplx.Rect(a.S21Coupling*(1-mg*mg)*att, -w*(tau+3e-9))
+	switch a.Std {
+	case "thru":
+		s21 = cmplx.Rect(att, -w*2*tau)
+	case "isoln", "open", "short", "load":
+		s21 = 0
+	}
 	return s11, s21
 }
 

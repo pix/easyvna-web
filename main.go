@@ -20,6 +20,7 @@ import (
 	"github.com/pix/easyvna-web/internal/vna"
 	"github.com/pix/easyvna-web/internal/vna/mock"
 	"github.com/pix/easyvna-web/internal/vna/nanovnah"
+	"github.com/pix/easyvna-web/internal/vna/nanovnav2"
 	"github.com/pix/easyvna-web/web"
 )
 
@@ -28,10 +29,11 @@ var version = "dev"
 
 func main() {
 	listen := flag.String("listen", "127.0.0.1:8080", "HTTP listen address")
-	port := flag.String("port", "", "serial device, e.g. COM5 or /dev/ttyACM0 (default: auto-detect NanoVNA-H/H4 by USB ID 0483:5740)")
+	port := flag.String("port", "", "serial device, e.g. COM5 or /dev/ttyACM0 (default: auto-detect NanoVNA-H/H4 by USB ID 0483:5740, NanoVNA V2 / LiteVNA by 04b4:0008)")
+	driver := flag.String("driver", "auto", "device driver: auto (by USB ID), nanovna-h (text shell) or nanovna-v2 (binary protocol, EXPERIMENTAL)")
 	noBrowser := flag.Bool("no-browser", false, "do not open the web browser at start-up")
 	useMock := flag.Bool("mock", false, "simulate a NanoVNA-H4 with a test antenna (no hardware needed)")
-	mockFW := flag.String("mock-firmware", "custom", "mock firmware: custom (EasyVNA/PiX fork: `profile` command, Fork: line) or stock (plain NanoVNA-D)")
+	mockFW := flag.String("mock-firmware", "custom", "mock firmware: custom (EasyVNA/PiX fork: `profile` command, Fork: line), stock (plain NanoVNA-D) or v2 (NanoVNA V2 binary protocol, raw data, host calibration)")
 	mockAnt := flag.String("mock-antenna", "dual", "mock antenna scenario: "+strings.Join(scenarioNames(), ", "))
 	dataDir := flag.String("data", defaultDataDir(runtime.GOOS, os.Getenv, os.UserHomeDir, dirExists), "directory for settings, REF traces, trim logs, reports and snapshots")
 	maxPoints := flag.Int("maxpoints", 0, "override points per device scan (0 = auto: 401 on H4, 101 on H)")
@@ -60,39 +62,57 @@ func main() {
 	var open server.Opener
 	var setMock func(string) error
 	var mockCut func(float64)
+	var mockStd func(string)
 	antennaName := ""
 	if *useMock {
 		if _, ok := mock.Scenarios[*mockAnt]; !ok {
 			fatal(logger, "unknown -mock-antenna %q (have %s)", *mockAnt, strings.Join(scenarioNames(), ", "))
 		}
-		if *mockFW != "custom" && *mockFW != "stock" {
-			fatal(logger, "-mock-firmware must be custom or stock")
+		if *mockFW != "custom" && *mockFW != "stock" && *mockFW != "v2" {
+			fatal(logger, "-mock-firmware must be custom, stock or v2")
 		}
 		bench, err := mock.NewBench(*mockAnt, *maxPoints, *mockFW == "custom")
 		if err != nil {
 			fatal(logger, "%v", err)
 		}
 		antennaName = *mockAnt
-		setMock, mockCut = bench.SetAntenna, bench.Cut
+		setMock, mockCut, mockStd = bench.SetAntenna, bench.Cut, bench.AttachStandard
 		open = func(ctx context.Context) (vna.Device, error) {
+			if *mockFW == "v2" {
+				return openV2(ctx, bench.NewSimV2(), nanovnav2.Options{PortName: "mock (V2 simulator)", Mock: true}, *trace, logger)
+			}
 			return openDriver(ctx, bench.NewSim(), nanovnah.Options{PortName: "mock", Mock: true, MaxPoints: *maxPoints,
 				CalSettle: 200 * time.Millisecond, ReadOnly: *readOnly}, *trace, logger)
 		}
 	} else {
+		if *driver != "auto" && *driver != kindH && *driver != kindV2 {
+			fatal(logger, "-driver must be auto, nanovna-h or nanovna-v2")
+		}
 		open = func(ctx context.Context) (vna.Device, error) {
-			path := *port
+			path, kind := *port, *driver
 			if path == "" {
-				p, err := detect()
+				p, k, err := detect()
 				if err != nil {
 					return nil, err
 				}
 				path = p
+				if kind == "auto" {
+					kind = k
+				}
+			}
+			if kind == "auto" {
+				kind = kindByPath(path)
 			}
 			sp, err := serialport.Open(path)
 			if err != nil {
 				return nil, err
 			}
-			d, err := openDriver(ctx, sp, nanovnah.Options{PortName: path, MaxPoints: *maxPoints, CalSettle: *calSettle, ReadOnly: *readOnly}, *trace, logger)
+			var d vna.Device
+			if kind == kindV2 {
+				d, err = openV2(ctx, sp, nanovnav2.Options{PortName: path}, *trace, logger)
+			} else {
+				d, err = openDriver(ctx, sp, nanovnah.Options{PortName: path, MaxPoints: *maxPoints, CalSettle: *calSettle, ReadOnly: *readOnly}, *trace, logger)
+			}
 			if err != nil {
 				sp.Close()
 				return nil, fmt.Errorf("%s: %w", path, err)
@@ -106,7 +126,7 @@ func main() {
 		scen = scenarioNames()
 	}
 	srv := server.New(server.Options{Open: open, Store: store, Static: web.Static(), MockAntenna: antennaName, Logger: logger,
-		ReadOnly: *readOnly, SetMockAntenna: setMock, MockScenarios: scen, MockCut: mockCut, AppName: "EasyVNA Web " + version})
+		ReadOnly: *readOnly, SetMockAntenna: setMock, MockScenarios: scen, MockCut: mockCut, MockStandard: mockStd, AppName: "EasyVNA Web " + version})
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -156,8 +176,28 @@ func openDriver(ctx context.Context, t nanovnah.Transport, opt nanovnah.Options,
 	return nanovnah.Open(ctx, t, opt)
 }
 
-func detect() (string, error) {
+func openV2(ctx context.Context, t nanovnav2.Transport, opt nanovnav2.Options, trace bool, l *log.Logger) (vna.Device, error) {
+	if trace {
+		opt.Trace = func(cmd string, raw []byte) { l.Printf("v2 %s -> %d bytes", cmd, len(raw)) }
+	}
+	return nanovnav2.Open(ctx, t, opt)
+}
+
+func detect() (string, string, error) {
 	return pickPort(runtime.GOOS, serialport.List())
+}
+
+// kindByPath looks up the driver of an explicit -port by its USB ID
+// (NanoVNA-H when unknown).
+func kindByPath(path string) string {
+	for _, c := range serialport.List() {
+		if c.Path == path {
+			if k := kindOf(c.ID); k != "" {
+				return k
+			}
+		}
+	}
+	return kindH
 }
 
 func scenarioNames() []string { return mock.ScenarioNames() }

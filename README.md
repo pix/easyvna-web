@@ -15,6 +15,12 @@ NanoVNA needed: <https://pix.github.io/easyvna-web/?demo>)
 > has been tested with the simulator and a simulated serial port only. Use
 > at your own risk.
 
+> [!CAUTION]
+> **NanoVNA V2 / LiteVNA support is EXPERIMENTAL.** Its driver was written
+> from the published description of the V2 USB protocol and has only been
+> tested against a simulated V2: no real V2, V2 Plus4 or LiteVNA has been
+> tried yet.
+
 ![EasyVNA Web: the 869 MHz profile with its verdict, a REF overlay and the SWR plot](doc/screenshots/hero.png)
 
 ## Why EasyVNA Web
@@ -49,7 +55,8 @@ NanoVNA needed: <https://pix.github.io/easyvna-web/?demo>)
 Open **<https://pix.github.io/easyvna-web/>** in **Chrome or Edge on a
 computer** (Windows, macOS, Linux, ChromeOS), plug in the NanoVNA and press
 **Connect**. The browser asks which serial port to use: pick the NanoVNA
-(USB `0483:5740`). Next time it reconnects by itself.
+(USB `0483:5740`, or `04b4:0008` for a NanoVNA V2 / LiteVNA, experimental).
+Next time it reconnects by itself.
 
 * It is the same program, compiled to WebAssembly and packed into **one HTML
   file**. Nothing is installed and nothing is sent anywhere: the page talks
@@ -281,6 +288,7 @@ sweep as `.s1p`, `.s2p` (when S21 was measured) or CSV.
 | **Antenna sheet** | PRINT: a one-page datasheet of the antenna (photo, key figures, all four graphs, notes, trim log); its details are remembered per antenna name |
 | **Files** | open `.s1p` / `.s2p` / CSV (Touchstone 1 and 2.0, any S format and unit, other reference impedances renormalised to 50 Ω) as a labelled *not live* measurement with the full analysis; export Touchstone `.s1p` / `.s2p`, CSV, named snapshots |
 | **Plots** | SWR, return loss, Smith chart, R/X, S21, with a cursor readout |
+| **NanoVNA V2 / LiteVNA** | EXPERIMENTAL, untested on hardware: binary protocol driver (USB `04b4:0008`), found automatically (also by Web Serial); the V2 sends raw data, so EasyVNA Web calibrates it with the same OPEN / SHORT / LOAD / DONE / SAVE flow (THRU / ISOLN optional for S21) and keeps each slot in its data folder |
 | **Anywhere** | phone layout, light and dark mode, works offline |
 
 ## Options
@@ -289,12 +297,13 @@ sweep as `.s1p`, `.s2p` (when S21 was measured) or CSV.
 |---|---|---|
 | `-listen` | `127.0.0.1:8080` | HTTP address. If 8080 is taken and `-listen` was not given, the next free port is used |
 | `-no-browser` | off | do not open the browser at start-up |
-| `-port` | auto | serial port, e.g. `COM5`, `/dev/ttyACM0`, `/dev/serial/by-id/usb-nanovna.com_NanoVNA-H4_400-if00`. Auto-detect looks for USB `0483:5740` |
+| `-port` | auto | serial port, e.g. `COM5`, `/dev/ttyACM0`, `/dev/serial/by-id/usb-nanovna.com_NanoVNA-H4_400-if00`. Auto-detect looks for USB `0483:5740` (NanoVNA-H) and `04b4:0008` (NanoVNA V2 / LiteVNA) |
+| `-driver` | `auto` | `nanovna-h` (text shell) or `nanovna-v2` (binary protocol, EXPERIMENTAL); `auto` chooses by USB ID |
 | `-readonly` | off | never change anything stored on the device: calibration, save, recall and on-device profile switching are refused. Sweeps still work |
 | `-data` | per OS | folder for settings, REF traces, trim logs, compare session, reports and snapshots |
 | `-mock` | off | simulate a NanoVNA-H4 (no hardware needed) |
 | `-mock-antenna` | `dual` | simulated antenna: `dual`, `869`, `869tuned`, `915`, `dummy`, `open`, `bend` |
-| `-mock-firmware` | `custom` | `custom` simulates the EasyVNA firmware, `stock` plain NanoVNA-D |
+| `-mock-firmware` | `custom` | `custom` simulates the EasyVNA firmware, `stock` plain NanoVNA-D, `v2` a NanoVNA V2 (binary protocol, raw data, host calibration) |
 | `-maxpoints` | auto | points per device scan (401 on H4, 101 on H) |
 | `-cal-settle` | `1.5s` | time with a standard attached before `cal <std>` (older firmware) |
 | `-trace` | off | log every exchange with the device |
@@ -324,6 +333,20 @@ Slot 0 is left to you; stock firmware loads it at power-on. Offsets are
 measured from 433.92, 869 and 915 MHz. With the EasyVNA firmware, tapping a
 profile also makes the device remember it as the last-used profile, which
 is a small flash write. `-readonly` avoids that.
+
+### NanoVNA V2 / LiteVNA (EXPERIMENTAL)
+
+A NanoVNA V2 (V2, V2 Plus, V2 Plus4) or a LiteVNA, found as USB
+`04b4:0008`, is driven with its binary protocol. **This has not been tested
+on real hardware.** These devices send raw, uncalibrated data and keep no
+calibration of their own for the computer, so EasyVNA Web calibrates them
+itself: the calibration strip works as for the H4 (OPEN → SHORT → LOAD →
+DONE → SAVE), the error terms are solved per frequency point, interpolated
+for TUNE's narrow windows, and SAVE keeps them per profile in the data
+folder (`hostcal/slot-N.json`, also in *Export data*). They are recalled
+automatically per profile and when the device reconnects. Try it without
+hardware with `-mock-firmware v2` or `?demo&firmware=v2`. Windows may need
+the USB serial driver from the V2 maker.
 
 ## FAQ and troubleshooting
 
@@ -394,7 +417,7 @@ go test -race ./... && go vet ./...
 ```
 
 Build commands, release and screenshot scripts, the HTTP API, code layout,
-NanoVNA shell protocol notes and how to add a NanoVNA V2 driver are in
+NanoVNA shell protocol notes and the (experimental) NanoVNA V2 driver are in
 **[doc/DEVELOPMENT.md](doc/DEVELOPMENT.md)**.
 
 ## Credits

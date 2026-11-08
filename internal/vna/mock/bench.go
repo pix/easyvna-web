@@ -11,12 +11,15 @@ import (
 // been trimmed, and the simulator that is currently open.
 type Bench struct {
 	mu        sync.Mutex
-	current   *Sim
+	current   antennaHolder
 	name      string
 	cutTotal  float64
 	maxPoints int
 	profiles  bool
 }
+
+// antennaHolder is a simulator whose antenna can be swapped (Sim, SimV2).
+type antennaHolder interface{ SetAntenna(Antenna) }
 
 // The simulated element: f0 = k/(L+δ) with L = 82 mm and δ = 6 mm end
 // effect, so the plain ratio formula is a bit off and the trim calculator
@@ -70,14 +73,36 @@ func (b *Bench) Cut(mm float64) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.cutTotal += mm
-	a := Scenarios[b.name]()
-	if len(a.Modes) > 0 {
-		k := a.Modes[0].F0 * (benchLen + benchDelta)
-		a.Modes[0].F0 = k / (benchLen - b.cutTotal + benchDelta)
+	if b.current != nil {
+		b.current.SetAntenna(b.antennaLocked())
+	}
+}
+
+// AttachStandard puts an ideal calibration standard ("open", "short",
+// "load", "thru", "isoln") at the end of the pigtail instead of the
+// antenna, as the user does during a calibration; "" puts the antenna
+// back. Only the V2 simulator needs it: its data are raw and calibrated by
+// EasyVNA Web, while the simulated H4 firmware calibrates by itself.
+func (b *Bench) AttachStandard(std string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	a := b.antennaLocked()
+	if std != "" {
+		a = Antenna{Name: "standard " + std, Std: std, CableLen: a.CableLen, CableVF: a.CableVF, CableLossDB: a.CableLossDB}
 	}
 	if b.current != nil {
 		b.current.SetAntenna(a)
 	}
+}
+
+// antennaLocked is the current scenario with the cuts applied.
+func (b *Bench) antennaLocked() Antenna {
+	a := Scenarios[b.name]()
+	if len(a.Modes) > 0 && b.cutTotal != 0 {
+		k := a.Modes[0].F0 * (benchLen + benchDelta)
+		a.Modes[0].F0 = k / (benchLen - b.cutTotal + benchDelta)
+	}
+	return a
 }
 
 // NewSim powers on a fresh simulator with the current antenna (as when the
@@ -86,6 +111,16 @@ func (b *Bench) NewSim() *Sim {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	sim := New(Options{Antenna: Scenarios[b.name](), MaxPoints: b.maxPoints, Profiles: b.profiles})
+	b.current = sim
+	return sim
+}
+
+// NewSimV2 powers on a simulated NanoVNA V2 (binary protocol) with the
+// current antenna, trimmed as far as it has been cut.
+func (b *Bench) NewSimV2() *SimV2 {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	sim := NewV2(V2Options{Antenna: b.antennaLocked()})
 	b.current = sim
 	return sim
 }

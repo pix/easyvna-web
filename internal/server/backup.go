@@ -55,7 +55,7 @@ func backupNameOK(name string) bool {
 		return false
 	}
 	switch strings.TrimSuffix(dir, "/") {
-	case "snapshots", "refs", "trim", "antennas":
+	case "snapshots", "refs", "trim", "antennas", "hostcal":
 		return strings.HasSuffix(base, ".json")
 	case "reports":
 		return strings.HasSuffix(base, ".html")

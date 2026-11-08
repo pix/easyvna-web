@@ -11,9 +11,11 @@
 //   * ?demo runs the built-in simulator instead (works in every browser).
 // It then inserts the UI (index.html body) and runs app.js unchanged.
 (() => {
-  const VID = 0x0483, PID = 0x5740; // NanoVNA-H / H4 (STM32 USB CDC)
+  // NanoVNA-H / H4 (STM32 USB CDC), and NanoVNA V2 / LiteVNA (binary
+  // protocol, experimental driver).
+  const DEVICES = [{ usbVendorId: 0x0483, usbProductId: 0x5740 }, { usbVendorId: 0x04b4, usbProductId: 0x0008 }];
   const NO_SERIAL = 'USB needs Chrome or Edge on a computer; the simulator works everywhere.';
-  const NO_PORT = 'No NanoVNA chosen yet: plug it in, switch it on, then press Connect and pick it in the list (USB 0483:5740).';
+  const NO_PORT = 'No NanoVNA chosen yet: plug it in, switch it on, then press Connect and pick it in the list (USB 0483:5740, or 04b4:0008 for a V2).';
   const LOST = 'NanoVNA disconnected (USB unplugged). Plug it back in: EasyVNA Web reconnects by itself, or press Connect.';
   const q = new URLSearchParams(location.search);
   const demo = q.has('demo');
@@ -68,13 +70,13 @@
     chosen: null, // picked with requestPort() on a click
     cur: null, // open handle
     lost: false, // the last port was unplugged
-    match(p) { const i = p.getInfo ? p.getInfo() : {}; return i.usbVendorId === VID && i.usbProductId === PID; },
+    match(p) { const i = p.getInfo ? p.getInfo() : {}; return DEVICES.some((d) => i.usbVendorId === d.usbVendorId && i.usbProductId === d.usbProductId); },
     async granted() { return hasSerial ? (await navigator.serial.getPorts()).filter((p) => this.match(p)) : []; },
     // choose shows the browser's port chooser. Call it straight from a click.
     async choose() {
       if (!hasSerial) throw new Error(NO_SERIAL);
       try {
-        this.chosen = await navigator.serial.requestPort({ filters: [{ usbVendorId: VID, usbProductId: PID }] });
+        this.chosen = await navigator.serial.requestPort({ filters: DEVICES });
       } catch (e) {
         if (e && e.name === 'NotFoundError') { // chooser closed without a pick
           if (!(await this.granted()).length) throw new Error(NO_PORT);
@@ -105,6 +107,7 @@
       const h = {
         port,
         name: `USB ${hex(info.usbVendorId)}:${hex(info.usbProductId)} (Web Serial)`,
+        usbId: `${hex(info.usbVendorId)}:${hex(info.usbProductId)}`,
         write: (u8) => writer.write(u8),
         close: async () => {
           if (closing) return;
@@ -309,9 +312,9 @@
     bar.className = 'hostbar'; bar.id = 'hostbar';
     const here = location.pathname;
     const mode = demo
-      ? `<span class="hmode"><b>Simulator</b> · a simulated NanoVNA-H4 and test antennas, nothing to plug in</span>
+      ? `<span class="hmode"><b>Simulator</b> · ${q.get('firmware') === 'v2' ? 'a simulated NanoVNA V2 (experimental driver, host calibration)' : 'a simulated NanoVNA-H4'} and test antennas, nothing to plug in</span>
          <a class="btn ghost small" id="hostUSB" href="${here}">Use my NanoVNA</a>`
-      : `<span class="hmode"><b>USB</b> · NanoVNA-H / H4 through Web Serial${hasSerial ? '' : ' (not available in this browser)'}</span>
+      : `<span class="hmode"><b>USB</b> · NanoVNA-H / H4 (and, experimental, NanoVNA V2 / LiteVNA) through Web Serial${hasSerial ? '' : ' (not available in this browser)'}</span>
          <a class="btn ghost small" id="hostDemo" href="${here}?demo">Try the simulator</a>`;
     bar.innerHTML = `${mode}<span class="hsp"></span>
       <span class="hdata" title="Settings, REF traces, trim logs, reports and snapshots are kept in this browser only">Data stays in this browser:</span>

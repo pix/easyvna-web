@@ -25,6 +25,11 @@ type Info struct {
 	CalSlots  int      `json:"calSlots"`
 	TwoPort   bool     `json:"twoPort"` // can measure S21
 	Mock      bool     `json:"mock"`
+	// HostCal is set by drivers whose device sends raw, uncalibrated data
+	// (NanoVNA V2): EasyVNA Web then calibrates on the host.
+	HostCal bool `json:"hostCal,omitempty"`
+	// Experimental marks drivers not tested on real hardware.
+	Experimental bool `json:"experimental,omitempty"`
 }
 
 // CalStatus is the calibration state as reported by the firmware.

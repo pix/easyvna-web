@@ -65,8 +65,8 @@ How the pieces fit:
   `easyvna-web` and `easyvna-web-demo` (simulator). `/api/backup`
   (browser only, `Options.Backup`) exports and imports every file as one
   JSON document; the host bar's *Export data* / *Import data* use it.
-* **USB.** *Connect* calls `navigator.serial.requestPort` (filter
-  `0483:5740`) inside the click. The Go side asks `EasyVNAHost.serial.open`
+* **USB.** *Connect* calls `navigator.serial.requestPort` (filters
+  `0483:5740` and `04b4:0008`) inside the click. The Go side asks `EasyVNAHost.serial.open`
   for the port: the chosen one, else a previously granted one, which is
   how it reconnects after a reload or a replug. Then it opens it at
   115200 baud and pushes everything read into a `webserial.Conn` that the
@@ -74,7 +74,7 @@ How the pieces fit:
   server drops the device. Opening errors suggest another program has the
   port.
 * **Simulator.** `?demo` uses `mock.Bench`, as `-mock` does. Other query
-  options: `?readonly`, `?antenna=869`, `?firmware=stock`.
+  options: `?readonly`, `?antenna=869`, `?firmware=stock`, `?firmware=v2` (NanoVNA V2 simulator).
 * **The file.** `htmlpack` writes a fixed skeleton plus `<script>`/`<style>`
   blocks: the UI body, `app.js`, `style.css`, `host.*`, `wasm_exec.js` from
   the Go toolchain, and the module as gzip + base64 (decoded with
@@ -147,7 +147,8 @@ internal/rf/                 RF math: SWR, RL, mismatch loss, Z, Q, port extensi
                              TUNE readout, trim learning, Touchstone/CSV
 internal/vna/                Device interface (+ optional Profiler)
 internal/vna/nanovnah/       NanoVNA-H/H4 shell driver: shell I/O, parser, driver
-internal/vna/mock/           byte-level shell simulator + multi-mode antenna model
+internal/vna/nanovnav2/      NanoVNA V2 / LiteVNA binary protocol driver (EXPERIMENTAL)
+internal/vna/mock/           byte-level shell and V2 simulators + multi-mode antenna model
 internal/serialport/         serial ports: termios (Linux/macOS), Win32 comm API (Windows);
                              detection via sysfs / registry / cu.usbmodem; busy-port check
 internal/server/             HTTP API, SSE hub, sweep loop, profiles, averaging, TUNE,
@@ -174,24 +175,38 @@ cmd/easyvna-wasm/, web/browser/, internal/{bridge,webserial,jsutil,htmlpack}/
 * If `scan` prints nothing (firmware without outmask), the driver falls back
   to `sweep` + `resume` + `pause` + `frequencies` + `data 0/1`.
 
-## Adding the NanoVNA V2 driver
+## NanoVNA V2 driver (EXPERIMENTAL)
 
-The V2 (`04b4:0008`) uses a binary register protocol, not a text shell.
-EasyVNA Web already detects it and reports that it is not supported. To add it:
+`internal/vna/nanovnav2` speaks the V2 binary register protocol (USB
+`04b4:0008`: NanoVNA V2 / V2 Plus / V2 Plus4, LiteVNA). It was written from
+the published protocol description (protocol facts only) and tested against
+`mock.SimV2` only. The package comment lists the opcodes, registers and the
+32-byte FIFO record. Notes:
 
-1. Create `internal/vna/nanovnav2/` with a type that implements `vna.Device`
-   (`internal/vna/vna.go`): `Info`, `Scan`, `CalStatus`, `Calibrate`, `SaveCal`,
-   `RecallCal`, `Close`. Reuse `serialport.Open` for the transport.
-2. `Scan` has to return frequencies plus S11 (and S21 when `req.S21` is set),
-   with any segmentation hidden inside the driver. Everything else (analysis,
-   UI, export) works unchanged.
-3. The V2 has no on-device SOL calibration over USB. Return a `CalStatus`
-   with `Known: false`, and either return an error from `Calibrate` or
-   implement host-side SOL error correction inside the driver.
-4. In `platform.go`, change `pickPort()` to return the V2 device, and in
-   `main.go` open it with the new driver.
-5. Test it the same way as the H driver: a scripted transport for the parser
-   and a simulator for the driver.
+* `Open` sends eight NOPs, INDICATE (`0x0d`, answer `'2'`) and reads the
+  variant, protocol, hardware and firmware registers; a text-shell device
+  (echo, prompt) or silence is refused, and firmware major `0xff` means DFU.
+* `Scan` splits the request into even segments of at most 101 points. For
+  each: WRITE8 start and step, WRITE2 points and values per frequency,
+  clear the FIFO, then READFIFO (≤ 255 records per request) until every
+  index is filled. Records are only used from the first index 0 on, because
+  the device sweeps continuously.
+* Data are raw: S11 = rev0 / fwd0, S21 = rev1 / fwd0. `Info.HostCal` makes
+  the server wrap the device in `server.hostCal`, which gives it the usual
+  calibration flow (`Calibrate`, `SaveCal`, `RecallCal`) with one-port
+  OSL error terms solved per point (`SolveOSL`, `CorrectOSL`), optional
+  THRU / ISOLN normalisation of S21, linear interpolation for other grids,
+  and slots stored as `hostcal/slot-N.json`. Host-cal errors are `CalError`
+  and do not drop the device.
+* `mock.SimV2` implements the protocol independently (continuous sweep,
+  a stale record after a settings change, raw error model, noise);
+  `Bench.AttachStandard` swaps in ideal standards while the server measures
+  a calibration step (`Options.MockStandard`). Use `-mock-firmware v2` or
+  `?demo&firmware=v2`; `goMockShell(antenna, "v2")` backs the e2e fake Web
+  Serial port.
+* Detection: `pickPort` returns the driver kind (`nanovna-h` wins when both
+  are plugged in); `-driver` overrides it; Web Serial asks for both IDs and
+  the wasm program picks the driver from the port's USB ID.
 
 ## Tests
 

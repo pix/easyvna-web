@@ -143,7 +143,10 @@ type Options struct {
 	SetMockAntenna func(name string) error
 	// MockCut shortens the simulated element by mm (mock mode only), so the
 	// trim calculator can be exercised without hardware.
-	MockCut       func(mm float64)
+	MockCut func(mm float64)
+	// MockStandard attaches a simulated calibration standard while a
+	// calibration step measures it ("" = the antenna again); mock only.
+	MockStandard  func(std string)
 	MockScenarios []string
 	// Backup enables GET/POST /api/backup (export / import every stored
 	// file as one JSON document). The browser build turns it on.
@@ -290,10 +293,32 @@ func (s *Server) device(ctx context.Context) (vna.Device, error) {
 		_ = dev.Close()
 		return nil, err
 	}
+	var hostActive *CalRange
+	if info.HostCal {
+		// Raw-data device (NanoVNA V2): calibrate on the host, and load the
+		// current profile's saved calibration right away.
+		hc := newHostCal(dev, s.store, info.Model)
+		dev = hc
+		s.mu.Lock()
+		slot := CustomSlot
+		if p, ok := s.profile(s.cfg.Profile); ok {
+			slot = p.CalSlot
+		}
+		meta, ok := s.settings.Slots[slot]
+		auto := ok && s.settings.AutoRecall && meta.Start == s.cfg.Start && meta.Stop == s.cfg.Stop
+		s.mu.Unlock()
+		if auto && hc.RecallCal(cctx, slot) == nil {
+			sl := slot
+			hostActive = &CalRange{Start: meta.Start, Stop: meta.Stop, Points: meta.Points, Source: fmt.Sprintf("slot %d", slot), Slot: &sl}
+		}
+	}
 	st, _ := dev.CalStatus(cctx)
 	s.mu.Lock()
 	s.dev, s.info, s.lastErr = dev, &info, ""
 	s.cal.Status = st // range of a boot-time calibration is unknown (Active stays nil)
+	if info.HostCal {
+		s.cal.Active = hostActive // a host calibration lives in this program, not in the device
+	}
 	s.mu.Unlock()
 	s.syncDeviceProfiles(cctx, dev)
 	s.log.Printf("connected: %s %s (%s), max %d points/scan", info.Model, info.Version, info.Port, info.MaxPoints)
@@ -350,9 +375,10 @@ func (s *Server) handleDevErr(err error) {
 		return
 	}
 	var se *nanovnah.ShellError
+	var ce *CalError
 	s.mu.Lock()
 	s.lastErr = err.Error()
-	if !errors.As(err, &se) && !errors.Is(err, context.Canceled) && s.dev != nil {
+	if !errors.As(err, &se) && !errors.As(err, &ce) && !errors.Is(err, context.Canceled) && s.dev != nil {
 		_ = s.dev.Close()
 		s.dev, s.info = nil, nil
 	}

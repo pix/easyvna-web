@@ -38,24 +38,28 @@ func TestDefaultDataDir(t *testing.T) {
 
 func TestPickPort(t *testing.T) {
 	nano := serialport.Candidate{Path: "COM5", ID: serialport.IDNanoVNAH}
+	v2 := serialport.Candidate{Path: "COM7", ID: serialport.IDNanoVNAV2}
 	xiao := serialport.Candidate{Path: "COM11", ID: serialport.USBID{VID: "2886", PID: "8044"}}
-	if p, err := pickPort("windows", []serialport.Candidate{xiao, nano}); err != nil || p != "COM5" {
-		t.Errorf("windows: %q %v", p, err)
+	if p, k, err := pickPort("windows", []serialport.Candidate{xiao, nano}); err != nil || p != "COM5" || k != kindH {
+		t.Errorf("windows: %q %q %v", p, k, err)
 	}
-	if _, err := pickPort("windows", nil); err == nil || !strings.Contains(err.Error(), "COM port") {
+	if p, k, err := pickPort("windows", []serialport.Candidate{v2, xiao, nano}); err != nil || p != "COM5" || k != kindH {
+		t.Errorf("H wins over V2: %q %q %v", p, k, err)
+	}
+	if _, _, err := pickPort("windows", nil); err == nil || !strings.Contains(err.Error(), "COM port") || !strings.Contains(err.Error(), "04b4:0008") {
 		t.Errorf("windows none: %v", err)
 	}
-	if _, err := pickPort("linux", []serialport.Candidate{xiao}); err == nil || !strings.Contains(err.Error(), "-port") {
+	if _, _, err := pickPort("linux", []serialport.Candidate{xiao}); err == nil || !strings.Contains(err.Error(), "-port") {
 		t.Errorf("linux other device: %v", err)
 	}
-	if _, err := pickPort("linux", []serialport.Candidate{{Path: "/dev/ttyACM1", ID: serialport.IDNanoVNAV2}}); err == nil || !strings.Contains(err.Error(), "V2") {
-		t.Errorf("v2: %v", err)
+	if p, k, err := pickPort("linux", []serialport.Candidate{xiao, {Path: "/dev/ttyACM1", ID: serialport.IDNanoVNAV2}}); err != nil || p != "/dev/ttyACM1" || k != kindV2 {
+		t.Errorf("v2: %q %q %v", p, k, err)
 	}
 	mac := []serialport.Candidate{{Path: "/dev/cu.usbmodem401"}}
-	if p, err := pickPort("darwin", mac); err != nil || p != "/dev/cu.usbmodem401" {
+	if p, k, err := pickPort("darwin", mac); err != nil || p != "/dev/cu.usbmodem401" || k != kindH {
 		t.Errorf("darwin single: %q %v", p, err)
 	}
-	if _, err := pickPort("darwin", append(mac, serialport.Candidate{Path: "/dev/cu.usbmodem1101"})); err == nil {
+	if _, _, err := pickPort("darwin", append(mac, serialport.Candidate{Path: "/dev/cu.usbmodem1101"})); err == nil {
 		t.Error("darwin ambiguous accepted")
 	}
 }

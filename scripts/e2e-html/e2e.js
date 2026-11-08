@@ -504,7 +504,7 @@ async function serialFlow(browser, base, label, shots) {
     await page.waitForFunction(() => S.state.connected, null, { timeout: 20000 });
     s = await st(page);
     const log = await page.evaluate(() => __fake.log.slice());
-    check(`${label}: requestPort called during the click, NanoVNA filter`, log.some((l) => /requestPort active=true filters=\[\{"usbVendorId":1155,"usbProductId":22336\}\]/.test(l)), log[0]);
+    check(`${label}: requestPort called during the click, NanoVNA-H and V2 filters`, log.some((l) => /requestPort active=true filters=\[\{"usbVendorId":1155,"usbProductId":22336\},\{"usbVendorId":1204,"usbProductId":8\}\]/.test(l)), log[0]);
     check(`${label}: port opened at 115200 and driven by the shell driver`, log.includes('open 115200') && log.some((l) => /^tx /.test(l)));
     check(`${label}: device identified through Web Serial`, s.info.port === 'USB 0483:5740 (Web Serial)' && !s.info.mock && /NanoVNA-H 4/.test(s.info.model), s.info.port);
   });
@@ -534,6 +534,60 @@ async function serialFlow(browser, base, label, shots) {
   });
   ctx.report();
   await ctx.close();
+}
+
+// NanoVNA V2 (EXPERIMENTAL driver): the simulator with host calibration,
+// and Web Serial with a fake 04b4:0008 port backed by the Go V2 simulator.
+async function v2Flow(browser, base, label, shots) {
+  const url = base + '?demo&firmware=v2';
+  const ctx = await newCtx(browser, url, label);
+  const page = await ctx.newPage();
+  await page.goto(url);
+  await ready(page, true);
+  let s = await st(page);
+  check(`${label}: V2 simulator connects, marked EXPERIMENTAL, raw data`, s.info.driver === 'nanovna-v2' && s.info.hostCal && /EXPERIMENTAL/.test(await page.textContent('#devtext')) && !s.cal.status.applied,
+    JSON.stringify(s.info));
+  await step(`${label}: host calibration`, async () => {
+    await sweepDone(page, () => page.locator('.profile', { hasText: '869' }).first().click());
+    const before = await page.evaluate(() => S.res.summary.minSWR);
+    for (const std of ['open', 'short', 'load', 'done']) {
+      await page.click(`.calstep[data-step=${std}]`);
+      if (await page.isVisible('#askYes')) await page.click('#askYes');
+      await page.waitForFunction((x) => S.state.cal.flow.steps[x] === 'done', std, { timeout: 20000 });
+    }
+    await page.click('.calstep[data-step=save]');
+    await page.waitForSelector('#askYes:visible');
+    const askText = await page.textContent('#askText');
+    await page.click('#askYes');
+    await page.waitForFunction(() => S.state.cal.flow.steps.save === 'done', null, { timeout: 10000 });
+    await sweepDone(page, () => page.click('#aSweep'));
+    const after = await page.evaluate(() => ({ applied: S.res.calApplied, min: S.res.summary.minSWR, f: S.res.summary.minSWRFreq, w: S.res.summary.warnings.map((x) => x.code) }));
+    check(`${label}: OPEN/SHORT/LOAD/DONE/SAVE calibrate the raw V2 data on the host`, after.applied && after.f > 845e6 && after.f < 870e6 && after.min < 1.6 && !after.w.length &&
+      /device itself stores none/.test(askText) && /calibrates it/.test(await page.textContent('#calsummary')), JSON.stringify({ before, after }));
+    if (shots) { await page.evaluate(() => scrollTo(0, 0)); await shot(page, 'html-v2-demo.png', false); }
+    await page.reload();
+    await ready(page, true);
+    await sweepDone(page, () => page.locator('.profile', { hasText: '869' }).first().click());
+    check(`${label}: the saved host calibration comes back after a reload`, await page.evaluate(() => S.res.calApplied && S.state.cal.status.applied));
+  });
+  ctx.report();
+  await ctx.close();
+
+  const c2 = await newCtx(browser, base, label + ' usb');
+  await c2.addInitScript(FAKE_SERIAL.replace('usbVendorId: 0x0483, usbProductId: 0x5740', 'usbVendorId: 0x04b4, usbProductId: 0x0008').replace("goMockShell('869')", "goMockShell('869', 'v2')"));
+  const p2 = await c2.newPage();
+  await p2.goto(base);
+  await ready(p2, false);
+  await step(`${label}: V2 over Web Serial`, async () => {
+    await p2.click('#btnConnect');
+    await p2.waitForFunction(() => S.state.connected, null, { timeout: 20000 });
+    s = await st(p2);
+    await sweepDone(p2, () => p2.locator('.profile', { hasText: '869' }).first().click());
+    const n = await p2.evaluate(() => S.res.freq.length);
+    check(`${label}: a 04b4:0008 port opens with the V2 driver and sweeps (401 points)`, s.info.driver === 'nanovna-v2' && s.info.port === 'USB 04b4:0008 (Web Serial)' && n === 401, `${s.info.driver} ${s.info.port} ${n}`);
+  });
+  c2.report();
+  await c2.close();
 }
 
 async function noSerialFlow(browser, base, label, shots) {
@@ -614,6 +668,8 @@ async function phone(browser, base) {
       await demoFlow(browser, base, label, label === 'http' && !!SHOTS);
       console.log(`\n== Web Serial (fake port) over ${label}`);
       await serialFlow(browser, base, label + ' usb', label === 'http' && !!SHOTS);
+      console.log(`\n== NanoVNA V2 (experimental) over ${label}`);
+      await v2Flow(browser, base, label + ' v2', label === 'http' && !!SHOTS);
       console.log(`\n== no Web Serial over ${label}`);
       await noSerialFlow(browser, base, label + ' no-serial', label === 'http' && !!SHOTS);
     }

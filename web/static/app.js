@@ -110,7 +110,7 @@ function renderState() {
   pill.classList.toggle('on', st.connected);
   if (st.connected && st.info) {
     const easy = st.info.fork && /easyvna|pix/i.test(st.info.fork);
-    $('devtext').textContent = `${st.info.model} · fw ${st.info.version}${easy ? ' · EasyVNA' : ''}${st.info.mock ? ' · SIMULATED' : ''}`;
+    $('devtext').textContent = `${st.info.model} · fw ${st.info.version}${easy ? ' · EasyVNA' : ''}${st.info.experimental ? ' · EXPERIMENTAL' : ''}${st.info.mock ? ' · SIMULATED' : ''}`;
   } else $('devtext').textContent = 'not connected';
   pill.title = st.info ? `${st.info.port}, ${st.info.maxPoints} points/scan${st.info.fork ? ', fork: ' + st.info.fork : ''}` : (st.error || '');
   $('ropill').hidden = !st.readOnly;
@@ -179,6 +179,7 @@ function renderCal() {
   else sum = c.status.applied ? `<b style="color:var(--warn-ink)">! Calibration range unknown</b> (loaded by the firmware). Calibrate the ${esc(name)} to be sure.`
     : `<b style="color:var(--bad-ink)">! Not calibrated</b>. Calibrate the ${esc(name)}.`;
   if (st.readOnly) sum += ' <span class="muted">· read-only: calibration disabled</span>';
+  if (st.connected && st.info && st.info.hostCal) sum += ' <span class="muted">· this NanoVNA sends raw data: EasyVNA Web calibrates it and keeps each SAVE in its data folder</span>';
   $('calsummary').innerHTML = sum;
   const tg = $('btnCalToggle');
   tg.hidden = !good || st.readOnly || inFlow;
@@ -217,13 +218,16 @@ for (const btn of document.querySelectorAll('.calstep')) {
     if (s === 'save') {
       const slot = $('slotSel').value;
       const dp = S.state.deviceProfiles;
-      if (!(await ask(`Save to slot ${slot}?`, `This overwrites whatever calibration is stored in slot ${slot} on the NanoVNA${dp ? ' (the device profile using this slot will load it)' : ''}. It cannot be undone from here.`, `Save to slot ${slot}`))) return;
+      const hc = S.state.info && S.state.info.hostCal;
+      if (!(await ask(`Save to slot ${slot}?`, hc ? `This overwrites the calibration EasyVNA Web keeps in slot ${slot} for this NanoVNA (in ${HOST ? 'this browser' : 'the data folder'}; the device itself stores none).`
+        : `This overwrites whatever calibration is stored in slot ${slot} on the NanoVNA${dp ? ' (the device profile using this slot will load it)' : ''}. It cannot be undone from here.`, `Save to slot ${slot}`))) return;
       await api('POST', 'api/cal/save', { slot: Number(slot) });
       toast('Calibration saved to slot ' + slot); S.calOpen = false;
       return;
     }
     if (s === 'open' && S.state.cal.status.applied &&
-        !(await ask('Start a new calibration?', 'OPEN resets the calibration in the NanoVNA\'s memory (the saved slots are untouched until you tap SAVE).', 'Reset and measure OPEN'))) return;
+        !(await ask('Start a new calibration?', S.state.info && S.state.info.hostCal ? 'OPEN starts a new calibration (the saved slots are untouched until you tap SAVE).'
+          : 'OPEN resets the calibration in the NanoVNA\'s memory (the saved slots are untouched until you tap SAVE).', 'Reset and measure OPEN'))) return;
     await api('POST', 'api/cal/step/' + s, s === 'open' ? { fresh: true } : {});
     if (s === 'done' && S.state && !S.state.continuous) await api('POST', 'api/sweep');
   });
@@ -450,7 +454,9 @@ function renderDevice() {
     for (const b of box.children) b.setAttribute('aria-pressed', String(b.dataset.n === st.mockAntenna));
   }
   $('devinfo').textContent = st.info
-    ? [`Driver: ${st.info.driver}`, `Port: ${st.info.port}`, `Max points per scan: ${st.info.maxPoints}`,
+    ? [`Driver: ${st.info.driver}${st.info.experimental ? ' (EXPERIMENTAL: written from the protocol description, not tested on real hardware)' : ''}`,
+       st.info.hostCal ? 'Calibration: done by EasyVNA Web (the device sends uncalibrated data); saved slots are kept in the data folder' : '',
+       `Port: ${st.info.port}`, `Max points per scan: ${st.info.maxPoints}`,
        `Calibration slots: ${st.info.calSlots}`, `Firmware cal status: ${cal.raw || '(none)'}`,
        st.info.fork ? `Fork: ${st.info.fork}` : '', st.readOnly ? 'READ-ONLY mode: cal/save/recall/profile switching disabled' : '',
        st.deviceProfiles ? 'Device profiles (firmware `profile`):\n' + [...st.deviceProfiles.profiles, ...(st.deviceProfiles.custom ? [st.deviceProfiles.custom] : [])]

@@ -17,7 +17,8 @@ func (u USBID) String() string { return u.VID + ":" + u.PID }
 var (
 	// NanoVNA-H, -H4 and NanoVNA-D firmware enumerate as the STM32 virtual COM port.
 	IDNanoVNAH = USBID{"0483", "5740"}
-	// NanoVNA V2 / V2Plus4 (binary protocol; no driver yet).
+	// NanoVNA V2 / V2 Plus / V2 Plus4 and LiteVNA (binary protocol,
+	// experimental driver internal/vna/nanovnav2).
 	IDNanoVNAV2 = USBID{"04b4", "0008"}
 )
 

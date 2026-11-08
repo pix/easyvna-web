@@ -41,7 +41,7 @@ type Store struct {
 }
 
 // storeDirs are the sub-directories of the data directory.
-var storeDirs = []string{"snapshots", "refs", "trim", "reports", "antennas"}
+var storeDirs = []string{"snapshots", "refs", "trim", "reports", "antennas", "hostcal"}
 
 // NewStore creates the data directory layout.
 func NewStore(dir string) (*Store, error) {
