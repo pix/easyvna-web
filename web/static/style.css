@@ -300,9 +300,11 @@ input[type="number"], input:not([type]), select {
 .wbanner { border-radius: 10px; padding: 12px 14px; border: 2px solid; background: var(--surface); display: flex; gap: 12px; align-items: flex-start; }
 .wbanner.bad { border-color: var(--bad); }
 .wbanner.warn { border-color: var(--warn); }
+.wbanner.info { border-color: var(--grid); }
 .wbanner .wi { font-size: 22px; font-weight: 800; line-height: 1; }
 .wbanner.bad .wi { color: var(--bad-ink); }
 .wbanner.warn .wi { color: var(--warn-ink); }
+.wbanner.info .wi { color: var(--muted); font-style: italic; font-family: Georgia, serif; }
 .wbanner b { font-size: 15px; display: block; }
 .refrow { grid-column: 1 / -1; display: flex; gap: 8px 18px; flex-wrap: wrap; align-items: baseline; padding: 10px 14px;
   border: 1.5px dashed var(--series2); border-radius: 12px; background: var(--surface); font-variant-numeric: tabular-nums; }

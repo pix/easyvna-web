@@ -35,8 +35,8 @@ func QFromBandwidth(f0, bw, s float64) float64 {
 
 // Warning is an automatic hint about the measurement itself.
 type Warning struct {
-	Code  string `json:"code"`  // "open", "calcheck", "calmismatch", "noisy", "lossy"
-	Level string `json:"level"` // "bad", "warn"
+	Code  string `json:"code"`  // "open", "calcheck", "calmismatch", "noisy", "lossy", "step"
+	Level string `json:"level"` // "bad", "warn", "info" (does not make the verdict suspect)
 	Title string `json:"title"`
 	Text  string `json:"text"`
 }
@@ -77,6 +77,9 @@ func Detect(freq []float64, d Derived) []Warning {
 			out = append(out, Warning{Code: "calmismatch", Level: "bad", Title: "Calibration does not match this setup",
 				Text: fmt.Sprintf("|Γ| is above 1 from %.1f to %.1f MHz, which an antenna cannot do: the calibration was made with another cable or adapter, for another range, or is stale. Recalibrate at the end of the cable you measure with.", lo/1e6, hi/1e6)})
 		}
+	}
+	if w := StepWarning(FindSteps(freq, d)); w != nil {
+		out = append(out, *w)
 	}
 	if lvl := NoiseLevel(gammaOf(d)); lvl > NoiseThreshold {
 		out = append(out, NoisyWarning(lvl, false))

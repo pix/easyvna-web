@@ -30,6 +30,7 @@ type reportVerdict struct {
 	Offset    string
 	RL        string
 	ML        string
+	Z, ZAt    string // impedance at the band reference
 	BW2       string
 	Q         string
 	Note      string
@@ -197,6 +198,7 @@ func bandVerdict(prof string, b rf.BandSummary, warned bool) reportVerdict {
 	}
 	v.WorstSWR, v.WorstAt = swrF(b.WorstSWR), mhzF(b.WorstSWRFreq)+" MHz"
 	v.RL, v.ML = fmt.Sprintf("%.1f dB", b.WorstRL), fmt.Sprintf("%.2f dB", b.WorstML)
+	v.Z, v.ZAt = reportFuncs["z"].(func(float64, float64) string)(b.ZRefR, b.ZRefX), mhzF(b.Band.Reference())+" MHz"
 	v.Resonance, v.Offset = "–", "–"
 	if b.DipFreq != nil {
 		v.Resonance = mhzF(*b.DipFreq) + " MHz"
@@ -276,7 +278,7 @@ func (s *Server) buildReport(id, name, notes string, profiles []string, trimName
 			label = "Custom sweep · " + mhzRange(r.Config.Start, r.Config.Stop)
 		}
 		profNames = append(profNames, strings.SplitN(label, " · ", 2)[0])
-		warned := len(r.Summary.Warnings) > 0
+		warned := rf.Suspect(r.Summary.Warnings)
 		sec := reportSection{Label: label, Res: r}
 		sec.CalNote, sec.CalOK = s.calNoteLocked(r)
 		if !r.Config.Identify {

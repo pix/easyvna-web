@@ -83,6 +83,9 @@ type BandSummary struct {
 	DipOffset  *float64 `json:"dipOffset,omitempty"`     // Hz from band reference
 	DipEdgeOff *float64 `json:"dipEdgeOffset,omitempty"` // Hz from nearest band edge (0 inside)
 	DipAdvice  string   `json:"dipAdvice,omitempty"`
+	// Impedance at the band reference (Band.Reference), interpolated.
+	ZRefR float64 `json:"zRefR"`
+	ZRefX float64 `json:"zRefX"`
 }
 
 // Summary is the headline analysis of a reflection sweep.
@@ -382,6 +385,10 @@ func SummarizeBandAt(freq []float64, d Derived, band Band, limit float64) BandSu
 		if s.swr < limit {
 			belowL++
 		}
+	}
+	if len(d.R) == n && len(d.X) == n {
+		ref := math.Min(math.Max(band.Reference(), freq[0]), freq[n-1])
+		bs.ZRefR, bs.ZRefX = interp(freq, d.R, ref), interp(freq, d.X, ref)
 	}
 	bs.PctBelow2 = 100 * float64(below2) / float64(len(samples))
 	bs.PctBelow15 = 100 * float64(below15) / float64(len(samples))

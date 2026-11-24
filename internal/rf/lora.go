@@ -61,13 +61,27 @@ type Dip struct {
 // FindDips returns resonance dips: local return-loss maxima with at least
 // minProm dB of prominence and at least minRL dB of return loss. Dips at the
 // very edge of the sweep are ignored because their true minimum may lie
-// outside it.
+// outside it. Steps of the trace (see FindSteps) are removed before the
+// search so that a jump is not taken for a resonance; the reported values
+// are the measured ones.
 func FindDips(freq []float64, d Derived, minProm, minRL float64) []Dip {
 	n := len(freq)
 	rl := d.RL
+	steps := FindSteps(freq, d)
+	if r := destepRL(d, steps); r != nil {
+		rl = r
+	}
+	nearStep := func(i int) bool { // what the trace does across a step is unknown
+		for _, s := range steps {
+			if i >= s.Index-3 && i <= s.Index+2 {
+				return true
+			}
+		}
+		return false
+	}
 	dips := []Dip{} // never nil: encodes as [] for the UI
 	for i := 1; i < n-1; i++ {
-		if !(rl[i] > rl[i-1] && rl[i] >= rl[i+1]) || rl[i] < minRL {
+		if !(rl[i] > rl[i-1] && rl[i] >= rl[i+1]) || rl[i] < minRL || nearStep(i) {
 			continue
 		}
 		// Prominence: walk outwards until higher terrain, tracking the minimum.
@@ -88,7 +102,7 @@ func FindDips(freq []float64, d Derived, minProm, minRL float64) []Dip {
 		if prom < minProm {
 			continue
 		}
-		dip := Dip{Index: i, Freq: freq[i], SWR: d.SWR[i], RL: rl[i], R: d.R[i], X: d.X[i], Prominence: prom}
+		dip := Dip{Index: i, Freq: freq[i], SWR: d.SWR[i], RL: d.RL[i], R: d.R[i], X: d.X[i], Prominence: prom}
 		// Parabolic refinement of the peak position.
 		den := rl[i-1] - 2*rl[i] + rl[i+1]
 		if den < 0 {
@@ -186,13 +200,32 @@ func belowAbove(off float64) string {
 	return "above"
 }
 
-// NearestDip returns the dip closest to the band reference, or nil.
+// NearestDip returns the resonance dip of band b: the dip closest to the
+// band reference among the main dips near it (within ±15 %, prominence at
+// least half the largest there), so that a ripple next to the band does not
+// hide the real resonance a little further. Without a dip near the band it
+// is the closest dip, or nil.
 func NearestDip(dips []Dip, b Band) *Dip {
+	ref := b.Reference()
+	maxProm := -1.0
+	for _, dp := range dips {
+		if math.Abs(dp.Freq-ref) <= nearFactor*ref && dp.Prominence > maxProm {
+			maxProm = dp.Prominence
+		}
+	}
 	var best *Dip
 	for i := range dips {
-		if best == nil || math.Abs(dips[i].Freq-b.Reference()) < math.Abs(best.Freq-b.Reference()) {
-			best = &dips[i]
+		dp := &dips[i]
+		if maxProm >= 0 && (math.Abs(dp.Freq-ref) > nearFactor*ref || dp.Prominence < mainDipShare*maxProm) {
+			continue
+		}
+		if best == nil || math.Abs(dp.Freq-ref) < math.Abs(best.Freq-ref) {
+			best = dp
 		}
 	}
 	return best
 }
+
+// mainDipShare: a dip near a band counts as one of its main dips when its
+// prominence is at least this share of the largest one there.
+const mainDipShare = 0.5

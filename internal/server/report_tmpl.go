@@ -126,6 +126,7 @@ table.dips td:nth-child(-n+8) { white-space: nowrap; }
       <div>Resonance<b>{{.Resonance}}</b>{{.Offset}}</div>
       <div>Return loss<b>{{.RL}}</b>worst in band</div>
       <div>Mismatch loss<b>{{.ML}}</b>worst in band</div>
+      <div>Impedance<b>{{.Z}}</b>@ {{.ZAt}}</div>
       {{if .BW2}}<div>SWR &lt; 2 bandwidth<b>{{.BW2}}</b></div><div>Q (estimated)<b>{{.Q}}</b></div>{{end}}
     </div>
     {{if .Note}}<div class="vnote">{{.Note}}</div>{{end}}

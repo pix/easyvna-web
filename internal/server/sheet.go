@@ -338,7 +338,7 @@ func sheetFigures(r *Result) (figs []sheetFig, verdict, vclass string) {
 		figs = append(figs, sheetFig{K: "Z at " + mhzF(centre) + " MHz", V: reportFuncs["z"].(func(float64, float64) string)(rr, xx)})
 	}
 	figs = append(figs, sheetFig{K: "Q (estimated)", V: reportFuncs["q"].(func(float64) string)(sum.Q)})
-	if len(sum.Warnings) > 0 && band != nil {
+	if rf.Suspect(sum.Warnings) && band != nil {
 		verdict, vclass = "CHECK", "na"
 	}
 	return figs, verdict, vclass

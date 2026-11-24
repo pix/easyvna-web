@@ -576,7 +576,7 @@ $('btnOpenFile2').onclick = openMeasurementFile;
 function renderWarnings() {
   const r = S.res, box = $('warnings');
   box.innerHTML = (r ? r.summary.warnings : []).map((w) =>
-    `<div class="wbanner ${w.level}"><span class="wi">${w.level === 'bad' ? '!' : '?'}</span><div><b>${esc(w.title)}</b>${esc(w.text)}</div></div>`).join('');
+    `<div class="wbanner ${w.level}"><span class="wi">${w.level === 'bad' ? '!' : w.level === 'info' ? 'i' : '?'}</span><div><b>${esc(w.title)}</b>${esc(w.text)}</div></div>`).join('');
 }
 
 const VICON = { good: '✓', ok: '!', bad: '✕', 'n/a': '–' };
@@ -586,7 +586,7 @@ function badge(v) {
   const c = v === 'n/a' ? 'na' : v; return `<span class="badge ${c}">${VICON[v] || ''} ${VLABEL[v] || v}</span>`;
 }
 // suspect is true while an automatic warning says the measurement is not an antenna (or not calibrated).
-function suspect() { return !!(S.res && !S.res.tune && S.res.summary.warnings.length); }
+function suspect() { return !!(S.res && !S.res.tune && S.res.summary.warnings.some((w) => w.level !== 'info')); }
 function bandTitle(b) { return ['433', '869', '915'].includes(b.name) ? `${b.name} MHz band` : `${b.name} MHz sub-band`; }
 
 function renderVerdict() {
@@ -648,9 +648,15 @@ function bandCard(r, b, primary) {
       <div class="stat"><div class="v">${b.worstML.toFixed(2)}<small> dB</small></div><div class="l">mismatch loss at worst</div></div>
       <div class="stat"><div class="v">${b.worstRL.toFixed(1)}<small> dB</small></div><div class="l">return loss, worst</div></div>
       <div class="stat"><div class="v">${swrText(b.bestSWR)}</div><div class="l">best SWR in band</div></div>
+      ${b.zRefR != null ? `<div class="stat"><div class="v">${zStat(b.zRefR, b.zRefX)}</div><div class="l">impedance @ ${mhz(ref)} MHz</div></div>` : ''}
       ${primary ? `<div class="stat"><div class="v">${(b.pctBelowLimit != null ? b.pctBelowLimit : b.pctBelow2).toFixed(0)}<small> %</small></div><div class="l">of band with SWR &lt; ${fmtL(b.limit || 2)}</div></div>` : ''}
     </div>
     <div class="vline">${res}</div>${cov}${advice}${suspect() && primary ? '<div class="vline" style="color:var(--warn-ink)"><b>! Not trustworthy:</b> see the warning at the top of the page.</div>' : ''}</div>`;
+}
+// zStat is an impedance for a stat tile: "49.8 − j3.9 Ω" with a smaller unit.
+function zStat(r, x) {
+  const big = (v) => Math.abs(v) >= 1e4 ? '>9999' : v.toFixed(1);
+  return `${big(r)}<small> ${x < 0 ? '−' : '+'} j</small>${big(Math.abs(x))}<small> Ω</small>`;
 }
 function dipTable(dips) {
   if (!dips.length) return '<div class="vline">No clear resonance (needs ≥ 3 dB return loss and 3 dB prominence).</div>';

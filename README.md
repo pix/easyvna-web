@@ -247,7 +247,11 @@ dip); TUNE, the sheet and the report show it too. Automatic
 warnings catch *no antenna*, *bad calibration*, *lossy "fake"* antennas, a
 *noisy measurement* (a loose connector or a damaged cable: the trace
 jitters, within a sweep or from one sweep to the next) and a *calibration
-that does not match this setup* (|Γ| above 1 over part of the sweep).
+that does not match this setup* (|Γ| above 1 over part of the sweep). A
+*step* in the trace (the H4 changes harmonic mode at 300 and 900 MHz; with
+an antenna, unlike the 50 Ω load, a jump remains there even after a fresh
+calibration) is only noted: it is never taken for a resonance. The resonance of a band is the
+main dip near it, not a small ripple that happens to be closer.
 
 ![A fake (resistive) antenna is flagged and its verdicts are marked CHECK](doc/screenshots/fake-antenna-warning.png)
 
@@ -615,7 +619,7 @@ WinUSB driver for DFU mode; macOS needs nothing: see
 | **Measure ×N** | N fresh sweeps vector-averaged, min / max envelope, σ of the resonance and SWR, max \|ΔΓ\|; re-seat mode with automatic continue |
 | **Setup check** | hands off vs a hand on the cable: resonance shift, SWR and \|ΔΓ\| against the noise and the tolerance window; tells whether the cable is part of the antenna |
 | **COMPARE** | S21 against antenna A, live Δ dB in band, leaderboard |
-| **Warnings** | no antenna or open cable, reflection above 1 (bad calibration, also over part of the sweep), lossy / fake antenna, noisy measurement (point-to-point jitter and sweep-to-sweep repeatability, 4× real H4 noise; moving the antenna does not count) |
+| **Warnings** | no antenna or open cable, reflection above 1 (bad calibration, also over part of the sweep), lossy / fake antenna, noisy measurement (point-to-point jitter and sweep-to-sweep repeatability, 4× real H4 noise; moving the antenna does not count); a step at a harmonic switch is noted and ignored by the resonance search |
 | **History** | per-antenna measurement log (sheet, report, *Log this measurement*), resonance and SWR sparklines, drift warnings (resonance moved, SWR worse, rising loss), previous-measurement line on the sheet and report, CSV export |
 | **Batch** | a lot of antennas on one profile: capture by hand, by key or automatically, optionally ×N each; per-antenna tuned / OK / shorten / lengthen / bad with the margin used and the trim in mm; graded, margin-based lot conclusion (mean offset with its 95 % CI, spread vs window and repeatability, outliers by median / MAD), yield; SWR overlay and resonance strip; two-page batch print; CSV and JSON export, JSON import |
 | **Report** | printable A4 / Letter report with vector plots (SWR, return loss, impedance, Smith) and tables, saved in the data folder |
